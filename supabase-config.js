@@ -19,7 +19,20 @@ const tableForCollection = {
   users: 'profiles',
   reservations: 'reservations',
   restaurantTables: 'restaurant_tables',
-  buffetRates: 'buffet_rates'
+  buffetRates: 'buffet_rates',
+  chargeItems: 'pos_charge_items',
+  chargeItemVariants: 'pos_charge_item_variants',
+  packageTiers: 'pos_package_tiers',
+  packageInclusions: 'pos_package_inclusions',
+  discounts: 'pos_discounts',
+  posSettings: 'pos_settings',
+  shifts: 'pos_shifts',
+  cashMovements: 'pos_cash_movements',
+  posBills: 'pos_bills',
+  billLines: 'pos_bill_lines',
+  billPayments: 'pos_bill_payments',
+  reservationDeposits: 'pos_reservation_deposits',
+  billApprovals: 'pos_bill_approvals'
 };
 
 function rememberVersion(collection, id, updatedAt) {
@@ -113,6 +126,113 @@ function mapDatabaseRecord(collection, row) {
       seniorPwdRate: Number(row.senior_pwd_rate), effectiveFrom: row.effective_from,
       effectiveTo: row.effective_to, isActive: row.is_active };
   }
+  if (collection === 'chargeItems') {
+    return {
+      id: row.id, code: row.code, name: row.name, type: row.type,
+      category: row.category || 'General', unitPrice: Number(row.unit_price || 0),
+      defaultQuantity: Number(row.default_quantity || 1), isActive: Boolean(row.is_active),
+      isFoodRevenue: Boolean(row.is_food_revenue), isPackage: Boolean(row.is_package),
+      requiresApproval: Boolean(row.requires_approval), notes: row.notes || ''
+    };
+  }
+  if (collection === 'chargeItemVariants') {
+    return {
+      id: row.id, chargeItemId: row.charge_item_id, variantName: row.variant_name,
+      unitPrice: Number(row.unit_price || 0), isActive: Boolean(row.is_active),
+      notes: row.notes || ''
+    };
+  }
+  if (collection === 'packageTiers') {
+    return {
+      id: row.id, code: row.code, name: row.name, defaultMealPeriod: row.default_meal_period,
+      basePrice: Number(row.base_price || 0), isActive: Boolean(row.is_active),
+      notes: row.notes || ''
+    };
+  }
+  if (collection === 'packageInclusions') {
+    return {
+      id: row.id, packageTierId: row.package_tier_id, chargeItemId: row.charge_item_id,
+      quantity: Number(row.quantity || 0), isIncluded: Boolean(row.is_included), notes: row.notes || ''
+    };
+  }
+  if (collection === 'discounts') {
+    return {
+      id: row.id, code: row.code, name: row.name, discountType: row.discount_type,
+      value: Number(row.value || 0), minimumAmount: Number(row.minimum_amount || 0),
+      appliesTo: row.applies_to || 'bill', isActive: Boolean(row.is_active), notes: row.notes || ''
+    };
+  }
+  if (collection === 'posSettings') {
+    return {
+      id: row.id, key: row.setting_key, value: row.setting_value, type: row.setting_type,
+      description: row.description || '', isSystem: Boolean(row.is_system), updatedAt: row.updated_at
+    };
+  }
+  if (collection === 'shifts') {
+    return {
+      id: row.id, code: row.shift_code, openedBy: row.opened_by, openedAt: row.opened_at,
+      closedAt: row.closed_at, status: row.status, openingFloat: Number(row.opening_float || 0),
+      cashSales: Number(row.cash_sales || 0), cardSales: Number(row.card_sales || 0),
+      declaredCash: Number(row.declared_cash || 0), notes: row.notes || ''
+    };
+  }
+  if (collection === 'cashMovements') {
+    return {
+      id: row.id, shiftId: row.shift_id, movementType: row.movement_type, amount: Number(row.amount || 0),
+      reason: row.reason || '', reference: row.reference || '', createdBy: row.created_by, createdAt: row.created_at
+    };
+  }
+  if (collection === 'posBills') {
+    return {
+      id: row.id, billNumber: row.bill_number, reservationId: row.reservation_id,
+      customerName: row.customer_name || '', status: row.status, subtotal: Number(row.subtotal || 0),
+      serviceCharge: Number(row.service_charge || 0), discountTotal: Number(row.discount_total || 0),
+      depositTotal: Number(row.deposit_total || 0), paidTotal: Number(row.paid_total || 0),
+      balanceDue: Number(row.balance_due || 0), notes: row.notes || '', printedTitle: row.printed_title || '',
+      adultCount: Number(row.adult_count || 0), seniorCount: Number(row.senior_count || 0),
+      kidsCount: Number(row.kids_count || 0), compedCount: Number(row.comped_count || 0),
+      adultRate: Number(row.adult_rate_snapshot || 0), seniorRate: Number(row.senior_rate_snapshot || 0),
+      kidsRate: Number(row.kids_rate_snapshot || 0), discountId: row.discount_id || '',
+      discountReason: row.discount_reason || '', foodRevenueTotal: Number(row.food_revenue_total || 0),
+      nonFoodRevenueTotal: Number(row.non_food_revenue_total || 0), customersServed: Number(row.customers_served || 0),
+      closedAt: row.closed_at || null, closedBy: row.closed_by || null,
+      voidedAt: row.voided_at || null, voidedBy: row.voided_by || null, voidReason: row.void_reason || '',
+      createdBy: row.created_by || null, createdAt: row.created_at, updatedAt: row.updated_at
+    };
+  }
+  if (collection === 'billLines') {
+    return {
+      id: row.id, billId: row.bill_id, chargeItemId: row.charge_item_id, packageTierId: row.package_tier_id,
+      description: row.description, quantity: Number(row.quantity || 0), unitPrice: Number(row.unit_price || 0),
+      lineType: row.line_type, foodRevenueAmount: Number(row.food_revenue_amount || 0),
+      nonFoodRevenueAmount: Number(row.non_food_revenue_amount || 0),
+      isFoodRevenueSnapshot: Boolean(row.is_food_revenue_snapshot), isVoided: Boolean(row.is_voided),
+      voidReason: row.void_reason || ''
+    };
+  }
+  if (collection === 'billPayments') {
+    return {
+      id: row.id, billId: row.bill_id, paymentMethod: row.payment_method, amount: Number(row.amount || 0),
+      tenderedAmount: Number(row.tendered_amount || 0), changeAmount: Number(row.change_amount || 0),
+      idempotencyKey: row.idempotency_key || '', referenceNo: row.reference_no || '',
+      paidBy: row.paid_by || '', paidAt: row.paid_at || null
+    };
+  }
+  if (collection === 'reservationDeposits') {
+    return {
+      id: row.id, reservationId: row.reservation_id, billId: row.bill_id, amount: Number(row.amount || 0),
+      paymentMethod: row.payment_method, status: row.status, createdAt: row.created_at
+    };
+  }
+  if (collection === 'billApprovals') {
+    return {
+      id: row.id, billId: row.bill_id, requestType: row.request_type, status: row.status,
+      discountId: row.discount_id || '', requestReason: row.request_reason,
+      requestedBy: row.requested_by, requestedAt: row.requested_at,
+      decidedBy: row.decided_by || null, decidedAt: row.decided_at || null,
+      decisionReason: row.decision_reason || ''
+    };
+  }
   return {
     id: row.id, name: row.name, category: row.category, unit: row.unit,
     cost: row.cost == null ? null : Number(row.cost), stock: Number(row.stock), minimum: Number(row.minimum),
@@ -182,6 +302,69 @@ function mapApplicationRecord(collection, record) {
     adult_rate: record.adultRate, child_rate: record.childRate, senior_pwd_rate: record.seniorPwdRate,
     effective_from: dateValue(record.effectiveFrom), effective_to: record.effectiveTo ? dateValue(record.effectiveTo) : null,
     is_active: record.isActive !== false
+  };
+  if (collection === 'chargeItems') return {
+    id: record.id, code: record.code || record.id, name: record.name || '', type: record.type || 'other',
+    category: record.category || 'General', unit_price: Number(record.unitPrice || 0),
+    default_quantity: Number(record.defaultQuantity || 1), is_active: record.isActive !== false,
+    is_food_revenue: record.isFoodRevenue !== false, is_package: Boolean(record.isPackage),
+    requires_approval: Boolean(record.requiresApproval), notes: record.notes || ''
+  };
+  if (collection === 'chargeItemVariants') return {
+    id: record.id, charge_item_id: record.chargeItemId, variant_name: record.variantName || '',
+    unit_price: Number(record.unitPrice || 0), is_active: record.isActive !== false,
+    notes: record.notes || ''
+  };
+  if (collection === 'packageTiers') return {
+    id: record.id, code: record.code || record.id, name: record.name || '', default_meal_period: record.defaultMealPeriod || 'All Day',
+    base_price: Number(record.basePrice || 0), is_active: record.isActive !== false,
+    notes: record.notes || ''
+  };
+  if (collection === 'packageInclusions') return {
+    id: record.id, package_tier_id: record.packageTierId || null, charge_item_id: record.chargeItemId || null,
+    quantity: Number(record.quantity || 0), is_included: record.isIncluded !== false, notes: record.notes || ''
+  };
+  if (collection === 'discounts') return {
+    id: record.id, code: record.code || record.id, name: record.name || '', discount_type: record.discountType || 'percent',
+    value: Number(record.value || 0), minimum_amount: Number(record.minimumAmount || 0),
+    applies_to: record.appliesTo || 'bill', is_active: record.isActive !== false, notes: record.notes || ''
+  };
+  if (collection === 'posSettings') return {
+    id: record.id, setting_key: record.key || record.id, setting_value: String(record.value ?? ''),
+    setting_type: record.type || 'text', description: record.description || '', is_system: Boolean(record.isSystem)
+  };
+  if (collection === 'shifts') return {
+    id: record.id, shift_code: record.code || record.id, opened_by: record.openedBy || null, opened_at: record.openedAt || new Date().toISOString(),
+    closed_at: record.closedAt || null, status: record.status || 'Open', opening_float: Number(record.openingFloat || 0),
+    cash_sales: Number(record.cashSales || 0), card_sales: Number(record.cardSales || 0),
+    declared_cash: Number(record.declaredCash || 0), notes: record.notes || ''
+  };
+  if (collection === 'cashMovements') return {
+    id: record.id, shift_id: record.shiftId || null, movement_type: record.movementType || 'adjustment',
+    amount: Number(record.amount || 0), reason: record.reason || '', reference: record.reference || '',
+    created_by: record.createdBy || null, created_at: record.createdAt || new Date().toISOString()
+  };
+  if (collection === 'posBills') return {
+    id: record.id, bill_number: record.billNumber || record.id, reservation_id: record.reservationId || null,
+    customer_name: record.customerName || '', status: record.status || 'Open', subtotal: Number(record.subtotal || 0),
+    service_charge: Number(record.serviceCharge || 0), discount_total: Number(record.discountTotal || 0),
+    deposit_total: Number(record.depositTotal || 0), paid_total: Number(record.paidTotal || 0),
+    balance_due: Number(record.balanceDue || 0), notes: record.notes || '', printed_title: record.printedTitle || 'BILLING STATEMENT (not an official receipt)',
+    created_at: record.createdAt || new Date().toISOString(), updated_at: record.updatedAt || new Date().toISOString()
+  };
+  if (collection === 'billLines') return {
+    id: record.id, bill_id: record.billId, charge_item_id: record.chargeItemId || null, package_tier_id: record.packageTierId || null,
+    description: record.description || '', quantity: Number(record.quantity || 0), unit_price: Number(record.unitPrice || 0),
+    line_type: record.lineType || 'charge_item', food_revenue_amount: Number(record.foodRevenueAmount || 0),
+    non_food_revenue_amount: Number(record.nonFoodRevenueAmount || 0), is_voided: Boolean(record.isVoided), void_reason: record.voidReason || ''
+  };
+  if (collection === 'billPayments') return {
+    id: record.id, bill_id: record.billId, payment_method: record.paymentMethod || 'cash', amount: Number(record.amount || 0),
+    reference_no: record.referenceNo || '', paid_by: record.paidBy || '', paid_at: record.paidAt || new Date().toISOString()
+  };
+  if (collection === 'reservationDeposits') return {
+    id: record.id, reservation_id: record.reservationId || null, bill_id: record.billId || null, amount: Number(record.amount || 0),
+    payment_method: record.paymentMethod || 'cash', status: record.status || 'Outstanding', created_at: record.createdAt || new Date().toISOString()
   };
   return { id: record.id, name: record.name, category: record.category, unit: record.unit, cost: record.cost, stock: record.stock, minimum: record.minimum };
 }
@@ -431,6 +614,51 @@ window.supabaseRecord = {
   async completeProductionBatch(batchId) {
     const { data, error } = await window.supabaseClient.rpc('costtrack_complete_production_batch', {
       batch_id_value: batchId
+    });
+    throwIfError(error);
+    return data;
+  },
+  async posSaveBill(payload) {
+    const { data, error } = await window.supabaseClient.rpc('pos_save_bill', {
+      p_bill_id: payload.billId || null,
+      p_customer_name: payload.customerName,
+      p_notes: payload.notes || '',
+      p_reservation_id: payload.reservationId || null,
+      p_adult_count: payload.adultCount,
+      p_senior_count: payload.seniorCount,
+      p_kids_count: payload.kidsCount,
+      p_comped_count: payload.compedCount,
+      p_discount_id: payload.discountId || null,
+      p_discount_reason: payload.discountReason || '',
+      p_extra_lines: payload.extraLines || [],
+      p_initial_deposit: payload.initialDeposit || 0,
+      p_idempotency_key: payload.idempotencyKey || null
+    });
+    throwIfError(error);
+    return data;
+  },
+  async posCloseBill(billId, tenderedAmount, idempotencyKey) {
+    const { data, error } = await window.supabaseClient.rpc('pos_close_bill', {
+      p_bill_id: billId,
+      p_tendered_amount: tenderedAmount,
+      p_idempotency_key: idempotencyKey
+    });
+    throwIfError(error);
+    return data;
+  },
+  async posRequestBillVoid(billId, reason) {
+    const { data, error } = await window.supabaseClient.rpc('pos_request_bill_void', {
+      p_bill_id: billId,
+      p_reason: reason
+    });
+    throwIfError(error);
+    return data;
+  },
+  async posDecideBillApproval(approvalId, decision, reason) {
+    const { data, error } = await window.supabaseClient.rpc('pos_decide_bill_approval', {
+      p_approval_id: approvalId,
+      p_decision: decision,
+      p_decision_reason: reason || ''
     });
     throwIfError(error);
     return data;

@@ -1,4 +1,4 @@
-const KEYS = ['ingredients', 'recipes', 'inventoryTransactions', 'productionLogs', 'revenueRecords', 'wasteLogs', 'physicalCounts', 'users', 'reservations', 'restaurantTables', 'buffetRates'];
+const KEYS = ['ingredients', 'recipes', 'inventoryTransactions', 'productionLogs', 'revenueRecords', 'wasteLogs', 'physicalCounts', 'users', 'reservations', 'restaurantTables', 'buffetRates', 'chargeItems', 'chargeItemVariants', 'packageTiers', 'packageInclusions', 'discounts', 'posSettings', 'shifts', 'cashMovements', 'posBills', 'billLines', 'billPayments', 'reservationDeposits', 'billApprovals'];
 const DATA_STORAGE_KEYS = [...KEYS.map(key => `costtrack_${key}`), 'costtrack_pending_sync_anonymous'];
 function clearDataStorage() {
   DATA_STORAGE_KEYS.forEach(key => localStorage.removeItem(key));
@@ -93,11 +93,11 @@ function persistReservationFilters() {
   }));
 }
 const roleAccess = {
-  'Administrator': ['dashboard', 'ingredients', 'receiving', 'recipes', 'production', 'waste', 'counts', 'reports', 'revenue', 'rates', 'users', 'roles', 'settings', 'reservations', 'calendar', 'tables'],
-  'Manager': ['dashboard', 'ingredients', 'receiving', 'recipes', 'production', 'waste', 'counts', 'reports', 'revenue', 'rates', 'reservations', 'calendar', 'tables'],
+  'Administrator': ['dashboard', 'ingredients', 'receiving', 'recipes', 'production', 'waste', 'counts', 'reports', 'revenue', 'rates', 'users', 'roles', 'settings', 'reservations', 'calendar', 'tables', 'cashier', 'shifts', 'approvals', 'charge-catalog'],
+  'Manager': ['dashboard', 'ingredients', 'receiving', 'recipes', 'production', 'waste', 'counts', 'reports', 'revenue', 'rates', 'reservations', 'calendar', 'tables', 'cashier', 'shifts', 'approvals', 'charge-catalog'],
   'Inventory Clerk': ['ingredients', 'receiving', 'counts', 'reports'],
   'Chef / Kitchen Staff': ['recipes', 'production', 'waste'],
-  'Receptionist': ['dashboard', 'reservations', 'calendar', 'tables']
+  'Receptionist': ['dashboard', 'reservations', 'calendar', 'tables', 'cashier', 'shifts', 'approvals']
 };
 const canAccess = view => Boolean(roleAccess[state.role]?.includes(view));
 const canAccessRevenue = () => ['Administrator', 'Manager'].includes(state.role);
@@ -365,6 +365,10 @@ function realtimeCollectionsForView() {
     reservations: ['reservations', 'restaurant_tables'],
     calendar: ['reservations', 'restaurant_tables'],
     tables: ['reservations', 'restaurant_tables'],
+    cashier: ['pos_bills', 'pos_bill_lines', 'pos_bill_payments', 'pos_reservation_deposits', 'pos_bill_approvals', 'reservations'],
+    shifts: ['pos_shifts', 'pos_cash_movements'],
+    approvals: ['pos_bills', 'pos_bill_approvals'],
+    'charge-catalog': ['pos_charge_items', 'pos_package_tiers', 'pos_discounts', 'pos_settings'],
     rates: ['buffet_rates'],
     revenue: ['revenue_records', 'production_logs', 'waste_logs', 'reservations'],
     reports: ['ingredients', 'recipes', 'recipe_ingredients', 'production_logs', 'waste_logs', 'inventory_transactions', 'physical_counts', 'revenue_records', 'reservations']
@@ -379,17 +383,42 @@ function realtimeCollectionsForView() {
 }
 function realtimeTablesForRole(tables) {
   const allowed = {
-    Administrator: ['ingredients', 'recipes', 'recipe_ingredients', 'inventory_transactions', 'production_logs', 'production_batches', 'waste_logs', 'physical_counts', 'reservations', 'restaurant_tables', 'revenue_records', 'buffet_rates'],
-    Manager: ['ingredients', 'recipes', 'recipe_ingredients', 'inventory_transactions', 'production_logs', 'production_batches', 'waste_logs', 'physical_counts', 'reservations', 'restaurant_tables', 'revenue_records', 'buffet_rates'],
+    Administrator: ['ingredients', 'recipes', 'recipe_ingredients', 'inventory_transactions', 'production_logs', 'production_batches', 'waste_logs', 'physical_counts', 'reservations', 'restaurant_tables', 'revenue_records', 'buffet_rates', 'pos_charge_items', 'pos_charge_item_variants', 'pos_package_tiers', 'pos_package_inclusions', 'pos_discounts', 'pos_settings', 'pos_shifts', 'pos_cash_movements', 'pos_bills', 'pos_bill_lines', 'pos_bill_payments', 'pos_reservation_deposits', 'pos_bill_approvals'],
+    Manager: ['ingredients', 'recipes', 'recipe_ingredients', 'inventory_transactions', 'production_logs', 'production_batches', 'waste_logs', 'physical_counts', 'reservations', 'restaurant_tables', 'revenue_records', 'buffet_rates', 'pos_charge_items', 'pos_charge_item_variants', 'pos_package_tiers', 'pos_package_inclusions', 'pos_discounts', 'pos_settings', 'pos_shifts', 'pos_cash_movements', 'pos_bills', 'pos_bill_lines', 'pos_bill_payments', 'pos_reservation_deposits', 'pos_bill_approvals'],
     'Chef / Kitchen Staff': ['ingredients', 'recipes', 'recipe_ingredients', 'production_logs', 'production_batches', 'waste_logs'],
-    Receptionist: ['reservations', 'restaurant_tables', 'buffet_rates'],
+    Receptionist: ['reservations', 'restaurant_tables', 'buffet_rates', 'pos_bills', 'pos_bill_lines', 'pos_bill_payments', 'pos_reservation_deposits', 'pos_bill_approvals', 'pos_shifts', 'pos_cash_movements'],
     'Inventory Clerk': ['ingredients', 'recipes', 'recipe_ingredients', 'inventory_transactions', 'physical_counts', 'waste_logs']
   };
   const permitted = new Set(allowed[state.role] || []);
   return tables.filter(table => permitted.has(table));
 }
 function realtimeCollectionName(table) {
-  return { ingredients: 'ingredients', recipes: 'recipes', recipe_ingredients: 'recipes', inventory_transactions: 'inventoryTransactions', production_logs: 'productionLogs', waste_logs: 'wasteLogs', physical_counts: 'physicalCounts', reservations: 'reservations', restaurant_tables: 'restaurantTables', revenue_records: 'revenueRecords', buffet_rates: 'buffetRates' }[table];
+  return {
+    ingredients: 'ingredients',
+    recipes: 'recipes',
+    recipe_ingredients: 'recipes',
+    inventory_transactions: 'inventoryTransactions',
+    production_logs: 'productionLogs',
+    waste_logs: 'wasteLogs',
+    physical_counts: 'physicalCounts',
+    reservations: 'reservations',
+    restaurant_tables: 'restaurantTables',
+    revenue_records: 'revenueRecords',
+    buffet_rates: 'buffetRates',
+    pos_charge_items: 'chargeItems',
+    pos_charge_item_variants: 'chargeItemVariants',
+    pos_package_tiers: 'packageTiers',
+    pos_package_inclusions: 'packageInclusions',
+    pos_discounts: 'discounts',
+    pos_settings: 'posSettings',
+    pos_shifts: 'shifts',
+    pos_cash_movements: 'cashMovements',
+    pos_bills: 'posBills',
+    pos_bill_lines: 'billLines',
+    pos_bill_payments: 'billPayments',
+    pos_reservation_deposits: 'reservationDeposits',
+    pos_bill_approvals: 'billApprovals'
+  }[table];
 }
 function persistCollection(collection, records) {
   collectionState[collection] = records;
@@ -398,6 +427,11 @@ async function refetchCollection(collection) {
   const records = await window.supabaseRecord.load(collection);
   persistCollection(collection, records);
   return records;
+}
+async function refreshPosCollections() {
+  const collections = ['posBills', 'billLines', 'billPayments', 'billApprovals'];
+  const loaded = await Promise.all(collections.map(collection => window.supabaseRecord.load(collection)));
+  collections.forEach((collection, index) => persistCollection(collection, loaded[index]));
 }
 async function refreshRealtimeCollection(table, payload) {
   if (table === 'production_batches') {
@@ -488,10 +522,10 @@ function configureRealtimeSubscriptions() {
   return realtimeConfigPromise;
 }
 const sidebarGroups = [
-  { id: 'front-of-house', label: 'Front of House', icon: 'calendar', items: [['reservations', 'calendar-plus', 'Reservations'], ['calendar', 'calendar-days', 'Tables / Calendar'], ['tables', 'table', 'Table Management']] },
+  { id: 'front-of-house', label: 'Front of House', icon: 'calendar', items: [['cashier', 'dashboard', 'Cashier'], ['shifts', 'calendar-days', 'Shifts'], ['approvals', 'shield', 'Approvals'], ['reservations', 'calendar-plus', 'Reservations'], ['calendar', 'calendar-days', 'Tables / Calendar'], ['tables', 'table', 'Table Management']] },
   { id: 'inventory', label: 'Inventory Management', icon: 'boxes', items: [['ingredients', 'package', 'Ingredients'], ['receiving', 'package-plus', 'Ingredients + Receiving'], ['counts', 'clipboard-check', 'Physical Count']] },
   { id: 'production', label: 'Kitchen Operations', icon: 'chef-hat', items: [['recipes', 'book', 'Recipes'], ['production', 'chef-hat', 'Production Board'], ['waste', 'trash', 'Waste Logs']] },
-  { id: 'revenue-management', label: 'Revenue Management', icon: 'chart', items: [['revenue', 'chart', 'Revenue Tracking']] },
+  { id: 'revenue-management', label: 'Revenue Management', icon: 'chart', items: [['revenue', 'chart', 'Revenue Tracking'], ['charge-catalog', 'package', 'Charge Catalog']] },
   { id: 'analytics', label: 'Analytics & Reports', icon: 'chart', items: [['reports', 'chart', 'Reports & analytics']] },
   { id: 'system', label: 'System Management', icon: 'settings', items: [['users', 'users', 'User Management'], ['roles', 'shield', 'Role Management'], ['settings', 'settings', 'System Settings']] }
 ];
@@ -603,6 +637,7 @@ function userMenuMarkup(placement) {
 function createActions() {
   return [
     { id: 'reservation', label: 'New reservation', icon: 'calendar-plus', view: 'reservations' },
+    { id: 'cashier', label: 'Open cashier', icon: 'dashboard', view: 'cashier' },
     { id: 'production', label: 'Log production', icon: 'chef-hat', view: 'production' },
     { id: 'waste', label: 'Log waste', icon: 'trash', view: 'waste' },
     { id: 'receiving', label: 'Receive supplies', icon: 'package-plus', view: 'receiving' },
@@ -801,6 +836,7 @@ function runCreateAction(actionId) {
   if (!action) return toast('This action is not available for your role.', 'error');
   closeShellPopovers(false);
   if (actionId === 'reservation') return reservationForm();
+  if (actionId === 'cashier') return setView('cashier');
   if (actionId === 'revenue') return revenueForm();
   if (actionId === 'production') return openForm('production');
   if (actionId === 'waste') return openForm('waste');
@@ -944,7 +980,11 @@ function login(message = '') {
 }
 function metric(label, value, icon, tone, foot) { return `<div class="metric-card"><div class="metric-top"><span>${label}</span><i class="metric-icon ${tone}">${icon}</i></div><div class="metric-value">${value}</div><div class="metric-foot">${foot}</div></div>`; }
 function pageHeader(eyebrow, title, subtitle, action = '') { return `<div class="page-header"><div><div class="eyebrow">${eyebrow}</div><h1>${title}</h1><p>${subtitle}</p></div>${action}</div>`; }
-function tablePage(config) { return `${pageHeader(config.eyebrow, config.title, config.subtitle, config.action)}<div class="toolbar"><div class="search-box">⌕<input id="tableSearch" placeholder="Search ${config.search || 'records'}..." value="${esc(state.query)}"></div>${config.filters || ''}<span class="record-count">${config.rows.length} records</span></div><div class="panel table-panel"><div class="table-scroll"><table><thead><tr>${config.headers.map(item => `<th>${item}</th>`).join('')}</tr></thead><tbody>${config.rows.length ? config.rows.join('') : `<tr><td colspan="${config.headers.length}" class="empty-state">No records found. Add your first record to get started.</td></tr>`}</tbody></table></div></div>`; }
+function tablePage(config) {
+  const rows = config.rows || [];
+  const emptyMessage = config.emptyMessage || 'No records found. Add your first record to get started.';
+  return `${pageHeader(config.eyebrow, config.title, config.subtitle, config.action)}<div class="toolbar"><div class="search-box">⌕<input id="tableSearch" placeholder="Search ${config.search || 'records'}..." value="${esc(state.query)}"></div>${config.filters || ''}<span class="record-count">${rows.length} records</span></div><div class="panel table-panel"><div class="table-scroll"><table><thead><tr>${config.headers.map(item => `<th>${item}</th>`).join('')}</tr></thead><tbody>${rows.length ? rows.join('') : `<tr><td colspan="${config.headers.length}" class="empty-state">${esc(emptyMessage)}</td></tr>`}</tbody></table></div></div>`;
+}
 function stockStatus(item) { return item.stock <= 0 ? 'Out of Stock' : item.stock <= item.minimum ? 'Low Stock' : 'Healthy'; }
 function roleDashboard() {
   const ingredients = all('ingredients');
@@ -1271,6 +1311,105 @@ function ratesPage() {
     search: 'rates',
     headers: ['Meal period', 'Day type', 'Adult', 'Child', 'Senior/PWD', 'Effective dates', 'Status', ''],
     rows
+  });
+}
+function chargeCatalogPage() {
+  const chargeItems = all('chargeItems');
+  const packageTiers = all('packageTiers');
+  const discounts = all('discounts');
+  const settings = all('posSettings');
+  const rows = chargeItems.length ? chargeItems.map(item => `<tr><td><strong>${esc(item.code || item.id)}</strong></td><td>${esc(item.name)}</td><td><span class="tag">${esc(item.type)}</span></td><td>${item.isFoodRevenue ? 'Food' : 'Non-food'}</td><td>${money(item.unitPrice || 0)}</td><td><button class="ghost-btn compact-btn" data-action="edit-charge-item" data-id="${esc(item.id)}">Edit</button></td></tr>`).join('') : '<tr><td colspan="6" class="empty-state">No catalog entries yet. Use the migration seed data or add a charge item from the catalog editor.</td></tr>';
+  const packageRows = packageTiers.length ? packageTiers.map(item => `<tr><td><strong>${esc(item.code || item.id)}</strong></td><td>${esc(item.name)}</td><td>${esc(item.defaultMealPeriod || 'All Day')}</td><td>${money(item.basePrice || 0)}</td><td><span class="status ${item.isActive ? 'status-good' : 'status-low'}">${item.isActive ? 'Active' : 'Inactive'}</span></td></tr>`).join('') : '<tr><td colspan="5" class="empty-state">No package tiers defined.</td></tr>';
+  const discountRows = discounts.length ? discounts.map(item => `<tr><td><strong>${esc(item.code || item.id)}</strong></td><td>${esc(item.name)}</td><td>${esc(item.discountType)}</td><td>${esc(item.appliesTo || 'bill')}</td><td>${item.discountType === 'percent' ? `${Number(item.value || 0).toFixed(2)}%` : money(item.value || 0)}</td></tr>`).join('') : '<tr><td colspan="5" class="empty-state">No discount presets defined.</td></tr>';
+  const settingsRows = settings.length ? settings.map(item => `<tr><td>${esc(item.key)}</td><td>${esc(item.type)}</td><td>${esc(String(item.value || ''))}</td></tr>`).join('') : '<tr><td colspan="3" class="empty-state">No operating settings saved yet.</td></tr>';
+  return `
+    <section class="panel">
+      <div class="panel-header">
+        <div>
+          <div class="panel-title">Charge catalog</div>
+          <div class="panel-subtitle">Service charges, package tiers, discounts, and POS settings for the cashier workflow.</div>
+        </div>
+        <button class="primary-btn" data-action="new-charge-item">+ New charge</button>
+      </div>
+      <div class="two-column-grid">
+        <div class="panel">
+          <div class="sub-panel-header"><strong>Charge items</strong></div>
+          <div class="table-scroll"><table><thead><tr><th>Code</th><th>Name</th><th>Type</th><th>Revenue</th><th>Price</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>
+        </div>
+        <div class="panel">
+          <div class="sub-panel-header"><strong>Package tiers</strong></div>
+          <div class="table-scroll"><table><thead><tr><th>Code</th><th>Name</th><th>Meal</th><th>Base</th><th>Status</th></tr></thead><tbody>${packageRows}</tbody></table></div>
+        </div>
+      </div>
+      <div class="two-column-grid">
+        <div class="panel">
+          <div class="sub-panel-header"><strong>Discount presets</strong></div>
+          <div class="table-scroll"><table><thead><tr><th>Code</th><th>Name</th><th>Type</th><th>Applies</th><th>Value</th></tr></thead><tbody>${discountRows}</tbody></table></div>
+        </div>
+        <div class="panel">
+          <div class="sub-panel-header"><strong>POS settings</strong></div>
+          <div class="table-scroll"><table><thead><tr><th>Key</th><th>Type</th><th>Value</th></tr></thead><tbody>${settingsRows}</tbody></table></div>
+        </div>
+      </div>
+    </section>
+  `;
+}
+function cashierPage() {
+  const bills = all('posBills').slice().sort((a, b) => String(b.updatedAt || b.createdAt || '').localeCompare(String(a.updatedAt || a.createdAt || '')));
+  const rows = bills.map(item => {
+    const canEdit = item.status === 'Open'
+      && (state.role !== 'Receptionist' || item.createdBy === state.user?.id);
+    return `<tr><td><strong>${esc(item.billNumber || item.id)}</strong></td><td>${esc(item.customerName || 'Walk-in')}</td><td>${Number(item.customersServed || 0)} served</td><td><span class="status ${item.status === 'Closed' ? 'status-good' : item.status === 'Voided' ? 'status-out' : 'status-low'}">${esc(item.status)}</span></td><td>${money(item.balanceDue || 0)}</td><td>${money(item.paidTotal || 0)}</td><td><div class="row-actions"><button class="ghost-btn compact-btn" data-action="open-bill" data-id="${esc(item.id)}">${canEdit ? 'Edit' : 'View'}</button><button class="ghost-btn compact-btn" data-action="print-bill" data-id="${esc(item.id)}">Print</button></div></td></tr>`;
+  });
+  return tablePage({
+    eyebrow: 'Front of House',
+    title: 'Cashier',
+    subtitle: 'Create and settle bills without changing stock. Deposits are payments, never discounts.',
+    action: '<button class="primary-btn" data-action="new-bill">+ New bill</button>',
+    search: 'cashier',
+    headers: ['Bill #', 'Customer', 'Served', 'Status', 'Balance', 'Paid', ''],
+    rows,
+    emptyMessage: 'No bills yet. Create a bill to begin.'
+  });
+}
+function shiftsPage() {
+  const rows = all('shifts').slice().reverse().map(item => `<tr><td>${esc(item.code || item.id)}</td><td>${esc(item.status)}</td><td>${esc(item.openedAt || '')}</td><td>${money(item.openingFloat || 0)}</td><td>${money(item.cashSales || 0)}</td><td><button class="ghost-btn compact-btn" data-action="open-shift" data-id="${esc(item.id)}">View</button></td></tr>`);
+  return tablePage({
+    eyebrow: 'Front of House',
+    title: 'Shifts',
+    subtitle: 'Track cashier float, cash movement, and end-of-shift reconciliation.',
+    action: '<button class="primary-btn" data-action="new-shift">+ Open shift</button>',
+    search: 'shifts',
+    headers: ['Shift', 'Status', 'Opened', 'Float', 'Cash sales', ''],
+    rows,
+    emptyMessage: 'No shifts recorded yet.'
+  });
+}
+function approvalsPage() {
+  const approvals = all('billApprovals').slice().sort((a, b) => String(b.requestedAt || '').localeCompare(String(a.requestedAt || '')));
+  const canDecide = ['Administrator', 'Manager'].includes(state.role);
+  const rows = approvals.map(item => {
+    const bill = all('posBills').find(record => record.id === item.billId);
+    const label = item.requestType === 'void' ? 'Void bill' : '100% discount';
+    const canReview = canDecide && item.status === 'Pending' && item.requestedBy !== state.user?.id;
+    const decision = item.decidedBy
+      ? `<small>Decision by ${esc(item.decidedBy)} · ${esc(item.decidedAt || '')}${item.decisionReason ? ` · ${esc(item.decisionReason)}` : ''}</small>`
+      : '';
+    const actions = canReview
+      ? `<button class="ghost-btn compact-btn" data-action="approve-approval" data-id="${esc(item.id)}">Approve</button><button class="ghost-btn compact-btn" data-action="reject-approval" data-id="${esc(item.id)}">Reject</button>`
+      : '';
+    return `<tr><td><strong>${esc(bill?.billNumber || item.billId)}</strong><small>${esc(label)}</small></td><td><span class="status ${item.status === 'Approved' ? 'status-good' : item.status === 'Pending' ? 'status-low' : 'status-out'}">${esc(item.status)}</span>${decision}</td><td>${esc(item.requestReason)}<small>Requested by ${esc(item.requestedBy)} · ${esc(item.requestedAt || '')}</small></td><td>${actions}</td></tr>`;
+  });
+  return tablePage({
+    eyebrow: 'Front of House',
+    title: 'Approvals',
+    subtitle: canDecide
+      ? 'Review and decide full-discount and bill-void requests. You cannot decide your own request.'
+      : 'Track the status and decision history of your approval requests.',
+    search: 'approvals',
+    headers: ['Bill / Request', 'Status / Decision', 'Reason / Requested by', 'Action'],
+    rows,
+    emptyMessage: 'No approval requests.'
   });
 }
 function usersPage() {
@@ -2089,6 +2228,136 @@ async function handleSubmit(form) {
   if (requiredAction && !window.CostTrackLogic.canPerformInventoryAction(state.role, requiredAction)) {
     return toast('You do not have permission to perform this action.', 'error');
   }
+  if (type === 'bill') {
+    const extraLines = [...form.querySelectorAll('[data-extra-line]')].flatMap(line => {
+      const chargeItemId = line.querySelector('[name="extraChargeItemId"]').value;
+      if (!chargeItemId) return [];
+      return [{
+        line_id: line.querySelector('[name="extraLineId"]').value || null,
+        charge_item_id: chargeItemId,
+        quantity: Number(line.querySelector('[name="extraQuantity"]').value)
+      }];
+    });
+    const discountId = form.elements.discountId.value || null;
+    const discountReason = form.elements.discountReason.value.trim();
+    if (discountId && !discountReason) return toast('Enter a reason for the discount.', 'error');
+    const adultCount = Number(form.elements.adultCount.value || 0);
+    const seniorCount = Number(form.elements.seniorCount.value || 0);
+    const kidsCount = Number(form.elements.kidsCount.value || 0);
+    const compedCount = Number(form.elements.compedCount.value || 0);
+    if (![adultCount, seniorCount, kidsCount, compedCount].every(Number.isInteger)
+      || adultCount + seniorCount + kidsCount + compedCount > 1000) {
+      return toast('Enter whole-number head counts totaling no more than 1,000.', 'error');
+    }
+    if (adultCount + seniorCount + kidsCount + compedCount === 0 && !extraLines.length) {
+      return toast('Enter at least one guest or extra charge.', 'error');
+    }
+    if (extraLines.some(line => !Number.isFinite(line.quantity) || line.quantity <= 0)) {
+      return toast('Each selected extra needs a quantity greater than zero.', 'error');
+    }
+    try {
+      const result = await window.supabaseRecord.posSaveBill({
+        billId: editId || null,
+        customerName: String(data.customerName || '').trim() || 'Walk-in',
+        notes: String(data.notes || '').trim(),
+        reservationId: data.reservationId || null,
+        adultCount,
+        seniorCount,
+        kidsCount,
+        compedCount,
+        discountId,
+        discountReason,
+        extraLines,
+        initialDeposit: editId ? 0 : Number(data.initialDeposit || 0),
+        idempotencyKey: editId ? null : form.dataset.createKey
+      });
+      await refreshPosCollections();
+      state.modalDirty = false;
+      closeModal();
+      const savedBill = result?.bill || {};
+      toast(`${savedBill.bill_number || 'Bill'} saved. Subtotal ${money(savedBill.subtotal)} · Balance ${money(savedBill.balance_due)}.`);
+      render();
+    } catch (error) {
+      console.error('POS bill save failed.', error);
+      const submit = form.querySelector('.modal-submit');
+      if (submit) {
+        submit.disabled = false;
+        submit.classList.remove('is-loading');
+        submit.removeAttribute('aria-busy');
+        submit.textContent = editId ? 'Save bill' : 'Create bill';
+      }
+      toast(friendlyRpcError(error), 'error');
+    }
+    return;
+  }
+  if (type === 'bill-close') {
+    try {
+      const result = await window.supabaseRecord.posCloseBill(
+        editId,
+        Number(data.tenderedAmount),
+        form.dataset.paymentKey
+      );
+      await refreshPosCollections();
+      state.modalDirty = false;
+      closeModal();
+      const changeAmount = Number(result?.payment?.change_amount || 0);
+      toast(`Bill closed. Change due: ${money(changeAmount)}.`);
+      render();
+    } catch (error) {
+      console.error('POS bill close failed.', error);
+      const submit = form.querySelector('.modal-submit');
+      if (submit) {
+        submit.disabled = false;
+        submit.classList.remove('is-loading');
+        submit.removeAttribute('aria-busy');
+        submit.textContent = 'Confirm cash and close';
+      }
+      toast(friendlyRpcError(error), 'error');
+    }
+    return;
+  }
+  if (type === 'bill-void-request') {
+    try {
+      await window.supabaseRecord.posRequestBillVoid(editId, data.voidReason.trim());
+      await refreshPosCollections();
+      state.modalDirty = false;
+      closeModal();
+      toast('Void request sent to a Manager or Administrator.');
+      render();
+    } catch (error) {
+      console.error('POS bill void request failed.', error);
+      const submit = form.querySelector('.modal-submit');
+      if (submit) {
+        submit.disabled = false;
+        submit.classList.remove('is-loading');
+        submit.removeAttribute('aria-busy');
+        submit.textContent = 'Request void';
+      }
+      toast(friendlyRpcError(error), 'error');
+    }
+    return;
+  }
+  if (type === 'bill-approval-decision') {
+    try {
+      await window.supabaseRecord.posDecideBillApproval(editId, form.dataset.decision, data.decisionReason.trim());
+      await refreshPosCollections();
+      state.modalDirty = false;
+      closeModal();
+      toast(form.dataset.decision === 'approve' ? 'Approval recorded.' : 'Request rejected.');
+      render();
+    } catch (error) {
+      console.error('POS approval decision failed.', error);
+      const submit = form.querySelector('.modal-submit');
+      if (submit) {
+        submit.disabled = false;
+        submit.classList.remove('is-loading');
+        submit.removeAttribute('aria-busy');
+        submit.textContent = form.dataset.decision === 'approve' ? 'Approve request' : 'Reject request';
+      }
+      toast(friendlyRpcError(error), 'error');
+    }
+    return;
+  }
   if (type === 'receiving') {
     readReceivingDraft(form);
     const lines = state.receivingDraft;
@@ -2165,7 +2434,41 @@ async function handleSubmit(form) {
     ingredient: 'ingredients', receiving: 'inventoryTransactions',
     production: 'productionLogs', count: 'physicalCounts'
   };
-  if (type === 'rate') {
+  if (type === 'charge-item') {
+    const record = {
+      id: editId || id('POSC'),
+      code: String(data.code || '').trim(),
+      name: String(data.name || '').trim(),
+      type: data.type || 'other',
+      category: String(data.category || '').trim() || 'General',
+      unitPrice: Number(data.unitPrice || 0),
+      defaultQuantity: Number(data.defaultQuantity || 1),
+      isActive: data.isActive === 'true' || data.isActive === 'on',
+      isFoodRevenue: data.isFoodRevenue !== 'false' && data.isFoodRevenue !== '0',
+      isPackage: data.isPackage === 'true' || data.isPackage === 'on',
+      requiresApproval: data.requiresApproval === 'true' || data.requiresApproval === 'on',
+      notes: String(data.notes || '').trim()
+    };
+    if (!record.code || !record.name) return toast('Charge code and name are required.', 'error');
+    await save('chargeItems', editId ? all('chargeItems').map(item => item.id === editId ? { ...item, ...record } : item) : [record, ...all('chargeItems')]);
+    successMessage = editId ? 'Charge item updated.' : 'Charge item created.';
+  } else if (type === 'shift') {
+    const record = {
+      id: editId || id('POSS'),
+      code: String(data.shiftCode || '').trim() || `SHIFT-${new Date().toISOString().slice(0,10).replace(/-/g,'')}`,
+      openedBy: state.user?.id || null,
+      openedAt: data.openedAt || new Date().toISOString(),
+      closedAt: data.closedAt || null,
+      status: data.status || 'Open',
+      openingFloat: Number(data.openingFloat || 0),
+      cashSales: Number(data.cashSales || 0),
+      cardSales: Number(data.cardSales || 0),
+      declaredCash: Number(data.declaredCash || 0),
+      notes: String(data.notes || '').trim()
+    };
+    await save('shifts', editId ? all('shifts').map(item => item.id === editId ? { ...item, ...record } : item) : [record, ...all('shifts')]);
+    successMessage = editId ? 'Shift updated.' : 'Shift opened.';
+  } else if (type === 'rate') {
     const record = { id: editId || id('RATE'), mealPeriod: data.mealPeriod, dayType: data.dayType, adultRate: Number(data.adultRate), childRate: Number(data.childRate), seniorPwdRate: Number(data.seniorPwdRate), effectiveFrom: data.effectiveFrom, effectiveTo: data.effectiveTo || null, isActive: data.isActive === 'true' };
     await save('buffetRates', editId ? all('buffetRates').map(item => item.id === editId ? { ...item, ...record } : item) : [record, ...all('buffetRates')]);
   } else if (type === 'walk-in') {
@@ -2424,6 +2727,167 @@ function confirmRevenueForm(record) {
   document.querySelector('#modalForm').dataset.type = 'confirm-revenue';
   document.querySelector('#modalForm').dataset.id = record.id;
 }
+function chargeItemForm(item = {}) {
+  const value = key => item?.[key] ?? '';
+  const content = `<div class="form-grid"><label>Charge code<input name="code" value="${esc(value('code'))}" required></label><label>Charge name<input name="name" value="${esc(value('name'))}" required></label><label>Type<select name="type"><option value="food" ${value('type') === 'food' ? 'selected' : ''}>Food</option><option value="non_food" ${value('type') === 'non_food' ? 'selected' : ''}>Non-food</option><option value="service_charge" ${value('type') === 'service_charge' ? 'selected' : ''}>Service charge</option><option value="package" ${value('type') === 'package' ? 'selected' : ''}>Package</option><option value="deposit" ${value('type') === 'deposit' ? 'selected' : ''}>Deposit</option><option value="discount" ${value('type') === 'discount' ? 'selected' : ''}>Discount</option><option value="other" ${value('type') === 'other' || !value('type') ? 'selected' : ''}>Other</option></select></label><label>Category<input name="category" value="${esc(value('category') || 'General')}" required></label><label>Unit price<input name="unitPrice" type="number" min="0" step="0.01" value="${Number(value('unitPrice') || 0).toFixed(2)}" required></label><label>Default qty<input name="defaultQuantity" type="number" min="0.01" step="0.01" value="${Number(value('defaultQuantity') || 1).toFixed(2)}" required></label><label>Active<input name="isActive" type="checkbox" ${value('isActive') === false ? '' : 'checked'}></label><label>Food revenue<input name="isFoodRevenue" type="checkbox" ${value('isFoodRevenue') === false ? '' : 'checked'}></label><label>Package<input name="isPackage" type="checkbox" ${value('isPackage') ? 'checked' : ''}></label><label>Approval needed<input name="requiresApproval" type="checkbox" ${value('requiresApproval') ? 'checked' : ''}></label><label class="full">Notes<textarea name="notes" rows="3">${esc(value('notes'))}</textarea></label></div>`;
+  modal(item.id ? 'Edit charge item' : 'Create charge item', content, item.id ? 'Save charge' : 'Create charge');
+  const form = document.querySelector('#modalForm');
+  form.dataset.type = 'charge-item';
+  if (item.id) form.dataset.id = item.id;
+}
+function billExtraLineMarkup(line = {}, disabled = false) {
+  const allowedTypes = new Set(['food', 'non_food', 'other']);
+  const items = all('chargeItems').filter(item => item.isActive !== false
+    && allowedTypes.has(item.type) && !item.isPackage);
+  const selectedChargeId = line.chargeItemId || '';
+  const options = [
+    '<option value="">Choose an extra charge</option>',
+    ...items.map(item => `<option value="${esc(item.id)}" ${selectedChargeId === item.id ? 'selected' : ''}>${esc(item.name)} · ${money(item.unitPrice || 0)}${item.isFoodRevenue ? ' · Food' : ' · Non-food'}</option>`)
+  ].join('');
+  return `<div class="form-grid pos-extra-line" data-extra-line>
+    <input type="hidden" name="extraLineId" value="${esc(line.id || '')}">
+    <label class="full">Extra charge<select name="extraChargeItemId" ${disabled ? 'disabled' : ''}>${options}</select></label>
+    <label>Quantity<input name="extraQuantity" type="number" min="0.01" max="10000" step="0.01" value="${Number(line.quantity || 1)}" ${disabled ? 'disabled' : ''}></label>
+    ${line.id ? `<span class="field-help">Saved price: ${money(line.unitPrice)} each. Editing quantity keeps this price snapshot.</span>` : ''}
+    ${disabled ? '' : '<button type="button" class="ghost-btn compact-btn" data-action="remove-bill-extra">Remove extra</button>'}
+  </div>`;
+}
+function billForm(item = {}) {
+  const editing = Boolean(item.id);
+  const editable = !editing || (item.status === 'Open'
+    && (state.role !== 'Receptionist' || item.createdBy === state.user?.id));
+  const disabled = editable ? '' : 'disabled';
+  const billLines = editing
+    ? all('billLines').filter(line => line.billId === item.id && line.lineType === 'charge_item' && !line.isVoided)
+    : [];
+  const extraLines = billLines.length ? billLines : (editable ? [{}] : []);
+  const reservations = all('reservations').map(res => `<option value="${esc(res.id)}" ${item.reservationId === res.id ? 'selected' : ''}>${esc(res.name || 'Guest')} · ${esc(res.date)} ${esc(res.time)}</option>`).join('');
+  const discounts = all('discounts').filter(discount =>
+    (discount.isActive !== false && (discount.appliesTo || 'bill') === 'bill') || discount.id === item.discountId
+  ).map(discount => `<option value="${esc(discount.id)}" ${item.discountId === discount.id ? 'selected' : ''}>${esc(discount.name)} · ${esc(discount.discountType)} ${Number(discount.value || 0)}${discount.discountType === 'percent' ? '%' : ''}</option>`).join('');
+  const pendingApproval = all('billApprovals').find(approval => approval.billId === item.id
+    && approval.requestType === 'full_discount' && approval.status === 'Pending');
+  const revenueTotals = ['Administrator', 'Manager'].includes(state.role)
+    ? `<div>Food revenue <strong>${money(item.foodRevenueTotal)}</strong></div><div>Non-food revenue <strong>${money(item.nonFoodRevenueTotal)}</strong></div>`
+    : '';
+  const totals = editing ? `<section class="panel"><div class="panel-title">Server-calculated totals</div><div class="form-grid">
+      <div>Subtotal <strong>${money(item.subtotal)}</strong></div><div>Service charge <strong>${money(item.serviceCharge)}</strong></div>
+      <div>Discount <strong>${money(item.discountTotal)}</strong></div><div>Deposits (payments) <strong>${money(item.depositTotal)}</strong></div>
+      <div>Cash paid <strong>${money(item.paidTotal)}</strong></div><div>Balance due <strong>${money(item.balanceDue)}</strong></div>
+      ${revenueTotals}
+      <div>Customers served <strong>${Number(item.customersServed || 0)}</strong></div>
+    </div>${pendingApproval ? `<p class="field-help">Full discount approval pending (${esc(pendingApproval.requestedAt)}).</p>` : ''}</section>` : '<p class="field-help">All totals and prices are calculated by Supabase when you save.</p>';
+  const actionButtons = editing
+    ? `<div class="pos-bill-actions">${editable ? `<button type="button" class="ghost-btn" data-action="close-bill" data-id="${esc(item.id)}">Take cash &amp; close</button><button type="button" class="ghost-btn" data-action="request-bill-void" data-id="${esc(item.id)}">Request void</button>` : ''}<button type="button" class="ghost-btn" data-action="print-bill" data-id="${esc(item.id)}">Print billing statement</button></div>`
+    : '';
+  const content = `<p class="field-help">${editing ? `Bill ${esc(item.billNumber)} · ${esc(item.status)}${item.createdAt ? ` · Created ${esc(item.createdAt)}` : ''}` : 'Cash-only billing. Sales do not deduct inventory. Comped guests count as served at zero.'}</p>
+    <div class="form-grid">
+      <label>Customer name<input name="customerName" value="${esc(item.customerName || 'Walk-in')}" maxlength="160" ${disabled} required></label>
+      <label>Reservation (optional)<select name="reservationId" ${disabled}><option value="">Walk-in / no reservation</option>${reservations}</select></label>
+    </div>
+    <fieldset class="product-form-section"><legend>Head counts</legend><div class="form-grid">
+      <label>Adult × ${money(item.adultRate || 449)}<input name="adultCount" type="number" min="0" max="1000" step="1" value="${Number(item.adultCount || 0)}" ${disabled} required></label>
+      <label>Senior / PWD × ${money(item.seniorRate || 360)}<input name="seniorCount" type="number" min="0" max="1000" step="1" value="${Number(item.seniorCount || 0)}" ${disabled} required></label>
+      <label>Kids × ${money(item.kidsRate || 225)}<input name="kidsCount" type="number" min="0" max="1000" step="1" value="${Number(item.kidsCount || 0)}" ${disabled} required></label>
+      <label>Comped × ₱0.00<input name="compedCount" type="number" min="0" max="1000" step="1" value="${Number(item.compedCount || 0)}" ${disabled} required></label>
+    </div></fieldset>
+    <fieldset class="product-form-section"><legend>Extras</legend><div class="field-help">Extra item prices are snapshotted from the charge catalog. Stock is never changed.</div><div class="pos-extra-lines">${extraLines.map(line => billExtraLineMarkup(line, !editable)).join('')}</div>${editable ? '<button type="button" class="ghost-btn compact-btn" data-action="add-bill-extra">+ Add extra</button>' : ''}</fieldset>
+    <fieldset class="product-form-section"><legend>Discount</legend><div class="form-grid">
+      <label>Discount<select name="discountId" ${disabled}><option value="">No discount</option>${discounts}</select></label>
+      <label class="full">Reason (required when a discount is selected)<textarea name="discountReason" rows="2" maxlength="500" ${disabled}>${esc(item.discountReason || '')}</textarea></label>
+    </div><small class="field-help">Full-bill discounts require Manager/Administrator approval before close.</small></fieldset>
+    ${editing ? '' : '<label>Deposit already paid (optional)<input name="initialDeposit" type="number" min="0" max="10000000" step="0.01" value="0" required><small class="field-help">Recorded as a deposit payment, not a discount.</small></label>'}
+    <label>Notes<textarea name="notes" rows="2" maxlength="1000" ${disabled}>${esc(item.notes || '')}</textarea></label>
+    ${totals}${actionButtons}`;
+  modal(editing ? `${editable ? 'Edit' : 'View'} bill ${item.billNumber || ''}` : 'Create bill',
+    content, editable ? (editing ? 'Save bill' : 'Create bill') : '', 'pos-bill-modal');
+  const form = document.querySelector('#modalForm');
+  form.dataset.type = 'bill';
+  if (editing) form.dataset.id = item.id;
+  else form.dataset.createKey = id('POSCREATE');
+}
+function billCloseForm(bill) {
+  modal(`Take cash · ${esc(bill.billNumber)}`,
+    `<p>Balance due: <strong>${money(bill.balanceDue)}</strong></p><label>Cash tendered<input name="tenderedAmount" type="number" min="${Number(bill.balanceDue || 0).toFixed(2)}" step="0.01" value="${Number(bill.balanceDue || 0).toFixed(2)}" required><small class="field-help">The server records the applied payment and calculates change.</small></label>`,
+    'Confirm cash and close', 'pos-payment-modal');
+  const form = document.querySelector('#modalForm');
+  form.dataset.type = 'bill-close';
+  form.dataset.id = bill.id;
+  form.dataset.paymentKey = id('POSPAY');
+}
+function billVoidRequestForm(bill) {
+  modal(`Request void · ${esc(bill.billNumber)}`,
+    '<p>A Manager or Administrator must approve this request. Closed bills cannot be voided here.</p><label>Reason<textarea name="voidReason" maxlength="500" rows="3" required></textarea></label>',
+    'Request void', 'pos-approval-modal');
+  const form = document.querySelector('#modalForm');
+  form.dataset.type = 'bill-void-request';
+  form.dataset.id = bill.id;
+}
+function billApprovalDecisionForm(approval, decision) {
+  const approving = decision === 'approve';
+  modal(`${approving ? 'Approve' : 'Reject'} request`,
+    `<p>${esc(approval.requestType === 'void' ? 'Void bill' : '100% discount')} · ${esc(approval.requestReason)}</p>
+      <label>${approving ? 'Decision note (optional)' : 'Reason for rejection'}
+      <textarea name="decisionReason" maxlength="500" rows="3" ${approving ? '' : 'required'}></textarea></label>`,
+    approving ? 'Approve request' : 'Reject request', 'pos-approval-modal');
+  const form = document.querySelector('#modalForm');
+  form.dataset.type = 'bill-approval-decision';
+  form.dataset.id = approval.id;
+  form.dataset.decision = decision;
+}
+function printBillingStatement(billId) {
+  const bill = all('posBills').find(item => item.id === billId);
+  if (!bill) return toast('This bill is no longer available.', 'error');
+  const lines = all('billLines').filter(line => line.billId === bill.id && !line.isVoided);
+  const payments = all('billPayments').filter(payment => payment.billId === bill.id);
+  const mealLines = [
+    ['Adult', bill.adultCount, bill.adultRate],
+    ['Senior / PWD', bill.seniorCount, bill.seniorRate],
+    ['Kids', bill.kidsCount, bill.kidsRate],
+    ['Comped', bill.compedCount, 0]
+  ].filter(([, quantity]) => Number(quantity || 0) > 0)
+    .map(([label, quantity, unitPrice]) => `<tr><td>${esc(label)}</td><td>${quantity}</td><td>${money(unitPrice)}</td><td>${money(Number(quantity) * Number(unitPrice))}</td></tr>`);
+  const extraLines = lines.map(line => `<tr><td>${esc(line.description)}</td><td>${Number(line.quantity)}</td><td>${money(line.unitPrice)}</td><td>${money(Number(line.quantity) * Number(line.unitPrice))}</td></tr>`);
+  const cashPayment = payments.filter(payment => payment.paymentMethod === 'cash')
+    .slice().sort((a, b) => String(b.paidAt).localeCompare(String(a.paidAt)))[0];
+  const title = 'BILLING STATEMENT (not an official receipt)';
+  const doc = `<!doctype html><html><head><meta charset="utf-8"><title>${title}</title><style>
+    body{font:14px Arial,sans-serif;color:#111;max-width:760px;margin:32px auto;padding:0 20px}
+    h1{text-align:center;font-size:20px;margin:0 0 6px}.subtitle{text-align:center;margin:0 0 24px}
+    .meta{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:20px}
+    table{width:100%;border-collapse:collapse;margin:12px 0 20px}th,td{border-bottom:1px solid #bbb;padding:8px;text-align:left}
+    th:last-child,td:last-child{text-align:right}.totals{margin-left:auto;width:320px}.totals div{display:flex;justify-content:space-between;padding:5px 0}
+    .balance{font-size:18px;font-weight:bold;border-top:2px solid #111;margin-top:8px;padding-top:10px!important}
+    .notice{text-align:center;margin-top:30px;font-size:12px;color:#444}@media print{body{margin:0 auto;padding:0 10mm}}
+  </style></head><body><h1>${title}</h1><p class="subtitle">This statement is not an official receipt.</p>
+    <div class="meta"><div><strong>Bill:</strong> ${esc(bill.billNumber)}</div><div><strong>Status:</strong> ${esc(bill.status)}</div>
+    <div><strong>Customer:</strong> ${esc(bill.customerName)}</div><div><strong>Date:</strong> ${esc(bill.closedAt || bill.createdAt || '')}</div>
+    <div><strong>Customers served:</strong> ${Number(bill.customersServed || 0)}</div><div><strong>Reservation:</strong> ${esc(bill.reservationId || 'Walk-in')}</div></div>
+    <table><thead><tr><th>Item</th><th>Qty</th><th>Unit price</th><th>Amount</th></tr></thead><tbody>${mealLines.concat(extraLines).join('') || '<tr><td colspan="4">No bill lines</td></tr>'}</tbody></table>
+    <div class="totals"><div><span>Subtotal</span><strong>${money(bill.subtotal)}</strong></div>
+    <div><span>Service charge</span><strong>${money(bill.serviceCharge)}</strong></div>
+    <div><span>Discount</span><strong>−${money(bill.discountTotal)}</strong></div>
+    ${bill.discountReason ? `<div><span>Discount reason</span><span>${esc(bill.discountReason)}</span></div>` : ''}
+    <div><span>Deposit payments</span><strong>−${money(bill.depositTotal)}</strong></div>
+    <div><span>Cash payment applied</span><strong>−${money(bill.paidTotal)}</strong></div>
+    ${cashPayment ? `<div><span>Cash tendered</span><strong>${money(cashPayment.tenderedAmount)}</strong></div><div><span>Change</span><strong>${money(cashPayment.changeAmount)}</strong></div>` : ''}
+    <div class="balance"><span>Balance due</span><span>${money(bill.balanceDue)}</span></div></div>
+    <p class="notice">BILLING STATEMENT (not an official receipt)</p><script>window.onload=()=>window.print();</script></body></html>`;
+  const printWindow = window.open('', '_blank');
+  if (!printWindow) return toast('Allow pop-ups to print the billing statement.', 'error');
+  printWindow.document.open();
+  printWindow.document.write(doc);
+  printWindow.document.close();
+}
+function shiftForm(item = {}) {
+  const value = key => item?.[key] ?? '';
+  const content = `<div class="form-grid"><label>Shift code<input name="shiftCode" value="${esc(value('code') || `SHIFT-${new Date().toISOString().slice(0,10).replace(/-/g,'')}`)}" required></label><label>Status<select name="status"><option value="Open" ${value('status') === 'Open' ? 'selected' : ''}>Open</option><option value="Closed" ${value('status') === 'Closed' ? 'selected' : ''}>Closed</option><option value="Needs review" ${value('status') === 'Needs review' ? 'selected' : ''}>Needs review</option></select></label><label>Opened at<input name="openedAt" type="datetime-local" value="${esc(value('openedAt') ? value('openedAt').slice(0,16) : new Date().toISOString().slice(0,16))}"></label><label>Closed at<input name="closedAt" type="datetime-local" value="${esc(value('closedAt') ? value('closedAt').slice(0,16) : '')}"></label><label>Opening float<input name="openingFloat" type="number" min="0" step="0.01" value="${Number(value('openingFloat') || 0).toFixed(2)}"></label><label>Cash sales<input name="cashSales" type="number" min="0" step="0.01" value="${Number(value('cashSales') || 0).toFixed(2)}"></label><label>Card sales<input name="cardSales" type="number" min="0" step="0.01" value="${Number(value('cardSales') || 0).toFixed(2)}"></label><label>Declared cash<input name="declaredCash" type="number" min="0" step="0.01" value="${Number(value('declaredCash') || 0).toFixed(2)}"></label><label class="full">Notes<textarea name="notes" rows="3">${esc(value('notes'))}</textarea></label></div>`;
+  modal(item.id ? 'Edit shift' : 'Open shift', content, item.id ? 'Save shift' : 'Open shift');
+  const form = document.querySelector('#modalForm');
+  form.dataset.type = 'shift';
+  if (item.id) form.dataset.id = item.id;
+}
+
 document.addEventListener('click', event => {
   const actionElement = event.target.closest('[data-action]');
   const action = actionElement?.dataset.action;
@@ -2439,9 +2903,55 @@ document.addEventListener('click', event => {
   return deleteRecord('table', table.id);
 });
 document.addEventListener('click', async event => {
-  const action = event.target.closest('[data-action]')?.dataset.action;
+  const actionElement = event.target.closest('[data-action]');
+  const action = actionElement?.dataset.action;
   if (!action) return;
+  if (action === 'add-bill-extra') {
+    const form = document.querySelector('#modalForm[data-type="bill"]');
+    const lines = form?.querySelector('.pos-extra-lines');
+    if (!lines) return;
+    if (lines.querySelectorAll('[data-extra-line]').length >= 30) return toast('A bill can have no more than 30 extra lines.', 'error');
+    lines.insertAdjacentHTML('beforeend', billExtraLineMarkup());
+    state.modalDirty = true;
+    return;
+  }
+  if (action === 'remove-bill-extra') {
+    actionElement.closest('[data-extra-line]')?.remove();
+    state.modalDirty = true;
+    return;
+  }
   if (action === 'open-walk-in') return walkInForm();
+  if (action === 'new-bill') return billForm();
+  if (action === 'open-bill') {
+    const bill = all('posBills').find(item => item.id === actionElement.dataset.id);
+    if (bill) return billForm(bill);
+    return toast('This bill is no longer available. Reload the page and try again.', 'error');
+  }
+  if (action === 'close-bill') {
+    if (state.modalDirty) return toast('Save or discard your bill edits before taking payment.', 'error');
+    const bill = all('posBills').find(item => item.id === actionElement.dataset.id);
+    if (bill?.status === 'Open') return billCloseForm(bill);
+    return toast('Only open bills can be closed.', 'error');
+  }
+  if (action === 'request-bill-void') {
+    if (state.modalDirty) return toast('Save or discard your bill edits before requesting a void.', 'error');
+    const bill = all('posBills').find(item => item.id === actionElement.dataset.id);
+    if (bill?.status === 'Open') return billVoidRequestForm(bill);
+    return toast('Only open bills can be submitted for void approval.', 'error');
+  }
+  if (action === 'print-bill') {
+    if (state.modalDirty) return toast('Save or discard your bill edits before printing.', 'error');
+    return printBillingStatement(actionElement.dataset.id);
+  }
+  if (action === 'approve-approval' || action === 'reject-approval') {
+    const approval = all('billApprovals').find(item => item.id === actionElement.dataset.id);
+    if (approval) return billApprovalDecisionForm(approval, action === 'approve-approval' ? 'approve' : 'reject');
+    return toast('This approval request is no longer available.', 'error');
+  }
+  if (action === 'new-shift') return shiftForm();
+  if (action === 'open-shift') return shiftForm(all('shifts').find(item => item.id === event.target.closest('[data-action]').dataset.id));
+  if (action === 'new-charge-item') return chargeItemForm();
+  if (action === 'edit-charge-item') return chargeItemForm(all('chargeItems').find(item => item.id === event.target.closest('[data-action]').dataset.id));
   if (action === 'open-rate') return rateForm();
   if (action === 'edit-rate') return rateForm(all('buffetRates').find(item => item.id === event.target.closest('[data-action]').dataset.id));
   if (action === 'deactivate-rate') {
@@ -2641,7 +3151,7 @@ async function syncWithSupabase() {
     Manager: KEYS.filter(key => key !== 'users'),
     'Inventory Clerk': ['ingredients', 'inventoryTransactions', 'physicalCounts'],
     'Chef / Kitchen Staff': ['ingredients', 'recipes', 'productionLogs', 'wasteLogs'],
-    Receptionist: ['reservations', 'restaurantTables', 'buffetRates']
+    Receptionist: ['reservations', 'restaurantTables', 'buffetRates', 'chargeItems', 'packageTiers', 'discounts', 'posSettings', 'shifts', 'cashMovements', 'posBills', 'billLines', 'billPayments', 'reservationDeposits', 'billApprovals']
   };
   const collections = collectionsByRole[state.role] || [];
   setSyncState('syncing', 'Loading the latest restaurant data.', 'Syncing…');
@@ -3124,13 +3634,13 @@ function render() {
   }
   document.querySelector('#sidebar').innerHTML = nav();
   renderShellChrome();
-  const moduleNames = { dashboard: 'Overview', ingredients: 'Inventory Management', receiving: 'Inventory Management', counts: 'Inventory Management', recipes: 'Kitchen Operations', production: 'Kitchen Operations', waste: 'Kitchen Operations', reservations: 'Front of House', calendar: 'Front of House', tables: 'Front of House', revenue: 'Revenue Management', rates: 'Revenue Management', reports: 'Analytics & Reports', users: 'System Management', roles: 'System Management', settings: 'System Management' };
-  const pageNames = { dashboard: 'Dashboard', ingredients: 'Ingredients', receiving: 'Receiving', recipes: 'Recipes', production: 'Buffet production', waste: 'Waste logs', counts: 'Physical count', reports: 'Reports & analytics', revenue: 'Revenue Tracking', rates: 'Buffet rates', users: 'User management', roles: 'Role management', settings: 'System settings', reservations: 'Reservations', calendar: 'Tables / Calendar', tables: 'Table management' };
+  const moduleNames = { dashboard: 'Overview', ingredients: 'Inventory Management', receiving: 'Inventory Management', counts: 'Inventory Management', recipes: 'Kitchen Operations', production: 'Kitchen Operations', waste: 'Kitchen Operations', reservations: 'Front of House', calendar: 'Front of House', tables: 'Front of House', cashier: 'Front of House', shifts: 'Front of House', approvals: 'Front of House', revenue: 'Revenue Management', rates: 'Revenue Management', 'charge-catalog': 'Revenue Management', reports: 'Analytics & Reports', users: 'System Management', roles: 'System Management', settings: 'System Management' };
+  const pageNames = { dashboard: 'Dashboard', ingredients: 'Ingredients', receiving: 'Receiving', recipes: 'Recipes', production: 'Buffet production', waste: 'Waste logs', counts: 'Physical count', reports: 'Reports & analytics', revenue: 'Revenue Tracking', rates: 'Buffet rates', 'charge-catalog': 'Charge catalog', users: 'User management', roles: 'Role management', settings: 'System settings', reservations: 'Reservations', calendar: 'Tables / Calendar', tables: 'Table management', cashier: 'Cashier', shifts: 'Shifts', approvals: 'Approvals' };
   const activeGroup = sidebarGroups.find(group => group.items.some(([view]) => view === state.view));
   const crumbLabel = state.view === 'dashboard' ? 'Overview' : (moduleNames[state.view] || 'Workspace');
   const crumbTarget = activeGroup?.items.find(([view]) => canAccess(view))?.[0] || 'dashboard';
   document.querySelector('.breadcrumb').innerHTML = `<a class="crumb-parent" href="#${crumbTarget}" data-view="${crumbTarget}">${esc(crumbLabel)}</a><span aria-hidden="true">›</span><strong id="pageCrumb" tabindex="-1">${esc(pageNames[state.view] || state.view)}</strong>`;
-  const pages = { dashboard: roleDashboard, ingredients: ingredientCardsPage, receiving: () => receivingPage(), recipes: recipeCardsPage, production: productionBoardPage, waste: () => logsPage('waste'), counts: () => countsPage(), reports: reportsPage, revenue: revenuePage, rates: () => ratesPage(), users: () => usersPage(), roles: () => usersPage(), settings: () => usersPage(), reservations: reservationsPage, calendar: calendarPage, tables: tableManagementPage };
+  const pages = { dashboard: roleDashboard, ingredients: ingredientCardsPage, receiving: () => receivingPage(), recipes: recipeCardsPage, production: productionBoardPage, waste: () => logsPage('waste'), counts: () => countsPage(), reports: reportsPage, revenue: revenuePage, rates: () => ratesPage(), 'charge-catalog': chargeCatalogPage, cashier: cashierPage, shifts: shiftsPage, approvals: approvalsPage, users: () => usersPage(), roles: () => usersPage(), settings: () => usersPage(), reservations: reservationsPage, calendar: calendarPage, tables: tableManagementPage };
   const renderPage = pages[state.view];
   if (!renderPage) {
     console.error(`No page renderer is registered for "${state.view}".`);
@@ -3657,6 +4167,32 @@ document.addEventListener('submit', async event => {
     if (['batchYield', 'prepTarget'].includes(control.name) && control.value !== '' && !Number.isInteger(Number(control.value))) { showFieldError(control, 'Enter a whole number.'); valid = false; }
     if (form.dataset.type === 'revenue' && ['adult_customers', 'child_customers', 'senior_pwd_customers'].includes(control.name) && !Number.isInteger(Number(control.value))) { showFieldError(control, 'Enter a whole number of customers.'); valid = false; }
   });
+  if (form.dataset.type === 'bill') {
+    const countNames = ['adultCount', 'seniorCount', 'kidsCount', 'compedCount'];
+    const counts = countNames.map(name => Number(form.elements[name]?.value || 0));
+    if (counts.some(count => !Number.isInteger(count) || count < 0) || counts.reduce((sum, count) => sum + count, 0) > 1000) {
+      showFieldError(form.elements.adultCount, 'Head counts must be whole numbers totaling no more than 1,000.');
+      valid = false;
+    }
+    if (form.elements.discountId.value && !form.elements.discountReason.value.trim()) {
+      showFieldError(form.elements.discountReason, 'A reason is required for every discount.');
+      valid = false;
+    }
+    form.querySelectorAll('[data-extra-line]').forEach(line => {
+      const charge = line.querySelector('[name="extraChargeItemId"]');
+      const quantity = line.querySelector('[name="extraQuantity"]');
+      if (charge.value && (!quantity.value || Number(quantity.value) <= 0)) {
+        showFieldError(quantity, 'Enter a quantity greater than zero for this extra.');
+        valid = false;
+      }
+    });
+    const hasExtra = [...form.querySelectorAll('[data-extra-line]')]
+      .some(line => Boolean(line.querySelector('[name="extraChargeItemId"]').value));
+    if (counts.reduce((sum, count) => sum + count, 0) === 0 && !hasExtra) {
+      toast('Enter at least one guest or extra charge.', 'error');
+      valid = false;
+    }
+  }
   if (form.dataset.type === 'receiving') {
     const receivedDate = form.elements.receivedDate.value;
     form.querySelectorAll('.receipt-line').forEach(line => {

@@ -125,3 +125,17 @@ The calendar assets are served by the CDN, so the calendar page requires an inte
 - Confirm recipe writes use the atomic `save_recipe` RPC and reservation status lookups require both a reference and matching email/phone.
 - Keep the publishable key in the browser; never expose a Supabase `service_role` key.
 - Use the app's connection indicator to retry queued changes. Resolve stale-record conflicts by reloading before reapplying a change.
+
+## POS Phase 2 billing workflow
+
+Apply the POS migrations in this order as the database owner, after the base schema and its prerequisites:
+
+1. [`004_pos_foundation_schema.sql`](./supabase/004_pos_foundation_schema.sql) — Phase 1 catalog, package tiers, discounts, settings, and billing tables.
+2. [`005_pos_foundation_security.sql`](./supabase/005_pos_foundation_security.sql) — Phase 1 RLS and role matrix.
+3. [`006_pos_billing_workflow.sql`](./supabase/006_pos_billing_workflow.sql) — server-calculated bills, payment and approval RPCs, and RPC-only bill writes.
+
+Phase 2 seeds Adult 449, Senior/PWD 360, Kids 225, Comped 0, and a 200 non-food Leftover charge example. The service-charge mode remains `none`. Deposits are bill-payment records; they are not discounts. Bills with applied payments cannot be voided in this phase because refunds are not implemented.
+
+After applying the migrations, [`006_pos_billing_workflow_acceptance.sql`](./supabase/006_pos_billing_workflow_acceptance.sql) checks the worked example, role denials, approval audit fields, cash change, and repeated close. It requires profiles for Receptionist, Manager, Inventory Clerk, and Chef / Kitchen Staff. The script rolls its rows back, but PostgreSQL sequence values do not roll back, so it may leave harmless bill-number gaps.
+
+If Phase 2 must be rolled back, back up the database and run [`006_pos_billing_workflow_rollback.sql`](./supabase/006_pos_billing_workflow_rollback.sql). It removes only Phase 2 POS changes and restores the Phase 1 bill/settings policies; the bill-number sequence is intentionally retained to prevent reuse. Do not run the Phase 1 rollback unless you also intend to remove the POS foundation.
