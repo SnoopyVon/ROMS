@@ -71,6 +71,11 @@ $$;
 create unique index if not exists pos_shifts_one_open_per_cashier_uidx
   on public.pos_shifts (opened_by)
   where status = 'Open';
+create unique index if not exists pos_shifts_one_per_cashier_business_day_uidx
+  on public.pos_shifts (
+    opened_by,
+    ((opened_at at time zone 'Asia/Manila')::date)
+  );
 create unique index if not exists pos_cash_movements_idempotency_uidx
   on public.pos_cash_movements (shift_id, idempotency_key)
   where idempotency_key is not null;
@@ -166,6 +171,16 @@ begin
     where opened_by = auth.uid() and status = 'Open'
   ) then
     raise exception 'You already have an open shift.' using errcode = '23505';
+  end if;
+  if exists (
+    select 1
+    from public.pos_shifts
+    where opened_by = auth.uid()
+      and ((opened_at at time zone 'Asia/Manila')::date =
+           (now() at time zone 'Asia/Manila')::date)
+  ) then
+    raise exception 'You can open only one cashier shift per Manila business day.'
+      using errcode = '23505';
   end if;
 
   insert into public.pos_shifts (
@@ -363,6 +378,11 @@ begin
   end if;
   if shift_row.status <> 'Open' then
     return jsonb_build_object('shift', to_jsonb(shift_row), 'already_closed', true);
+  end if;
+  if ((shift_row.opened_at at time zone 'Asia/Manila')::date
+      <> (now() at time zone 'Asia/Manila')::date) then
+    raise exception 'A cashier shift can only be closed on the same Manila business day it was opened.'
+      using errcode = '55000';
   end if;
 
   for open_bill in

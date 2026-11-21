@@ -1,4 +1,4 @@
-const KEYS = ['ingredients', 'recipes', 'inventoryTransactions', 'inventoryBatches', 'productionLogs', 'revenueRecords', 'wasteLogs', 'preparedFoodWasteLogs', 'physicalCounts', 'users', 'reservations', 'restaurantTables', 'buffetRates', 'chargeItems', 'chargeItemVariants', 'packageTiers', 'packageInclusions', 'discounts', 'posSettings', 'shifts', 'cashMovements', 'posBills', 'billLines', 'billPayments', 'reservationDeposits', 'billApprovals', 'posNotifications', 'notifications'];
+const KEYS = ['ingredients', 'recipes', 'inventoryTransactions', 'inventoryBatches', 'productionLogs', 'revenueRecords', 'wasteLogs', 'preparedFoodWasteLogs', 'physicalCounts', 'users', 'reservations', 'restaurantTables', 'buffetRates', 'chargeItems', 'chargeItemVariants', 'packageTiers', 'packageInclusions', 'discounts', 'posSettings', 'shifts', 'cashMovements', 'posBills', 'billLines', 'billPayments', 'reservationDeposits', 'billApprovals', 'posNotifications', 'notifications', 'auditLogs'];
 const DATA_STORAGE_KEYS = [...KEYS.map(key => `costtrack_${key}`), 'costtrack_pending_sync_anonymous'];
 function clearDataStorage() {
   DATA_STORAGE_KEYS.forEach(key => localStorage.removeItem(key));
@@ -129,11 +129,11 @@ function persistReservationFilters() {
   }));
 }
 const roleAccess = {
-  'Administrator': ['dashboard', 'notifications', 'ingredients', 'receiving', 'recipes', 'production', 'waste', 'counts', 'reports', 'revenue', 'rates', 'users', 'reservations', 'calendar', 'tables', 'cashier', 'shifts', 'approvals', 'charge-catalog'],
-  'Manager': ['dashboard', 'notifications', 'ingredients', 'receiving', 'recipes', 'production', 'waste', 'counts', 'reports', 'revenue', 'rates', 'reservations', 'calendar', 'tables', 'cashier', 'shifts', 'approvals', 'charge-catalog'],
-  'Inventory Clerk': ['ingredients', 'receiving', 'counts', 'reports'],
-  'Chef / Kitchen Staff': ['recipes', 'production', 'waste'],
-  'Receptionist': ['dashboard', 'reservations', 'calendar', 'tables', 'cashier', 'shifts', 'approvals']
+  'Administrator': ['dashboard', 'notifications', 'activity-logs', 'ingredients', 'receiving', 'recipes', 'production', 'waste', 'counts', 'reports', 'revenue', 'rates', 'users', 'reservations', 'calendar', 'tables', 'cashier', 'shifts', 'approvals', 'charge-catalog'],
+  'Manager': ['dashboard', 'notifications', 'activity-logs', 'ingredients', 'receiving', 'recipes', 'production', 'waste', 'counts', 'reports', 'revenue', 'rates', 'reservations', 'calendar', 'tables', 'cashier', 'shifts', 'approvals', 'charge-catalog'],
+  'Inventory Clerk': ['dashboard', 'notifications', 'activity-logs', 'ingredients', 'receiving', 'counts', 'reports'],
+  'Chef / Kitchen Staff': ['dashboard', 'notifications', 'activity-logs', 'recipes', 'production', 'waste'],
+  'Receptionist': ['dashboard', 'notifications', 'activity-logs', 'reservations', 'calendar', 'tables', 'cashier', 'shifts', 'approvals']
 };
 const canAccess = view => Boolean(roleAccess[state.role]?.includes(view));
 const canAccessRevenue = () => ['Administrator', 'Manager'].includes(state.role);
@@ -156,6 +156,18 @@ function formatOperationalDateTime(value) {
     hour: 'numeric',
     minute: '2-digit'
   }).format(date);
+}
+function shiftOpenedOnDate(shift, businessDate) {
+  if (!shift?.openedAt) return false;
+  const date = new Date(shift.openedAt);
+  if (Number.isNaN(date.getTime())) return false;
+  const openedDate = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Manila',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit'
+  }).format(date);
+  return openedDate === businessDate;
 }
 
 function localDateStr(date) {
@@ -514,11 +526,11 @@ function realtimeCollectionsForView() {
     reports: ['ingredients', 'recipes', 'recipe_ingredients', 'production_logs', 'waste_logs', 'prepared_food_waste_logs', 'inventory_transactions', 'physical_counts', 'reservations', 'pos_bills', 'pos_bill_payments', 'pos_shifts', 'pos_cash_movements', 'pos_reservation_deposits']
   };
   const alertTablesByRole = {
-    Administrator: ['ingredients', 'inventory_batches', 'reservations', 'pos_shifts', 'pos_bills', 'pos_bill_approvals', 'pos_reservation_deposits', 'pos_notifications', 'notifications', 'notification_read_states'],
-    Manager: ['ingredients', 'inventory_batches', 'reservations', 'pos_shifts', 'pos_bills', 'pos_bill_approvals', 'pos_reservation_deposits', 'pos_notifications', 'notifications', 'notification_read_states'],
-    'Inventory Clerk': ['ingredients', 'inventory_batches', 'notifications', 'notification_read_states'],
-    'Chef / Kitchen Staff': ['notifications', 'notification_read_states'],
-    Receptionist: ['reservations', 'pos_shifts', 'pos_bills', 'pos_bill_approvals', 'pos_reservation_deposits', 'notifications', 'notification_read_states']
+    Administrator: ['ingredients', 'inventory_batches', 'reservations', 'pos_shifts', 'pos_bills', 'pos_bill_approvals', 'pos_reservation_deposits', 'pos_notifications', 'notifications', 'notification_read_states', 'audit_logs'],
+    Manager: ['ingredients', 'inventory_batches', 'reservations', 'pos_shifts', 'pos_bills', 'pos_bill_approvals', 'pos_reservation_deposits', 'pos_notifications', 'notifications', 'notification_read_states', 'audit_logs'],
+    'Inventory Clerk': ['ingredients', 'inventory_batches', 'notifications', 'notification_read_states', 'audit_logs'],
+    'Chef / Kitchen Staff': ['notifications', 'notification_read_states', 'audit_logs'],
+    Receptionist: ['reservations', 'pos_shifts', 'pos_bills', 'pos_bill_approvals', 'pos_reservation_deposits', 'notifications', 'notification_read_states', 'audit_logs']
   };
   if (state.view === 'dashboard') {
     const dashboardTables = {
@@ -543,7 +555,10 @@ function realtimeTablesForRole(tables) {
     'Inventory Clerk': ['ingredients', 'recipes', 'recipe_ingredients', 'inventory_transactions', 'inventory_batches', 'physical_counts', 'waste_logs', 'prepared_food_waste_logs', 'notifications', 'notification_read_states']
   };
   const permitted = new Set(allowed[state.role] || []);
-  return [...new Set(['profiles', ...tables.filter(table => permitted.has(table))])];
+  return [...new Set([
+    'profiles',
+    ...tables.filter(table => permitted.has(table) || (table === 'audit_logs' && canAccess('activity-logs')))
+  ])];
 }
 function realtimeCollectionName(table) {
   return {
@@ -574,7 +589,8 @@ function realtimeCollectionName(table) {
     pos_reservation_deposits: 'reservationDeposits',
     pos_bill_approvals: 'billApprovals',
     pos_notifications: 'posNotifications',
-    notifications: 'notifications'
+    notifications: 'notifications',
+    audit_logs: 'auditLogs'
   }[table];
 }
 const posRelatedRealtimeCollections = new Set([
@@ -742,7 +758,9 @@ async function refreshRealtimeCollection(table, payload) {
     })) closeModal(true);
     else toast('Remote change received. Your edit remains open.', 'error');
   }
-  if (!posRelatedRealtimeCollections.has(collection) || !recordId) {
+  if (table === 'pos_shifts') {
+    persistCollection(collection, await window.supabaseRecord.load(collection));
+  } else if (!posRelatedRealtimeCollections.has(collection) || !recordId) {
     persistCollection(collection, await window.supabaseRecord.load(collection));
   } else if (payload?.eventType === 'DELETE') {
     collectionState[collection] = read(collection).filter(record => String(record.id) !== String(recordId));
@@ -762,7 +780,7 @@ async function refreshRealtimeCollection(table, payload) {
       loadUnresolvedBookings(true);
     }
   }
-  if (['ingredients', 'inventory_batches', 'notifications', 'reservations', 'restaurant_tables', 'revenue_records', 'production_logs', 'waste_logs', 'prepared_food_waste_logs', 'inventory_transactions', 'physical_counts', 'recipes', 'buffet_rates', 'pos_shifts', 'pos_cash_movements', 'pos_bills', 'pos_bill_lines', 'pos_bill_payments', 'pos_reservation_deposits', 'pos_bill_approvals', 'pos_notifications'].includes(table)) {
+  if (['ingredients', 'inventory_batches', 'notifications', 'audit_logs', 'reservations', 'restaurant_tables', 'revenue_records', 'production_logs', 'waste_logs', 'prepared_food_waste_logs', 'inventory_transactions', 'physical_counts', 'recipes', 'buffet_rates', 'pos_shifts', 'pos_cash_movements', 'pos_bills', 'pos_bill_lines', 'pos_bill_payments', 'pos_reservation_deposits', 'pos_bill_approvals', 'pos_notifications'].includes(table)) {
     renderWithNotificationPopover();
   }
 }
@@ -851,7 +869,7 @@ const sidebarGroups = [
   { id: 'production', label: 'Kitchen Operations', icon: 'chef-hat', items: [['recipes', 'book', 'Recipes'], ['production', 'chef-hat', 'Production Board'], ['waste', 'trash', 'Waste Logs']] },
   { id: 'revenue-management', label: 'Revenue Management', icon: 'chart', items: [['revenue', 'chart', 'Revenue Tracking'], ['charge-catalog', 'package', 'Charge Catalog']] },
   { id: 'analytics', label: 'Analytics & Reports', icon: 'chart', items: [['reports', 'chart', 'Reports & analytics']] },
-  { id: 'system', label: 'System Management', icon: 'users', items: [['notifications', 'bell', 'Notifications'], ['users', 'users', 'User Management']] }
+  { id: 'system', label: 'System Management', icon: 'users', items: [['activity-logs', 'clipboard-check', 'Activity Log'], ['users', 'users', 'User Management']] }
 ];
 
 const shellIconPaths = {
@@ -1053,15 +1071,14 @@ function notificationCenterItems() {
     });
   });
 
-  return [...alerts.values()].sort((left, right) =>
-    String(right.createdAt || '').localeCompare(String(left.createdAt || ''))
+  return window.CostTrackLogic.buildNotificationFeed(
+    [...alerts.values()],
+    state.role,
+    state.notificationReadKeys
   );
 }
 
 function notificationCenterPage() {
-  if (!['Administrator', 'Manager'].includes(state.role)) {
-    return '<div class="panel error-state" role="alert">The Notification Center is available to Administrators and Managers only.</div>';
-  }
   const filters = ['All', 'Unread', 'Reservations', 'Inventory', 'Approvals', 'Users', 'Operations', 'System'];
   let items = notificationCenterItems();
   if (state.notificationCenterFilter === 'Unread') {
@@ -1115,6 +1132,36 @@ function notificationCenterPage() {
     </section>`;
 }
 
+function activityLogsPage() {
+  const query = state.query.trim().toLowerCase();
+  const rows = all('auditLogs')
+    .filter(item => !query || `${item.action} ${item.tableName} ${item.recordId}`.toLowerCase().includes(query))
+    .map(item => {
+      const actionLabel = item.action === 'INSERT' ? 'Created'
+        : item.action === 'UPDATE' ? 'Updated'
+        : item.action === 'DELETE' ? 'Deleted'
+        : item.action;
+      const tableLabel = String(item.tableName || '')
+        .replace(/_/g, ' ')
+        .replace(/\b\w/g, character => character.toUpperCase());
+      const actionClass = item.action === 'DELETE' ? 'status-out'
+        : item.action === 'INSERT' ? 'status-good'
+        : 'status-low';
+      return `<tr><td>${esc(formatOperationalDateTime(item.occurredAt))}</td><td><span class="status ${actionClass}">${esc(actionLabel)}</span></td><td>${esc(tableLabel)}</td><td>${esc(item.recordId || 'Unavailable')}</td></tr>`;
+    });
+  return tablePage({
+    eyebrow: 'My account',
+    title: 'Activity Log',
+    subtitle: 'Review record changes made by your account. Only your own activity is shown.',
+    action: '<button type="button" class="ghost-btn" data-action="refresh-activity-logs">Refresh</button>',
+    search: 'activity or record',
+    tableId: 'activity-logs',
+    headers: ['Date and time', 'Action', 'Area', 'Record ID'],
+    rows,
+    emptyMessage: 'No record activity found for your account.'
+  });
+}
+
 function generalNotificationAlert(item) {
   const type = String(item.type || '');
   const referenceType = String(item.referenceType || '').toLowerCase();
@@ -1131,7 +1178,7 @@ function generalNotificationAlert(item) {
     category = 'stock';
     dedupeKey = referenceId ? `stock:${referenceId}` : dedupeKey;
     detail = product
-      ? `${product.name} · ${Number(product.stock)} ${product.unit || ''} on hand`
+      ? `${product.name} · ${formatStockQuantity(product.stock)} ${product.unit || ''} on hand`
       : 'Stock needs replenishment.';
     action = { view: 'receiving', label: 'Receive stock' };
   } else if (isExpiry) {
@@ -1176,7 +1223,7 @@ function activeNotifications() {
       dedupeKey: `stock:${item.id}`,
       category: 'stock',
       title: item.stock <= 0 ? 'Out of stock' : 'Low stock',
-      detail: `${item.name} · ${Number(item.stock)} ${item.unit || ''} on hand · minimum ${Number(item.minimum)}`,
+      detail: `${item.name} · ${formatStockQuantity(item.stock)} ${item.unit || ''} on hand · minimum ${formatStockQuantity(item.minimum)}`,
       severity: item.stock <= 0 ? 'critical' : 'warning',
       icon: 'package',
       createdAt: item.updatedAt || null,
@@ -1192,7 +1239,7 @@ function activeNotifications() {
         dedupeKey: `expiry:${batch.id}`,
         category: 'expiry',
         title: batchStatus.status,
-        detail: `${product?.name || 'Product'} · ${Number(batch.quantityRemaining)} ${product?.unit || ''} · expires ${notificationDateLabel(batch.expirationDate)}`,
+        detail: `${product?.name || 'Product'} · ${formatStockQuantity(batch.quantityRemaining)} ${product?.unit || ''} · expires ${notificationDateLabel(batch.expirationDate)}`,
         severity: batchStatus.status === 'Expired' ? 'critical' : 'warning',
         icon: 'alert',
         createdAt: batch.updatedAt || batch.createdAt || null,
@@ -1474,7 +1521,7 @@ function nav() {
   return `<div class="sidebar-top">
       <button class="drawer-close" type="button" data-shell-action="close-drawer" aria-label="Close navigation">${shellIcon('close')}<span>Close</span></button>
       <div class="brand">
-        <span class="brand-mark" aria-hidden="true">i</span><span class="brand-copy"><strong>isobel</strong><small>RESTAURANT OPERATIONS</small></span>
+        <img class="brand-logo" src="images/isobel_logo.jpg" alt="Isobel Buffet Restaurant">
         <button class="sidebar-collapse" type="button" data-shell-action="toggle-sidebar" aria-label="${collapseLabel}" title="${collapseLabel}">${shellIcon('panel')}</button>
       </div>
       <div class="workspace-switcher" aria-label="Workspace">WORKSPACE</div>
@@ -1678,7 +1725,7 @@ function login(message = '') {
   const recovering = passwordRecoveryMode
     || invitationAcceptanceMode
     || new URLSearchParams(window.location.hash.slice(1)).get('type') === 'recovery';
-  document.querySelector('#loginScreen').innerHTML = `<div class="login-card"><div class="login-brand"><strong>isobel</strong><small>RESTAURANT OPERATIONS</small></div>${message ? `<p class="auth-message" role="alert">${esc(message)}</p>` : ''}${recovering ? `<form id="passwordRecoveryForm"><label>New password<input name="password" type="password" minlength="8" autocomplete="new-password" required></label><button class="primary-btn" type="submit">Update password</button></form>` : `<form id="loginForm"><label>Email<input name="email" type="email" autocomplete="username" required></label><label>Password<input name="password" type="password" autocomplete="current-password" required></label><button class="primary-btn" type="submit">Log in</button></form><button class="link-button" id="resetPasswordButton" type="button">Forgot password?</button>`}</div><div class="login-art"><div><span>Today’s focus</span><strong>Reduce waste.<br>Protect margin.</strong><p>Make every ingredient movement visible from delivery to plate.</p></div><div class="art-stat"><b>${lowStock().length}</b><span>items need attention</span></div></div>`;
+  document.querySelector('#loginScreen').innerHTML = `<div class="login-card"><div class="login-brand"><img class="login-brand-logo" src="images/isobel_logo.jpg" alt="Isobel Buffet Restaurant"></div>${message ? `<p class="auth-message" role="alert">${esc(message)}</p>` : ''}${recovering ? `<form id="passwordRecoveryForm"><label>New password<input name="password" type="password" minlength="8" autocomplete="new-password" required></label><button class="primary-btn" type="submit">Update password</button></form>` : `<form id="loginForm"><label>Email<input name="email" type="email" autocomplete="username" required></label><label>Password<input name="password" type="password" autocomplete="current-password" required></label><button class="primary-btn" type="submit">Log in</button></form><button class="link-button" id="resetPasswordButton" type="button">Forgot password?</button>`}</div><div class="login-art"><div><span>Today’s focus</span><strong>Reduce waste.<br>Protect margin.</strong><p>Make every ingredient movement visible from delivery to plate.</p></div><div class="art-stat"><b>${lowStock().length}</b><span>items need attention</span></div></div>`;
 }
 function metric(label, value, icon, tone, foot) { return `<div class="metric-card"><div class="metric-top"><span>${label}</span><i class="metric-icon ${tone}">${icon}</i></div><div class="metric-value">${value}</div><div class="metric-foot">${foot}</div></div>`; }
 function pageHeader(eyebrow, title, subtitle, action = '') { return `<div class="page-header"><div><div class="eyebrow">${eyebrow}</div><h1>${title}</h1><p>${subtitle}</p></div>${action}</div>`; }
@@ -2396,7 +2443,8 @@ function cashierPage() {
     .filter(item => state.role !== 'Receptionist' || item.createdBy === state.user?.id)
     .slice()
     .sort((a, b) => String(b.updatedAt || b.createdAt || '').localeCompare(String(a.updatedAt || a.createdAt || '')));
-  const activeShift = all('shifts').find(item => item.status === 'Open' && item.openedBy === state.user?.id);
+  const activeShift = all('shifts').find(item => item.status === 'Open');
+  const shiftOpenedToday = all('shifts').some(item => shiftOpenedOnDate(item, manilaBusinessToday()));
   const rows = bills.map(item => {
     const canEdit = item.status === 'Open'
       && (state.role !== 'Receptionist' || item.createdBy === state.user?.id);
@@ -2406,7 +2454,7 @@ function cashierPage() {
     eyebrow: 'Front of House',
     title: 'Cashier',
     subtitle: 'Create and settle bills without changing stock. Deposits are payments, never discounts.',
-    action: `${activeShift ? '<span class="pos-shift-chip">Shift open</span>' : '<button class="ghost-btn" data-action="new-shift">Open shift</button>'} <button class="primary-btn" data-action="new-bill" ${activeShift ? '' : 'aria-disabled="true" title="Open your cashier shift before creating a bill."'}>+ New bill</button>`,
+    action: `${activeShift ? '<span class="pos-shift-chip">Shift open</span>' : shiftOpenedToday ? '<span class="pos-shift-chip">Shift closed today</span>' : '<button class="ghost-btn" data-action="new-shift">Open shift</button>'} <button class="primary-btn" data-action="new-bill" ${activeShift ? '' : 'aria-disabled="true" title="Open the restaurant cashier shift before creating a bill."'}>+ New bill</button>`,
     search: 'cashier',
     tableId: 'cashier',
     headers: ['Bill #', 'Customer', 'Served', 'Status', 'Balance', 'Paid', ''],
@@ -2418,20 +2466,25 @@ function cashierPage() {
 }
 function shiftsPage() {
   const shifts = all('shifts').slice().sort((a, b) => String(b.openedAt || '').localeCompare(String(a.openedAt || '')));
-  const ownOpenShift = shifts.find(item => item.status === 'Open' && item.openedBy === state.user?.id);
-  const canCloseAny = ['Administrator', 'Manager'].includes(state.role);
+  const openShift = shifts.find(item => item.status === 'Open');
+  const today = manilaBusinessToday();
+  const shiftOpenedToday = shifts.some(item => shiftOpenedOnDate(item, today));
   const rows = shifts.map(item => {
     const own = item.openedBy === state.user?.id;
-    const canMove = item.status === 'Open' && own;
-    const canClose = item.status === 'Open' && (own || canCloseAny);
+    const canMove = item.status === 'Open';
+    const canClose = item.status === 'Open' && shiftOpenedOnDate(item, today);
+    const cannotCloseWrongDay = item.status === 'Open' && !shiftOpenedOnDate(item, today);
     const variance = item.cashVariance == null ? '—' : `${item.cashVariance > 0 ? '+' : ''}${money(item.cashVariance)}`;
-    return `<tr><td><strong>${own ? 'Your shift' : 'Cashier shift'}</strong><small>${esc(own ? 'Opened by you' : staffDisplayName(item.openedBy, 'Cashier'))}</small></td><td><span class="status ${item.status === 'Closed' ? 'status-good' : item.status === 'Needs review' ? 'status-out' : 'status-low'}">${esc(item.status)}</span></td><td>${esc(formatOperationalDateTime(item.openedAt))}</td><td>${money(item.openingFloat || 0)}</td><td>${item.expectedCash == null ? '—' : money(item.expectedCash)}</td><td>${variance}</td><td><div class="row-actions"><button class="ghost-btn compact-btn" data-action="open-shift" data-id="${esc(item.id)}">View</button>${canMove ? `<button class="ghost-btn compact-btn" data-action="cash-movement" data-id="${esc(item.id)}">Paid in/out</button>` : ''}${canClose ? `<button class="primary-btn compact-btn" data-action="close-shift" data-id="${esc(item.id)}">Close</button>` : ''}<button class="ghost-btn compact-btn" data-action="print-shift" data-id="${esc(item.id)}">Print</button></div></td></tr>`;
+    const closeCell = cannotCloseWrongDay
+      ? '<span class="field-help">Close only on its opening day</span>'
+      : canClose ? '<button class="primary-btn compact-btn" data-action="close-shift" data-id="' + esc(item.id) + '">Close</button>' : '';
+    return `<tr><td><strong>${own ? 'Your shift' : 'Cashier shift'}</strong><small>${esc(own ? 'Opened by you' : staffDisplayName(item.openedBy, 'Cashier'))}</small></td><td><span class="status ${item.status === 'Closed' ? 'status-good' : item.status === 'Needs review' ? 'status-out' : 'status-low'}">${esc(item.status)}</span></td><td>${esc(formatOperationalDateTime(item.openedAt))}</td><td>${money(item.openingFloat || 0)}</td><td>${item.expectedCash == null ? '—' : money(item.expectedCash)}</td><td>${variance}</td><td><div class="row-actions shift-actions"><button class="ghost-btn compact-btn" data-action="open-shift" data-id="${esc(item.id)}">View</button>${canMove ? `<button class="ghost-btn compact-btn" data-action="cash-movement" data-id="${esc(item.id)}">Paid in/out</button>` : ''}${closeCell}<button class="ghost-btn compact-btn" data-action="print-shift" data-id="${esc(item.id)}">Print</button></div></td></tr>`;
   });
   return tablePage({
     eyebrow: 'Front of House',
     title: 'Shifts',
-    subtitle: 'Track cashier float, cash movement, and end-of-shift reconciliation.',
-    action: `${ownOpenShift ? '<span class="pos-shift-chip">Shift open</span>' : '<button class="primary-btn" data-action="new-shift">+ Open shift</button>'}`,
+    subtitle: 'One shared restaurant shift per Manila business day. Track cashier float, cash movement, and reconciliation.',
+    action: `${openShift ? '<span class="pos-shift-chip">Shift open</span>' : shiftOpenedToday ? '<span class="pos-shift-chip">Shift closed today</span>' : '<button class="primary-btn" data-action="new-shift">+ Open shift</button>'}`,
     search: 'shifts',
     tableId: 'shifts',
     headers: ['Shift / cashier', 'Status', 'Opened', 'Starting cash', 'Expected cash', 'Variance', ''],
@@ -3923,7 +3976,7 @@ function reservationCard(item, showRevenue = false) {
   const heldDeposits = reservationDeposits.filter(deposit => deposit.status === 'Held' && !deposit.billId);
   const heldTotal = heldDeposits.reduce((sum, deposit) => sum + Number(deposit.amount || 0), 0);
   const openBill = all('posBills').find(bill => bill.reservationId === item.id && bill.status === 'Open');
-  const hasOpenShift = all('shifts').some(shift => shift.status === 'Open' && shift.openedBy === state.user?.id);
+  const hasOpenShift = all('shifts').some(shift => shift.status === 'Open');
   const packageItem = all('chargeItems').find(charge => charge.id === item.packageChargeItemId);
   const packageTier = all('packageTiers').find(tier => tier.id === item.packageTierId);
   const depositHistory = reservationDeposits.map(deposit => {
@@ -3936,7 +3989,7 @@ function reservationCard(item, showRevenue = false) {
     return `<small>Deposit ${esc(deposit.status)}: ${amountLabel}${note}</small>`;
   }).join('');
   const shiftHint = item.status === 'Seated' && !hasOpenShift
-    ? '<small class="field-help">Open your cashier shift before opening a bill or recording a cash deposit.</small>'
+    ? '<small class="field-help">Open the restaurant cashier shift before opening a bill or recording a cash deposit.</small>'
     : '';
   const rateLabel = rate && revenueEstimate !== null
     ? `${money(revenueEstimate)} estimated buffet revenue`
@@ -3947,14 +4000,14 @@ function reservationCard(item, showRevenue = false) {
     ? item.status === 'Seated'
       ? `${openBill
         ? `<button type="button" class="reservation-confirm-btn" data-action="open-bill" data-id="${esc(openBill.id)}">Open bill</button>`
-        : `<button type="button" class="reservation-confirm-btn" data-action="open-reservation-bill" data-id="${esc(item.id)}" ${hasOpenShift ? '' : 'aria-disabled="true" title="Open your cashier shift before creating a bill."'}>Open bill</button>`}`
+        : `<button type="button" class="reservation-confirm-btn" data-action="open-reservation-bill" data-id="${esc(item.id)}" ${hasOpenShift ? '' : 'aria-disabled="true" title="Open the restaurant cashier shift before creating a bill."'}>Open bill</button>`}`
       : ''
     : item.status === 'Pending'
     ? `<button type="button" class="reservation-confirm-btn" data-action="reservation-transition" data-transition="Confirmed" data-id="${esc(item.id)}">Confirm</button><button type="button" class="reservation-confirm-btn" data-action="reservation-transition" data-transition="Cancelled" data-id="${esc(item.id)}">Cancel</button>`
     : item.status === 'Confirmed'
       ? `<button type="button" class="reservation-confirm-btn" data-action="reservation-transition" data-transition="Seated" data-id="${esc(item.id)}">Seat</button><button type="button" class="reservation-confirm-btn" data-action="reservation-transition" data-transition="No-show" data-id="${esc(item.id)}">No-show</button><button type="button" class="reservation-confirm-btn" data-action="reservation-transition" data-transition="Cancelled" data-id="${esc(item.id)}">Cancel</button>`
       : item.status === 'Seated'
-        ? `${openBill ? `<button type="button" class="reservation-confirm-btn" data-action="open-bill" data-id="${esc(openBill.id)}">Open bill</button>` : `<button type="button" class="reservation-confirm-btn" data-action="open-reservation-bill" data-id="${esc(item.id)}" ${hasOpenShift ? '' : 'aria-disabled="true" title="Open your cashier shift before creating a bill."'}>Open bill</button>`}<button type="button" class="reservation-confirm-btn" data-action="record-deposit" data-id="${esc(item.id)}" ${hasOpenShift ? '' : 'aria-disabled="true" title="Open your cashier shift before recording a deposit."'}>Record deposit</button><small class="field-help" id="reservation-complete-help-${esc(item.id)}">Reservation completes automatically when its linked bill is closed and fully settled.</small>`
+        ? `${openBill ? `<button type="button" class="reservation-confirm-btn" data-action="open-bill" data-id="${esc(openBill.id)}">Open bill</button>` : `<button type="button" class="reservation-confirm-btn" data-action="open-reservation-bill" data-id="${esc(item.id)}" ${hasOpenShift ? '' : 'aria-disabled="true" title="Open the restaurant cashier shift before creating a bill."'}>Open bill</button>`}<button type="button" class="reservation-confirm-btn" data-action="record-deposit" data-id="${esc(item.id)}" ${hasOpenShift ? '' : 'aria-disabled="true" title="Open the restaurant cashier shift before recording a deposit."'}>Record deposit</button><small class="field-help" id="reservation-complete-help-${esc(item.id)}">Reservation completes automatically when its linked bill is closed and fully settled.</small>`
         : '';
   const depositActions = !isPastReservation && ['Administrator', 'Manager'].includes(state.role)
     ? heldDeposits.map(deposit => `<span class="deposit-action-group"><button type="button" class="ghost-btn compact-btn" data-action="deposit-decision" data-decision="refund" data-id="${esc(deposit.id)}">Refund ${money(deposit.amount)}</button><button type="button" class="ghost-btn compact-btn" data-action="deposit-decision" data-decision="forfeit" data-id="${esc(deposit.id)}">Forfeit</button></span>`).join('')
@@ -3976,9 +4029,7 @@ function unresolvedBookingCard(row) {
     bill.reservationId === reservationId && bill.status === 'Open'
   );
   const canResolve = ['Administrator', 'Manager'].includes(state.role);
-  const hasOpenShift = all('shifts').some(shift =>
-    shift.status === 'Open' && shift.openedBy === state.user?.id
-  );
+  const hasOpenShift = all('shifts').some(shift => shift.status === 'Open');
   const status = row.reservation_status;
   const type = row.type || reservation?.type || 'Reservation';
   const heldTotal = Number(row.held_deposit_total || 0);
@@ -3988,7 +4039,7 @@ function unresolvedBookingCard(row) {
   const openBillAction = row.resolution_label === 'Payable'
     ? `<button type="button" class="reservation-confirm-btn" data-action="open-unresolved-bill" data-id="${esc(reservationId)}">Open bill</button>`
     : status === 'Seated'
-      ? `<button type="button" class="reservation-confirm-btn" data-action="open-reservation-bill" data-id="${esc(reservationId)}" ${hasOpenShift ? '' : 'aria-disabled="true" title="Open your cashier shift before creating a bill."'}>Open bill</button>`
+      ? `<button type="button" class="reservation-confirm-btn" data-action="open-reservation-bill" data-id="${esc(reservationId)}" ${hasOpenShift ? '' : 'aria-disabled="true" title="Open the restaurant cashier shift before creating a bill."'}>Open bill</button>`
       : '';
   const resolveAction = canResolve && row.resolution_label !== 'Payable'
     ? `<button type="button" class="primary-btn compact-btn" data-action="resolve-stale-booking" data-id="${esc(reservationId)}">Resolve</button>`
@@ -4204,7 +4255,7 @@ function walkInForm() {
   const countFields = counts.map(([label, name]) =>
     `<label>${label}<input name="${name}" type="number" min="0" max="1000" step="1" value="0" required></label>`
   ).join('');
-  const hasOpenShift = all('shifts').some(shift => shift.status === 'Open' && shift.openedBy === state.user?.id);
+  const hasOpenShift = all('shifts').some(shift => shift.status === 'Open');
   modal('Record walk-in', `<div class="form-grid">${countFields}<label>Table<select name="table" required ${available.markup ? '' : 'disabled'}><option value="">Select table</option>${available.markup}</select>${tableMessage}</label></div><div class="form-grid"><label>Guest name (optional)<input name="name" maxlength="160" value="Walk-in guest" autocomplete="name"></label><label>Phone (optional)<input name="phone" type="tel" maxlength="40" autocomplete="tel"></label><label>Email (optional)<input name="email" type="email" maxlength="254" autocomplete="email"></label></div><label>Notes<textarea name="notes"></textarea><small class="field-help">Seated time and meal period are recorded automatically. Tables must fit the total covers and have no overlapping two-hour booking.</small></label><div class="walk-in-billing-action"><button type="submit" class="primary-btn" data-walk-in-action="seat-and-open"${available.tables.length && hasOpenShift ? '' : ' disabled'}>Seat and open bill</button><small class="field-help">${hasOpenShift ? 'The bill opens with these same head counts and remains unpaid until you close it.' : 'An open cashier shift is required to create the bill. You can seat only, or open a shift and try again.'}</small></div>`, 'Seat only');
   const form = document.querySelector('#modalForm');
   form.dataset.type = 'walk-in';
@@ -4954,7 +5005,7 @@ async function handleSubmit(form, submitter = null) {
         upsertLocalRecord('reservationDeposits', deposit);
         refreshAllData = false;
         const refundShift = form.dataset.decision === 'refund'
-          ? all('shifts').find(shift => shift.status === 'Open' && shift.openedBy === state.user?.id)
+          ? all('shifts').find(shift => shift.status === 'Open')
           : null;
         if (refundShift) {
           void window.supabaseRecord.loadRelated('cashMovements', 'shiftId', refundShift.id)
@@ -5153,7 +5204,7 @@ async function handleSubmit(form, submitter = null) {
       const relatedCollections = [];
       if (approval?.requestType === 'void' && approval.status === 'Approved' && bill) {
         if (bill.reservationId) relatedCollections.push('reservationDeposits');
-        const refundShift = all('shifts').find(shift => shift.status === 'Open' && shift.openedBy === state.user?.id);
+        const refundShift = all('shifts').find(shift => shift.status === 'Open');
         if (refundShift) relatedCollections.push('cashMovements');
       }
       if (relatedCollections.length) {
@@ -5751,9 +5802,7 @@ function staleBookingResolutionForm(reservationId) {
   }
   const closeWithoutCharge = unresolved.reservation_status === 'Seated';
   const heldDepositTotal = Number(unresolved.held_deposit_total || 0);
-  const ownsOpenShift = all('shifts').some(shift =>
-    shift.status === 'Open' && shift.openedBy === state.user?.id
-  );
+  const hasOpenShift = all('shifts').some(shift => shift.status === 'Open');
   const outcomes = closeWithoutCharge
     ? '<option value="close_without_charge">Close without charge</option>'
     : '<option value="no_show">Mark no-show</option><option value="cancel">Mark Cancelled</option>';
@@ -5761,7 +5810,7 @@ function staleBookingResolutionForm(reservationId) {
     ? '<label class="stale-no-meal-confirmation"><input type="checkbox" name="confirmNoMeal" required><span>I confirm no meal was served, or this is a test/error record.</span></label>'
     : '';
   const depositChoice = heldDepositTotal > 0
-    ? `<section class="stale-deposit-resolution"><strong>Held deposit · ${money(heldDepositTotal)}</strong><label>Deposit action<select name="depositAction" required><option value="">Choose Refund or Forfeit</option><option value="refund">Refund</option><option value="forfeit">Forfeit</option></select></label><p class="field-help stale-refund-warning">Refund requires your own open cashier shift. ${ownsOpenShift ? 'Your open shift is ready.' : 'You do not currently have an open shift; the database will reject a refund until you open one.'}</p><label>Deposit action reason<textarea name="depositReason" minlength="10" maxlength="500" rows="2" required placeholder="Explain why the held deposit is being refunded or forfeited."></textarea></label></section>`
+    ? `<section class="stale-deposit-resolution"><strong>Held deposit · ${money(heldDepositTotal)}</strong><label>Deposit action<select name="depositAction" required><option value="">Choose Refund or Forfeit</option><option value="refund">Refund</option><option value="forfeit">Forfeit</option></select></label><p class="field-help stale-refund-warning">Refund requires an open restaurant cashier shift. ${hasOpenShift ? 'The shared shift is ready.' : 'There is no open shift; the database will reject a refund until one is opened.'}</p><label>Deposit action reason<textarea name="depositReason" minlength="10" maxlength="500" rows="2" required placeholder="Explain why the held deposit is being refunded or forfeited."></textarea></label></section>`
     : '';
   const reservation = all('reservations').find(item => item.id === reservationId);
   modal(
@@ -5933,8 +5982,8 @@ function billForm(item = {}) {
   if (editing && state.role === 'Receptionist' && item.createdBy !== state.user?.id) {
     return toast('Receptionists can only view bills they created.', 'error');
   }
-  if (!editing && !all('shifts').some(shift => shift.status === 'Open' && shift.openedBy === state.user?.id)) {
-    return toast('Open your cashier shift before creating a bill.', 'error');
+  if (!editing && !all('shifts').some(shift => shift.status === 'Open')) {
+    return toast('Open the restaurant cashier shift before creating a bill.', 'error');
   }
   const editable = !editing || (item.status === 'Open'
     && (state.role !== 'Receptionist' || item.createdBy === state.user?.id));
@@ -6113,8 +6162,14 @@ function printBillingStatement(billId) {
   printWindow.document.close();
 }
 function shiftForm() {
-  if (all('shifts').some(item => item.status === 'Open' && item.openedBy === state.user?.id)) {
-    return toast('You already have an open shift.', 'error');
+  if (all('shifts').some(item => item.status === 'Open')) {
+    return toast('The restaurant already has an open cashier shift.', 'error');
+  }
+  const today = manilaBusinessToday();
+  if (all('shifts').some(item =>
+    shiftOpenedOnDate(item, today)
+  )) {
+    return toast('The restaurant can open only one cashier shift per business day.', 'error');
   }
   modal('Open cashier shift',
     '<label>Starting cash<input name="openingCash" type="number" min="0" step="0.01" value="0.00" required></label><label>Notes<textarea name="notes" rows="2" maxlength="500"></textarea></label>',
@@ -6191,6 +6246,9 @@ async function shiftSummaryForm(shiftId) {
 }
 async function shiftCloseForm(shift) {
   try {
+    if (!shiftOpenedOnDate(shift, manilaBusinessToday())) {
+      return toast('A cashier shift can only be closed on the same Manila business day it was opened.', 'error');
+    }
     const summary = await window.supabaseRecord.posShiftSummary(shift.id);
     const expected = Number(summary.expected_cash || 0);
     modal(`Close shift · ${esc(shift.code)}`,
@@ -6330,14 +6388,27 @@ document.addEventListener('click', async event => {
   }
   if (action === 'cash-movement') {
     const shift = all('shifts').find(item => item.id === actionElement.dataset.id);
-    if (shift?.status === 'Open' && shift.openedBy === state.user?.id) return cashMovementForm(shift);
-    return toast('Cash movements can be recorded only on your own open shift.', 'error');
+    if (shift?.status === 'Open') return cashMovementForm(shift);
+    return toast('Cash movements can be recorded only on the open restaurant shift.', 'error');
   }
   if (action === 'print-shift') return printShiftReport(actionElement.dataset.id);
+  if (action === 'refresh-activity-logs') {
+    const restoreButton = setButtonBusy(actionElement, 'Refreshing…');
+    try {
+      await refetchCollection('auditLogs');
+      render();
+    } catch (error) {
+      console.error('Activity log could not be refreshed.', error);
+      toast(friendlyRpcError(error), 'error');
+    } finally {
+      restoreButton?.();
+    }
+    return;
+  }
   if (action === 'record-deposit') {
     const reservation = all('reservations').find(item => item.id === actionElement.dataset.id);
-    if (!all('shifts').some(shift => shift.status === 'Open' && shift.openedBy === state.user?.id)) {
-      return toast('Open your cashier shift before recording a deposit.', 'error');
+    if (!all('shifts').some(shift => shift.status === 'Open')) {
+      return toast('Open the restaurant cashier shift before recording a deposit.', 'error');
     }
     if (reservation) return reservationDepositForm(reservation);
     return toast('This reservation is no longer available.', 'error');
@@ -6377,8 +6448,8 @@ document.addEventListener('click', async event => {
   if (action === 'open-reservation-bill') {
     const reservation = all('reservations').find(item => item.id === actionElement.dataset.id);
     if (!reservation || reservation.status !== 'Seated') return toast('Only seated reservations can open a bill.', 'error');
-    if (!all('shifts').some(shift => shift.status === 'Open' && shift.openedBy === state.user?.id)) {
-      return toast('Open your cashier shift before creating a bill.', 'error');
+    if (!all('shifts').some(shift => shift.status === 'Open')) {
+      return toast('Open the restaurant cashier shift before creating a bill.', 'error');
     }
     if (all('posBills').some(bill => bill.reservationId === reservation.id && bill.status === 'Open')) {
       return toast('This reservation already has an open bill.', 'error');
@@ -6809,9 +6880,9 @@ async function syncWithSupabase() {
   const collectionsByRole = {
     Administrator: KEYS,
     Manager: KEYS.filter(key => key !== 'users'),
-    'Inventory Clerk': ['ingredients', 'inventoryTransactions', 'inventoryBatches', 'physicalCounts', 'wasteLogs', 'preparedFoodWasteLogs', 'notifications'],
-    'Chef / Kitchen Staff': ['ingredients', 'recipes', 'productionLogs', 'wasteLogs', 'preparedFoodWasteLogs', 'notifications'],
-    Receptionist: ['reservations', 'restaurantTables', 'buffetRates', 'chargeItems', 'packageTiers', 'discounts', 'posSettings', 'shifts', 'cashMovements', 'posBills', 'billLines', 'billPayments', 'reservationDeposits', 'billApprovals', 'notifications']
+    'Inventory Clerk': ['ingredients', 'inventoryTransactions', 'inventoryBatches', 'physicalCounts', 'wasteLogs', 'preparedFoodWasteLogs', 'notifications', 'auditLogs'],
+    'Chef / Kitchen Staff': ['ingredients', 'recipes', 'productionLogs', 'wasteLogs', 'preparedFoodWasteLogs', 'notifications', 'auditLogs'],
+    Receptionist: ['reservations', 'restaurantTables', 'buffetRates', 'chargeItems', 'packageTiers', 'discounts', 'posSettings', 'shifts', 'cashMovements', 'posBills', 'billLines', 'billPayments', 'reservationDeposits', 'billApprovals', 'notifications', 'auditLogs']
   };
   const collections = collectionsByRole[state.role] || [];
   setSyncState('syncing', 'Loading the latest restaurant data.', 'Syncing…');
@@ -7461,13 +7532,13 @@ function render() {
   }
   document.querySelector('#sidebar').innerHTML = nav();
   renderShellChrome();
-  const moduleNames = { dashboard: 'Overview', notifications: 'System Management', ingredients: 'Inventory Management', receiving: 'Inventory Management', counts: 'Inventory Management', recipes: 'Kitchen Operations', production: 'Kitchen Operations', waste: 'Kitchen Operations', reservations: 'Front of House', calendar: 'Front of House', tables: 'Front of House', cashier: 'Front of House', shifts: 'Front of House', approvals: 'Front of House', revenue: 'Revenue Management', rates: 'Revenue Management', 'charge-catalog': 'Revenue Management', reports: 'Analytics & Reports', users: 'System Management' };
-  const pageNames = { dashboard: 'Dashboard', notifications: 'Notifications', ingredients: 'Ingredients', receiving: 'Receiving', recipes: 'Recipes', production: 'Buffet production', waste: 'Waste logs', counts: 'Physical count', reports: 'Reports & analytics', revenue: 'Revenue Tracking', rates: 'Buffet rates', 'charge-catalog': 'Charge catalog', users: 'User Management', reservations: 'Reservations', calendar: 'Tables / Calendar', tables: 'Table management', cashier: 'Cashier', shifts: 'Shifts', approvals: 'Approvals' };
+  const moduleNames = { dashboard: 'Overview', notifications: 'System Management', 'activity-logs': 'System Management', ingredients: 'Inventory Management', receiving: 'Inventory Management', counts: 'Inventory Management', recipes: 'Kitchen Operations', production: 'Kitchen Operations', waste: 'Kitchen Operations', reservations: 'Front of House', calendar: 'Front of House', tables: 'Front of House', cashier: 'Front of House', shifts: 'Front of House', approvals: 'Front of House', revenue: 'Revenue Management', rates: 'Revenue Management', 'charge-catalog': 'Revenue Management', reports: 'Analytics & Reports', users: 'System Management' };
+  const pageNames = { dashboard: 'Dashboard', notifications: 'Notifications', 'activity-logs': 'Activity Log', ingredients: 'Ingredients', receiving: 'Receiving', recipes: 'Recipes', production: 'Buffet production', waste: 'Waste logs', counts: 'Physical count', reports: 'Reports & analytics', revenue: 'Revenue Tracking', rates: 'Buffet rates', 'charge-catalog': 'Charge catalog', users: 'User Management', reservations: 'Reservations', calendar: 'Tables / Calendar', tables: 'Table management', cashier: 'Cashier', shifts: 'Shifts', approvals: 'Approvals' };
   const activeGroup = sidebarGroups.find(group => group.items.some(([view]) => view === state.view));
   const crumbLabel = state.view === 'dashboard' ? 'Overview' : (moduleNames[state.view] || 'Workspace');
   const crumbTarget = activeGroup?.items.find(([view]) => canAccess(view))?.[0] || 'dashboard';
   document.querySelector('.breadcrumb').innerHTML = `<a class="crumb-parent" href="#${crumbTarget}" data-view="${crumbTarget}">${esc(crumbLabel)}</a><span aria-hidden="true">›</span><strong id="pageCrumb" tabindex="-1">${esc(pageNames[state.view] || state.view)}</strong>`;
-  const pages = { dashboard: roleDashboard, notifications: notificationCenterPage, ingredients: ingredientCardsPage, receiving: () => receivingPage(), recipes: recipeCardsPage, production: productionBoardPage, waste: () => logsPage('waste'), counts: () => countsPage(), reports: reportsPage, revenue: revenuePage, rates: () => ratesPage(), 'charge-catalog': chargeCatalogPage, cashier: cashierPage, shifts: shiftsPage, approvals: approvalsPage, users: () => usersPage(), reservations: reservationsPage, calendar: calendarPage, tables: tableManagementPage };
+  const pages = { dashboard: roleDashboard, notifications: notificationCenterPage, 'activity-logs': activityLogsPage, ingredients: ingredientCardsPage, receiving: () => receivingPage(), recipes: recipeCardsPage, production: productionBoardPage, waste: () => logsPage('waste'), counts: () => countsPage(), reports: reportsPage, revenue: revenuePage, rates: () => ratesPage(), 'charge-catalog': chargeCatalogPage, cashier: cashierPage, shifts: shiftsPage, approvals: approvalsPage, users: () => usersPage(), reservations: reservationsPage, calendar: calendarPage, tables: tableManagementPage };
   const renderPage = pages[state.view];
   if (!renderPage) {
     console.error(`No page renderer is registered for "${state.view}".`);

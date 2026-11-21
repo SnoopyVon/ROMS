@@ -94,6 +94,63 @@ test('active user loading excludes pending and cancelled profiles while retainin
   assert.equal(query.order, 'full_name');
 });
 
+test('activity log loading selects only the signed-in user and omits record snapshots', async () => {
+  const query = {};
+  const { record } = loadSupabaseRecord(() => ({}), {
+    auth: {
+      async getUser() {
+        return { data: { user: { id: 'actor-1' } }, error: null };
+      }
+    },
+    from(table) {
+      query.table = table;
+      return {
+        select(columns) {
+          query.columns = columns;
+          return this;
+        },
+        eq(column, value) {
+          query.filter = { column, value };
+          return this;
+        },
+        order(column, options) {
+          query.order = { column, options };
+          return Promise.resolve({
+            data: [{
+              id: 'log-1',
+              actor_id: 'actor-1',
+              table_name: 'ingredients',
+              record_id: 'ingredient-1',
+              action: 'UPDATE',
+              occurred_at: '2026-11-18T12:00:00Z'
+            }],
+            error: null
+          });
+        }
+      };
+    }
+  });
+
+  assert.deepEqual(JSON.parse(JSON.stringify(await record.load('auditLogs'))), [{
+    id: 'log-1',
+    actorId: 'actor-1',
+    tableName: 'ingredients',
+    recordId: 'ingredient-1',
+    action: 'UPDATE',
+    occurredAt: '2026-11-18T12:00:00Z'
+  }]);
+  assert.equal(query.table, 'audit_logs');
+  assert.equal(query.columns, 'id,actor_id,table_name,record_id,action,occurred_at');
+  assert.deepEqual(JSON.parse(JSON.stringify(query.filter)), {
+    column: 'actor_id',
+    value: 'actor-1'
+  });
+  assert.deepEqual(JSON.parse(JSON.stringify(query.order)), {
+    column: 'occurred_at',
+    options: { ascending: false }
+  });
+});
+
 test('account lifecycle adapters invoke the protected Edge Function actions', async () => {
   const calls = [];
   const { record } = loadSupabaseRecord(() => ({}), {

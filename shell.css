@@ -65,28 +65,13 @@
   padding: 0 5px 12px;
 }
 
-.brand-mark {
-  flex: 0 0 36px;
-  width: 36px;
-  height: 36px;
-  align-items: center;
-  padding: 0;
-  color: #fff;
-  font-size: 11px;
-  font-weight: 800;
-}
-
-.brand-copy {
-  min-width: 0;
-  flex: 1;
-}
-
-.brand-copy strong {
-  font-size: 17px;
-}
-
-.brand-copy small {
-  font-size: 10px;
+.brand-logo {
+  display: block;
+  flex: 0 0 84px;
+  width: 84px;
+  height: 84px;
+  object-fit: contain;
+  border-radius: 50%;
 }
 
 .sidebar-collapse {
@@ -1262,7 +1247,6 @@ kbd {
   padding-left: 0;
 }
 
-.sidebar-collapsed .brand-copy,
 .sidebar-collapsed .workspace-copy,
 .sidebar-collapsed .nav-item-label,
 .sidebar-collapsed .nav-group-label,
@@ -1525,7 +1509,6 @@ kbd {
     padding-left: 5px;
   }
 
-  .sidebar-collapsed .brand-copy,
   .sidebar-collapsed .workspace-copy,
   .sidebar-collapsed .nav-item-label,
   .sidebar-collapsed .nav-group-label,
@@ -1912,20 +1895,12 @@ body {
   gap: 1px;
 }
 
-.login-brand .brand-mark {
-  display: none;
-}
-
-.login-brand strong {
-  color: #3b2a20;
-  font: italic 400 40px/1 Georgia, serif;
-  letter-spacing: -1px;
-}
-
-.login-brand small {
-  color: #806448;
-  font: 700 9px/1.4 'DM Sans', sans-serif;
-  letter-spacing: 1.65px;
+.login-brand-logo {
+  display: block;
+  width: 150px;
+  height: 150px;
+  object-fit: contain;
+  border-radius: 50%;
 }
 
 .login-art {
@@ -1965,51 +1940,18 @@ body {
   box-shadow: 5px 0 20px rgba(59, 42, 32, .08);
 }
 
-.brand-mark {
-  border-radius: 11px;
-  background: #806448;
-}
-
-.sidebar .brand-mark {
-  display: none;
-}
-
-.sidebar .brand-copy strong {
-  color: #f5f0e6;
-  font: italic 400 22px/1 Georgia, serif;
-  letter-spacing: -.4px;
-}
-
-.sidebar .brand-copy small {
-  color: #dccdb3;
-  font-size: 8px;
-  letter-spacing: 1.15px;
-  line-height: 1.35;
-  text-transform: uppercase;
-}
-
-.sidebar-collapsed .sidebar .brand-mark {
-  display: grid;
-  flex: 0 0 36px;
+.sidebar-collapsed .sidebar .brand-logo {
+  flex-basis: 36px;
   width: 36px;
   height: 36px;
-  align-items: center;
-  justify-content: center;
-  border-radius: 0;
-  padding: 0;
-  color: #dccdb3;
-  background: transparent;
-  font: italic 400 30px/1 Georgia, serif;
 }
 
-.brand-copy strong,
 .workspace-copy strong,
 .sidebar .user-menu-trigger,
 .sidebar .user-copy strong {
   color: #f5f0e6;
 }
 
-.brand-copy small,
 .workspace-copy span,
 .sidebar .user-copy > span {
   color: #dccdb3;

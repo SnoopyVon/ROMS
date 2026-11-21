@@ -1,6 +1,10 @@
 # Supabase deployment and account setup
 
-## Apply the schema
+## Initial schema versus upgrades
+
+Run [`supabase-schema.sql`](./supabase/supabase-schema.sql) only when initializing a new or empty Supabase project. For a database that already contains production data, do not rerun this 4,000+ line baseline to install later changes. Back up the database and apply only the incremental migration files that have not already succeeded, in order. The recent cashier-shift and Activity Log updates are documented under migrations 036 and 037 below.
+
+### Initial setup for a new project
 
 1. Back up the project before changing its database.
 2. Run [`supabase-schema.sql`](./supabase/supabase-schema.sql) in the Supabase SQL Editor as the project database owner.
@@ -266,6 +270,16 @@ The 032 rollback is deliberately data-preserving: run `supabase/032_user_managem
 For an existing database, run [`supabase/033_receptionist_table_cleaning.sql`](./supabase/033_receptionist_table_cleaning.sql) as the database owner before deploying the updated app. Run [`supabase/033_receptionist_table_cleaning_acceptance.sql`](./supabase/033_receptionist_table_cleaning_acceptance.sql) afterward; it requires active Receptionist and Chef / Kitchen Staff profiles and ends with `ROLLBACK`. Fresh installations using the updated `supabase-schema.sql` already include the RPC.
 
 Receptionists can mark a table in **Needs cleaning** as **Available** from Table Management. The RPC only permits that single status transition and does not grant direct table-edit access; existing Manager and Administrator table-management permissions remain unchanged. The migration can be reversed with [`supabase/033_receptionist_table_cleaning_rollback.sql`](./supabase/033_receptionist_table_cleaning_rollback.sql).
+
+## Shared cashier shift (migration 036)
+
+For an existing database, apply the updated [`036_cashier_one_shift_per_business_day.sql`](./supabase/036_cashier_one_shift_per_business_day.sql). It changes shifts to one shared restaurant shift per Manila business day for Administrators, Managers, and Receptionists. All three roles can see the shared shift and use it for cashier actions. Historical shift rows are preserved; the previous per-user date index is removed because it can fail when older duplicate records exist. If a shift has already been opened or closed today, no role can open another until the next Manila business day.
+
+If an earlier attempt failed while creating the old unique index, rerun this updated migration; the failed transaction should not have changed data. Confirm the migration completes before applying 037.
+
+## Activity Log (migration 037)
+
+After migration 036 succeeds, apply [`037_activity_log_own_access.sql`](./supabase/037_activity_log_own_access.sql). The Activity Log module is available to every role and shows only record changes made by the signed-in user. It uses the existing append-only `audit_logs` records and intentionally excludes old/new record snapshots from the module. RLS enforces own-actor access for non-Administrators; the existing Administrator audit access remains unchanged. Roll back the module's additional access policy with [`037_activity_log_own_access_rollback.sql`](./supabase/037_activity_log_own_access_rollback.sql).
 
 ## Reservation calendar
 

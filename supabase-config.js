@@ -50,7 +50,8 @@ const tableForCollection = {
   reservationDeposits: 'pos_reservation_deposits',
   billApprovals: 'pos_bill_approvals',
   posNotifications: 'pos_notifications',
-  notifications: 'notifications'
+  notifications: 'notifications',
+  auditLogs: 'audit_logs'
 };
 
 function rememberVersion(collection, id, updatedAt) {
@@ -66,6 +67,16 @@ function dateValue(value) {
 }
 
 function mapDatabaseRecord(collection, row) {
+  if (collection === 'auditLogs') {
+    return {
+      id: row.id,
+      actorId: row.actor_id,
+      tableName: row.table_name,
+      recordId: row.record_id,
+      action: row.action,
+      occurredAt: row.occurred_at
+    };
+  }
   const updatedAt = row.updated_at;
   if (collection === 'users') {
     rememberVersion(collection, row.id, updatedAt);
@@ -781,6 +792,15 @@ window.supabaseRecord = {
         'Staff list load',
         USER_MANAGEMENT_TIMEOUT_MS
       );
+    } else if (collection === 'auditLogs') {
+      const { data: authData, error: authError } = await client.auth.getUser();
+      throwIfError(authError);
+      const actorId = authData?.user?.id;
+      if (!actorId) throw new Error('Your signed-in user could not be identified for the activity log.');
+      result = await client.from(table)
+        .select('id,actor_id,table_name,record_id,action,occurred_at')
+        .eq('actor_id', actorId)
+        .order('occurred_at', { ascending: false });
     } else if (collection === 'ingredients') {
       const { data, error } = await client.rpc('costtrack_load_products');
       throwIfError(error);

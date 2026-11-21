@@ -2751,6 +2751,9 @@ create policy restaurant_tables_delete
 create policy audit_logs_admin_read
   on public.audit_logs for select to authenticated
   using (public.has_app_role(array['Administrator']));
+create policy audit_logs_actor_read
+  on public.audit_logs for select to authenticated
+  using (actor_id = auth.uid());
 
 -- PHASE 2: buffet rates are visible to front-of-house roles only; managers
 -- and administrators maintain the catalog. These replace the Phase 1 policies.
@@ -3588,7 +3591,7 @@ begin
   foreach table_name in array array[
     'profiles', 'ingredients', 'recipes', 'recipe_ingredients', 'inventory_transactions',
     'production_logs', 'waste_logs', 'physical_counts', 'reservations',
-    'restaurant_tables', 'revenue_records', 'buffet_rates'
+    'restaurant_tables', 'revenue_records', 'buffet_rates', 'audit_logs'
   ] loop
     if not exists (
       select 1 from pg_publication_tables
