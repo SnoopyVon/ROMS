@@ -379,12 +379,6 @@ begin
   if shift_row.status <> 'Open' then
     return jsonb_build_object('shift', to_jsonb(shift_row), 'already_closed', true);
   end if;
-  if ((shift_row.opened_at at time zone 'Asia/Manila')::date
-      <> (now() at time zone 'Asia/Manila')::date) then
-    raise exception 'A cashier shift can only be closed on the same Manila business day it was opened.'
-      using errcode = '55000';
-  end if;
-
   for open_bill in
     select b.id, b.bill_number
     from public.pos_bills b

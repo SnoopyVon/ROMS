@@ -41,8 +41,8 @@ state.ingredientCategory = 'All';
 state.ingredientUnit = 'All';
 state.recipeCategory = 'All';
 state.recipeDraft = [];
-state.productionCategory = 'All';
 state.productionQueueTab = 'in-progress';
+state.productionCategoryFilter = 'All';
 state.productionBoard = { date: '', rows: [], loading: false, loaded: false, error: '' };
 state.productionHistoryOpen = false;
 state.productionHistory = {
@@ -510,8 +510,8 @@ function realtimeCollectionsForView() {
   const common = {
     ingredients: ['ingredients'],
     receiving: ['ingredients', 'inventory_transactions'],
-    recipes: ['ingredients', 'recipes', 'recipe_ingredients'],
-    production: ['ingredients', 'recipes', 'production_logs', 'production_batches', 'reservations'],
+    recipes: ['ingredients', 'inventory_batches', 'recipes', 'recipe_ingredients', 'production_logs', 'production_batches'],
+    production: ['ingredients', 'inventory_batches', 'recipes', 'production_logs', 'production_batches', 'reservations'],
     waste: ['ingredients', 'waste_logs', 'prepared_food_waste_logs', 'production_logs'],
     counts: ['ingredients', 'physical_counts'],
     reservations: ['reservations', 'restaurant_tables', 'pos_bills', 'pos_reservation_deposits'],
@@ -536,7 +536,7 @@ function realtimeCollectionsForView() {
     const dashboardTables = {
       Receptionist: ['reservations', 'restaurant_tables'],
       'Inventory Clerk': ['ingredients', 'inventory_transactions', 'physical_counts'],
-      'Chef / Kitchen Staff': ['ingredients', 'recipes', 'production_logs', 'waste_logs', 'reservations'],
+      'Chef / Kitchen Staff': ['ingredients', 'inventory_batches', 'recipes', 'production_logs', 'prepared_food_waste_logs', 'waste_logs', 'reservations'],
       default: ['ingredients', 'recipes', 'production_logs', 'waste_logs', 'reservations', 'restaurant_tables', 'pos_bills', 'buffet_rates']
     };
     return [...new Set([
@@ -550,7 +550,7 @@ function realtimeTablesForRole(tables) {
   const allowed = {
     Administrator: ['ingredients', 'recipes', 'recipe_ingredients', 'inventory_transactions', 'inventory_batches', 'production_logs', 'production_batches', 'waste_logs', 'prepared_food_waste_logs', 'physical_counts', 'reservations', 'restaurant_tables', 'revenue_records', 'buffet_rates', 'pos_charge_items', 'pos_charge_item_variants', 'pos_package_tiers', 'pos_package_inclusions', 'pos_discounts', 'pos_settings', 'pos_shifts', 'pos_cash_movements', 'pos_bills', 'pos_bill_lines', 'pos_bill_payments', 'pos_reservation_deposits', 'pos_bill_approvals', 'pos_notifications', 'notifications', 'notification_read_states'],
     Manager: ['ingredients', 'recipes', 'recipe_ingredients', 'inventory_transactions', 'inventory_batches', 'production_logs', 'production_batches', 'waste_logs', 'prepared_food_waste_logs', 'physical_counts', 'reservations', 'restaurant_tables', 'revenue_records', 'buffet_rates', 'pos_charge_items', 'pos_charge_item_variants', 'pos_package_tiers', 'pos_package_inclusions', 'pos_discounts', 'pos_settings', 'pos_shifts', 'pos_cash_movements', 'pos_bills', 'pos_bill_lines', 'pos_bill_payments', 'pos_reservation_deposits', 'pos_bill_approvals', 'pos_notifications', 'notifications', 'notification_read_states'],
-    'Chef / Kitchen Staff': ['ingredients', 'recipes', 'recipe_ingredients', 'production_logs', 'production_batches', 'waste_logs', 'prepared_food_waste_logs', 'notifications', 'notification_read_states'],
+    'Chef / Kitchen Staff': ['ingredients', 'inventory_batches', 'recipes', 'recipe_ingredients', 'production_logs', 'production_batches', 'waste_logs', 'prepared_food_waste_logs', 'notifications', 'notification_read_states'],
     Receptionist: ['reservations', 'restaurant_tables', 'buffet_rates', 'pos_bills', 'pos_bill_lines', 'pos_bill_payments', 'pos_reservation_deposits', 'pos_bill_approvals', 'pos_shifts', 'pos_cash_movements', 'notifications', 'notification_read_states'],
     'Inventory Clerk': ['ingredients', 'recipes', 'recipe_ingredients', 'inventory_transactions', 'inventory_batches', 'physical_counts', 'waste_logs', 'prepared_food_waste_logs', 'notifications', 'notification_read_states']
   };
@@ -865,7 +865,7 @@ function configureRealtimeSubscriptions() {
 }
 const sidebarGroups = [
   { id: 'front-of-house', label: 'Front of House', icon: 'calendar', items: [['cashier', 'dashboard', 'Cashier'], ['shifts', 'calendar-days', 'Shifts'], ['approvals', 'shield', 'Approvals'], ['reservations', 'calendar-plus', 'Reservations'], ['calendar', 'calendar-days', 'Tables / Calendar'], ['tables', 'table', 'Table Management']] },
-  { id: 'inventory', label: 'Inventory Management', icon: 'boxes', items: [['ingredients', 'package', 'Ingredients'], ['receiving', 'package-plus', 'Ingredients + Receiving'], ['counts', 'clipboard-check', 'Physical Count']] },
+  { id: 'inventory', label: 'Inventory', icon: 'boxes', items: [['ingredients', 'package', 'Ingredients'], ['receiving', 'package-plus', 'Ingredients + Receiving'], ['counts', 'clipboard-check', 'Physical Count']] },
   { id: 'production', label: 'Kitchen Operations', icon: 'chef-hat', items: [['recipes', 'book', 'Recipes'], ['production', 'chef-hat', 'Production Board'], ['waste', 'trash', 'Waste Logs']] },
   { id: 'revenue-management', label: 'Revenue Management', icon: 'chart', items: [['revenue', 'chart', 'Revenue Tracking'], ['charge-catalog', 'package', 'Charge Catalog']] },
   { id: 'analytics', label: 'Analytics & Reports', icon: 'chart', items: [['reports', 'chart', 'Reports & analytics']] },
@@ -1725,7 +1725,13 @@ function login(message = '') {
   const recovering = passwordRecoveryMode
     || invitationAcceptanceMode
     || new URLSearchParams(window.location.hash.slice(1)).get('type') === 'recovery';
-  document.querySelector('#loginScreen').innerHTML = `<div class="login-card"><div class="login-brand"><img class="login-brand-logo" src="images/isobel_logo.jpg" alt="Isobel Buffet Restaurant"></div>${message ? `<p class="auth-message" role="alert">${esc(message)}</p>` : ''}${recovering ? `<form id="passwordRecoveryForm"><label>New password<input name="password" type="password" minlength="8" autocomplete="new-password" required></label><button class="primary-btn" type="submit">Update password</button></form>` : `<form id="loginForm"><label>Email<input name="email" type="email" autocomplete="username" required></label><label>Password<input name="password" type="password" autocomplete="current-password" required></label><button class="primary-btn" type="submit">Log in</button></form><button class="link-button" id="resetPasswordButton" type="button">Forgot password?</button>`}</div><div class="login-art"><div><span>Today’s focus</span><strong>Reduce waste.<br>Protect margin.</strong><p>Make every ingredient movement visible from delivery to plate.</p></div><div class="art-stat"><b>${lowStock().length}</b><span>items need attention</span></div></div>`;
+  const emailField = `<div class="login-field"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="5" width="18" height="14" rx="2"></rect><path d="m4 7 8 6 8-6"></path></svg><label class="login-sr-only" for="loginEmail">Email</label><input id="loginEmail" name="email" type="email" autocomplete="username" placeholder="Email" required></div>`;
+  const passwordField = `<div class="login-field"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="5" y="10" width="14" height="11" rx="2"></rect><path d="M8 10V7a4 4 0 0 1 8 0v3"></path><path d="M12 14v3"></path></svg><label class="login-sr-only" for="loginPassword">Password</label><input id="loginPassword" name="password" type="password" autocomplete="current-password" placeholder="Password" required><button class="login-password-toggle" type="button" data-login-password-toggle aria-label="Show password" aria-pressed="false"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M2.5 12s3.2-6 9.5-6 9.5 6 9.5 6-3.2 6-9.5 6-9.5-6-9.5-6Z"></path><circle cx="12" cy="12" r="2.5"></circle></svg></button></div>`;
+  const recoveryField = `<div class="login-field"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="5" y="10" width="14" height="11" rx="2"></rect><path d="M8 10V7a4 4 0 0 1 8 0v3"></path><path d="M12 14v3"></path></svg><label class="login-sr-only" for="recoveryPassword">New password</label><input id="recoveryPassword" name="password" type="password" minlength="8" autocomplete="new-password" placeholder="New password" required></div>`;
+  const formMarkup = recovering
+    ? `<form id="passwordRecoveryForm">${recoveryField}<button class="primary-btn" type="submit">Update password</button></form>`
+    : `<form id="loginForm">${emailField}${passwordField}<button class="primary-btn" type="submit">Log in</button></form><button class="link-button" id="resetPasswordButton" type="button">Forgot password?</button><small class="login-note">Accounts are created by your administrator.</small>`;
+  document.querySelector('#loginScreen').innerHTML = `<section class="login-card"><div class="login-card-content"><div class="eyebrow">${recovering ? 'ACCOUNT SECURITY' : 'STAFF SIGN IN'}</div><h1>${recovering ? 'Create a new password' : 'Sign in to your workspace'}</h1>${message ? `<p class="auth-message" role="alert">${esc(message)}</p>` : ''}${formMarkup}</div></section><section class="login-art" aria-label="Welcome to Isobel Buffet Restaurant"><div class="login-art-content"><img class="login-art-logo" src="images/isobel_logo.jpg" alt="Isobel Buffet Restaurant"><h2>Welcome back to isobel</h2><p>Buffet Restaurant Operations</p></div></section>`;
 }
 function metric(label, value, icon, tone, foot) { return `<div class="metric-card"><div class="metric-top"><span>${label}</span><i class="metric-icon ${tone}">${icon}</i></div><div class="metric-value">${value}</div><div class="metric-foot">${foot}</div></div>`; }
 function pageHeader(eyebrow, title, subtitle, action = '') { return `<div class="page-header"><div><div class="eyebrow">${eyebrow}</div><h1>${title}</h1><p>${subtitle}</p></div>${action}</div>`; }
@@ -1850,7 +1856,26 @@ function roleDashboard() {
   const cards = state.role === 'Receptionist'
     ? [metric("Today's reservations", todayReservations.length, '▤', 'orange-icon', `${pendingReservations.length} awaiting confirmation`), metric('Guests expected', todayReservations.reduce((sum, item) => sum + Number(item.guests), 0), '♙', 'green-icon', 'Across today’s bookings'), metric('Checked in', checkedInReservations, '✓', 'purple-icon', 'Guests currently seated'), metric('Open tables', all('restaurantTables').filter(table => table.status !== 'Needs cleaning' && ['Available', 'Reserved Later'].includes(liveTableAvailability(table, todayDate, reservations).status)).length, '⌂', 'orange-icon', 'Includes tables with a safe gap before reservations')]
     : state.role === 'Chef / Kitchen Staff'
-    ? [metric('Recipes created', recipes.length, '◇', 'purple-icon', `${new Set(recipes.map(item => item.category)).size} categories`), metric('Production logs today', productionToday, '♨', 'green-icon', 'Batches recorded today'), metric('Waste logs today', wasteToday, '◌', 'red-icon', money(wasteCost()) + ' total waste cost'), metric('Active recipes', activeRecipes.length, '↗', 'orange-icon', 'Available to produce')]
+    ? (() => {
+      const todayRows = state.productionBoard.loaded
+        ? state.productionBoard.rows.filter(item => item.serviceDate === todayDate)
+        : [];
+      const target = activeRecipes.reduce((sum, item) => sum + Number(item.prepTarget || 30), 0);
+      const cooking = todayRows.filter(item => item.status === 'Cooking').reduce((sum, item) => sum + Number(item.expectedCovers || 0), 0);
+      const ready = todayRows.filter(item => item.status === 'Ready').reduce((sum, item) => sum + Number(item.expectedCovers || 0), 0);
+      const preparedWasteToday = all('preparedFoodWasteLogs').filter(item => item.date === todayDate)
+        .reduce((sum, item) => sum + Number(item.quantity || 0), 0);
+      const lowStockToday = ingredients.filter(item => ['Out of Stock', 'Low Stock'].includes(stockStatus(item))).length;
+      return [
+        metric("Today's production target", target, '◎', 'purple-icon', `${activeRecipes.length} active recipes`),
+        metric('Cooking portions', cooking, '♨', 'orange-icon', 'Currently in progress'),
+        metric('Ready portions', ready, '✓', 'green-icon', 'Available for service'),
+        metric('Remaining portions', Math.max(0, target - ready - cooking), '↗', 'purple-icon', 'Target less ready and cooking'),
+        metric('Ingredient waste today', all('wasteLogs').filter(item => item.date === todayDate).length, '◌', 'red-icon', 'Raw ingredient entries'),
+        metric('Prepared waste today', preparedWasteToday, '◌', 'red-icon', 'Discarded prepared portions'),
+        metric('Low stock alerts', lowStockToday, '!', 'orange-icon', 'Out of stock or below minimum')
+      ];
+    })()
     : state.role === 'Inventory Clerk'
       ? [metric('Out of stock items', out, '!', 'red-icon', 'Immediate replenishment needed'), metric('Low stock items', low, '↓', 'orange-icon', 'Below minimum level'), metric('Healthy stock items', healthy, '✓', 'green-icon', 'At safe stock level'), metric('Total ingredients', ingredients.length, '◈', 'purple-icon', money(inventoryValue()) + ' inventory value')]
       : canAccessRevenue()
@@ -1967,7 +1992,7 @@ function ingredientCardsPage() {
   const toggle = `<button class="ghost-btn compact-btn" data-action="toggle-ingredient-view">${state.ingredientView === 'cards' ? 'Table view' : 'Card view'}</button>`;
   const cardMarkup = sorted.length ? sorted.map(item => {
     const batchSnapshot = inventoryBatchVisibility(batchesByProduct.get(item.id) || []);
-    return `<article class="catalog-card"><div class="catalog-card-top"><span class="ingredient-dot large-dot">${item.name[0]}</span><div class="product-status-group"><span class="status ${stockStatus(item) === 'Healthy' ? 'status-good' : 'status-low'}">${stockStatus(item)}</span><span class="product-active-status ${item.isActive === false ? 'is-inactive' : ''}">${item.isActive === false ? 'Inactive' : 'Active'}</span></div></div><h3>${esc(item.name)}</h3><span class="tag">${esc(item.category)}</span><div class="catalog-stat"><div><small>Current stock</small><strong>${formatStockQuantity(item.stock)} <em>${item.unit}</em></strong></div>${canSeeCost ? `<div><small>Cost / unit</small><strong>${money(item.cost)}</strong></div>` : ''}</div>${inventoryCardBatchIntelligence(batchSnapshot)}<div class="catalog-card-footer"><span>Minimum ${item.minimum} ${item.unit}</span><div class="card-actions">${actions('ingredient', item.id, item)}</div></div></article>`;
+    return `<article class="catalog-card"><div class="catalog-card-top"><span class="ingredient-dot large-dot">${item.name[0]}</span><div class="product-status-group"><span class="status ${stockStatus(item) === 'Healthy' ? 'status-good' : 'status-low'}">${stockStatus(item)}</span>${item.isActive === false ? '<span class="product-active-status is-inactive">Inactive</span>' : ''}</div></div><h3>${esc(item.name)}</h3><span class="tag">${esc(item.category)}</span><div class="catalog-stat"><div><small>Current stock</small><strong>${formatStockQuantity(item.stock)} <em>${item.unit}</em></strong></div>${canSeeCost ? `<div><small>Cost / unit</small><strong>${money(item.cost)}</strong></div>` : ''}</div>${inventoryCardBatchIntelligence(batchSnapshot)}<div class="catalog-card-footer"><span>Minimum ${item.minimum} ${item.unit}</span><div class="card-actions">${actions('ingredient', item.id, item)}</div></div></article>`;
   }).join('') : `<div class="panel empty-state">No ingredients match these filters.${canManageProducts ? '<button class="primary-btn" data-action="open-ingredient">Add product</button>' : ''}</div>`;
   const tableMarkup = `<div class="panel table-panel"><div class="table-scroll"><table data-table="inventory"><thead><tr>${[['name','Ingredient'],['stock','Stock'],...(canSeeCost ? [['cost','Cost / unit']] : []),['status','Status'],['','']].map(([key, label]) => key ? `<th${key === 'cost' ? ' class="mobile-hidden-cell"' : ''}><button class="sort-header" data-sort-ingredient="${key}">${label} ↕</button></th>` : '<th></th>').join('')}</tr></thead><tbody>${sorted.length ? sorted.map(item => `<tr><td data-label="Ingredient"><strong>${esc(item.name)}</strong><small class="sub-cell">${esc(item.category)} · ${esc(item.unit)} · ${item.isActive === false ? 'Inactive' : 'Active'}</small></td><td data-label="Stock">${formatStockQuantity(item.stock)} ${esc(item.unit)}</td>${canSeeCost ? `<td data-label="Cost / unit" data-mobile-hidden="true">${money(item.cost)}</td>` : ''}<td data-label="Status"><span class="status ${stockStatus(item) === 'Healthy' ? 'status-good' : 'status-low'}">${stockStatus(item)}</span></td><td data-label="Actions">${actions('ingredient', item.id, item)}</td></tr>`).join('') : `<tr><td colspan="${canSeeCost ? 5 : 4}" class="empty-state">No ingredients match these filters.</td></tr>`}</tbody></table></div></div>`;
   return `${pageHeader('Inventory', 'Products', 'Review product stock and reorder thresholds.', `${toggle} ${canManageProducts ? '<button class="primary-btn" data-action="open-ingredient">+ Add product</button>' : ''}`)}<div class="catalog-toolbar"><div class="search-box">⌕<input id="tableSearch" placeholder="Search products or categories..." value="${esc(state.query)}"></div><select data-filter="ingredientCategory"><option>All categories</option>${categories.map(item => `<option ${state.ingredientCategory === item ? 'selected' : ''}>${esc(item)}</option>`).join('')}</select><label class="filter-check"><input type="checkbox" data-low-stock-filter ${state.ingredientStatus === 'Low Stock' ? 'checked' : ''}> Low stock only</label><span class="record-count">${filtered.length} products</span></div>${state.ingredientView === 'cards' ? `<div class="ingredient-card-grid">${cardMarkup}</div>` : tableMarkup}`;
@@ -1978,6 +2003,7 @@ function recipeCardsPage() {
   const filtered = recipes.filter(item => item.name.toLowerCase().includes(state.query.toLowerCase()) && (state.recipeCategory === 'All' || item.category === state.recipeCategory));
   const canSeeCosts = ['Administrator', 'Manager'].includes(state.role);
   const canManageRecipes = window.CostTrackLogic.canPerformInventoryAction(state.role, 'recipe.manage');
+  const todayRows = state.productionBoard.rows.filter(item => item.serviceDate === today());
   return `${pageHeader('Kitchen operations', 'Recipes', canSeeCosts ? 'Review portion and base-recipe costs, ingredients, and production status.' : 'Review recipe ingredients and quantities for production.', canManageRecipes ? '<button class="primary-btn" data-action="open-recipe">+ Create recipe</button>' : '')}
     <div class="catalog-toolbar"><div class="search-box">⌕<input id="tableSearch" placeholder="Search recipes..." value="${esc(state.query)}"></div>
       <div class="category-tabs"><button class="${state.recipeCategory === 'All' ? 'active' : ''}" data-recipe-category="All">All</button>${categories.map(item => `<button class="${state.recipeCategory === item ? 'active' : ''}" data-recipe-category="${esc(item)}">${esc(item)}</button>`).join('')}</div>
@@ -1986,12 +2012,60 @@ function recipeCardsPage() {
     <div class="recipe-card-grid">${filtered.length ? filtered.map(item => {
       const active = window.CostTrackLogic.isRecipeActive(item);
       const breakdown = canSeeCosts ? recipeCostBreakdown(item) : null;
+      const progress = window.CostTrackLogic.productionProgress(
+        todayRows.filter(batch => batch.recipeId === item.id),
+        Number(item.prepTarget || 30)
+      );
+      const readiness = active ? kitchenRecipeReadiness(item, Number(item.batchYield || 30)) : null;
+      const yieldCount = Number(item.batchYield || 30);
+      const fullBatches = readiness?.lines.length
+        ? Math.floor(Math.min(...readiness.lines.map(line =>
+            Number(line.required || 0) > 0
+              ? Number(line.available || 0) / Number(line.required)
+              : 0
+          )))
+        : 0;
+      const supportedPortions = fullBatches * yieldCount;
+      const readinessMarkup = !active
+        ? '<div class="recipe-readiness recipe-readiness-inactive"><strong>Inactive</strong><small>Not available for new production</small></div>'
+        : readiness.status === 'Stock Available'
+          ? `<div class="recipe-readiness recipe-readiness-success"><strong>✓ Production Ready</strong><small>All ingredients are available</small></div>`
+          : readiness.status === 'Low Stock Warning'
+            ? `<div class="recipe-readiness recipe-readiness-warning"><strong>⚠ Low Stock Warning</strong><small>Ingredients are available but nearing depletion</small></div>`
+            : `<div class="recipe-readiness recipe-readiness-danger"><strong>❌ Production Blocked</strong><small>Insufficient inventory to complete this batch</small></div>`;
+      const supportMarkup = !active
+        ? '<div class="recipe-support-copy"><small>Production support</small><strong>Unavailable</strong></div>'
+        : `<div class="recipe-support-copy"><small>Production support</small><strong>${supportedPortions > 0 ? `Enough for ${fullBatches} full batch${fullBatches === 1 ? '' : 'es'} · ${supportedPortions} portions` : 'Inventory shortage detected'}</strong></div>`;
+      const shortageLines = readiness?.lines.filter(line =>
+        line.available < line.required || (line.product && line.available <= line.product.minimum)
+      ) || [];
+      const lowStockNames = [...new Set(shortageLines.map(line => line.product?.name).filter(Boolean))].slice(0, 3);
+      const stockRiskMarkup = lowStockNames.length
+        ? `<div class="recipe-stock-risk"><strong>Watch</strong><span>${lowStockNames.map(name => esc(name)).join(', ')}</span></div>`
+        : '';
+      const fefoLines = readiness?.lines
+        .filter(line => line.firstBatch && line.expiry)
+        .sort((left, right) => String(left.expiry).localeCompare(String(right.expiry)))
+        .slice(0, 2) || [];
+      const fefoMarkup = fefoLines.length
+        ? `<div class="recipe-fefo"><strong>FEFO recommended</strong>${fefoLines.map(line => `<span>${esc(line.product?.name || 'Ingredient')}: use ${esc(inventoryBatchLabel(line.firstBatch))} first · ${esc(inventoryExpiryLabel(line.expiryStatus?.daysUntilExpiry))}</span>`).join('')}</div>`
+        : '';
       return `<article class="catalog-card recipe-card${active ? '' : ' recipe-card-inactive'}">
         <div class="catalog-card-top"><span class="recipe-icon large-dot">◇</span><span class="tag">${esc(item.category)}</span></div>
         <h3>${esc(item.name)}</h3>
+        ${readinessMarkup}
         <div class="recipe-prep-summary">
           <span><small>Portions per base recipe</small><strong>${Number(item.batchYield || 30)} portions</strong></span>
           <span><small>Daily production target</small><strong>${Number(item.prepTarget || 30)} portions</strong></span>
+        </div>
+        ${supportMarkup}
+        ${stockRiskMarkup}
+        ${fefoMarkup}
+        <div class="recipe-production-status" aria-label="${esc(item.name)} today production status">
+          <span><small>Target</small><strong>${progress.target}</strong></span>
+          <span><small>Ready</small><strong>${progress.ready}</strong></span>
+          <span><small>Cooking</small><strong>${progress.cooking}</strong></span>
+          <span><small>Still needed</small><strong>${progress.remaining}</strong></span>
         </div>
         ${canSeeCosts ? `<div class="recipe-cost-card-primary"><small>Cost per portion</small><strong>${money(breakdown.costPerPortion)}</strong><span>Total batch cost ${money(breakdown.totalBatchCost)}</span></div>` : ''}
         <div class="catalog-card-footer"><span>${item.ingredients.length} ingredients</span>
@@ -2129,6 +2203,22 @@ function logsPage(type) {
       dishInsight.set(key, current);
     });
     const topDishes = [...dishInsight.values()].sort((a, b) => b.quantity - a.quantity).slice(0, 3);
+    const wasteTrend = [];
+    for (let offset = 6; offset >= 0; offset -= 1) {
+      const date = new Date(`${manilaBusinessToday()}T12:00:00`);
+      date.setDate(date.getDate() - offset);
+      const key = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+      const ingredientCount = all('wasteLogs').filter(item => item.date === key).length;
+      const preparedPortions = all('preparedFoodWasteLogs').filter(item => item.date === key)
+        .reduce((sum, item) => sum + Number(item.quantity || 0), 0);
+      wasteTrend.push({ key, label: date.toLocaleDateString('en-PH', { weekday: 'short' }), ingredientCount, preparedPortions });
+    }
+    const trendMax = Math.max(1, ...wasteTrend.flatMap(item => [item.ingredientCount, item.preparedPortions]));
+    const trendMarkup = wasteTrend.map(item => {
+      const ingredientHeight = Math.max(item.ingredientCount ? 8 : 3, Math.round(item.ingredientCount / trendMax * 46));
+      const preparedHeight = Math.max(item.preparedPortions ? 8 : 3, Math.round(item.preparedPortions / trendMax * 46));
+      return `<div class="waste-trend-bar-item" title="${esc(item.key)}: ${item.ingredientCount} ingredient entries · ${item.preparedPortions} prepared portions"><div class="waste-trend-pair"><i class="ingredient-trend" style="height:${ingredientHeight}px"></i><i class="prepared-trend" style="height:${preparedHeight}px"></i></div><small>${esc(item.label)}</small></div>`;
+    }).join('');
     const reasonOptions = [...new Set([...wasteReasons, ...preparedFoodWasteReasons, ...records.map(item => item.reason), ...preparedRecords.map(item => item.reason)].filter(Boolean))].sort((a, b) => a.localeCompare(b));
     const filterMarkup = `<div class="waste-filters">
       <label>From date<input data-waste-filter="from" type="date" value="${esc(filters.from)}"></label>
@@ -2144,6 +2234,7 @@ function logsPage(type) {
     const insights = `<div class="waste-insight-grid">
       <section class="waste-insight-card"><h3>Top wasted ingredients</h3><p>Quantities retain each ingredient’s own stock unit.</p>${topIngredients.length ? `<ol>${topIngredients.map(item => `<li><span>${esc(item.name)}</span><strong>${Number(item.quantity.toFixed(4))} ${esc(item.unit)}</strong></li>`).join('')}</ol>` : '<p class="waste-insight-empty">No ingredient entries for these filters.</p>'}</section>
       <section class="waste-insight-card"><h3>Top wasted dishes</h3><p>Prepared-food quantities are portions, not inventory units.</p>${topDishes.length ? `<ol>${topDishes.map(item => `<li><span>${esc(item.name)}</span><strong>${Number(item.quantity.toFixed(4))} portions</strong></li>`).join('')}</ol>` : '<p class="waste-insight-empty">No prepared-food entries for these filters.</p>'}</section>
+      <section class="waste-insight-card"><h3>Waste trend</h3><p>Last 7 Manila-local dates · red: ingredient entries · green: prepared portions.</p><div class="waste-trend-bars">${trendMarkup}</div></section>
     </div>`;
     return `${pageHeader('Kitchen operations', 'Waste logs', 'Choose ingredient waste to deduct raw stock, or prepared-food waste to record discarded dishes without changing ingredient inventory.', '<button class="primary-btn" data-action="open-waste">+ Log waste</button>')}<div class="panel waste-history-panel"><div class="waste-toolbar"><div class="search-box">⌕<input id="tableSearch" placeholder="Search waste, reason, dish, or notes..." value="${esc(state.query)}"></div><span class="record-count">${matches.length + preparedMatches.length} entries</span></div>${filterMarkup}${summaries}${insights}<h2 class="waste-section-title">Ingredient waste</h2><p class="waste-section-note">Only these entries deduct raw ingredient stock.</p><div class="table-scroll"><table><thead><tr><th>Ingredient</th><th>Quantity</th><th>Reason</th><th>Dish / batch</th><th>Date / time</th><th>Logged by</th>${canSeeCosts ? '<th>Estimated cost</th>' : ''}<th>Notes</th></tr></thead><tbody>${pagedWasteRows.length ? pagedWasteRows.join('') : `<tr><td colspan="${canSeeCosts ? 8 : 7}" class="empty-state">No ingredient waste entries match these filters.</td></tr>`}</tbody></table></div>${wastePagination}<h2 class="waste-section-title prepared-waste-title">Prepared food / leftovers</h2><p class="waste-section-note">These entries record discarded cooked food only. They never return or deduct ingredients.</p><div class="table-scroll"><table class="prepared-waste-table"><thead><tr><th>Dish</th><th>Production batch</th><th>Portions</th><th>Reason</th><th>Waste date / time</th><th>Logged by</th><th>Notes</th></tr></thead><tbody>${preparedPageRows.length ? preparedPageRows.join('') : '<tr><td colspan="7" class="empty-state">No prepared-food waste entries match these filters.</td></tr>'}</tbody></table></div>${preparedPagination}</div>`;
   }
@@ -2163,43 +2254,7 @@ function logsPage(type) {
   });
 }
 function productionBoardPage() {
-  const recipes = all('recipes');
-  const categories = [...new Set(recipes.map(item => item.category).filter(Boolean))].sort((a, b) => a.localeCompare(b));
-  if (state.productionCategory !== 'All' && !categories.includes(state.productionCategory)) state.productionCategory = 'All';
   const rows = state.productionBoard.rows.filter(item => item.serviceDate === today());
-  const activeRecipes = recipes.filter(item => window.CostTrackLogic.isRecipeActive(item)
-    && (state.productionCategory === 'All' || item.category === state.productionCategory));
-  const progressFor = item => window.CostTrackLogic.productionProgress(
-    rows.filter(batch => batch.recipeId === item.id),
-    Number(item.prepTarget || 30)
-  );
-  const recipeCards = activeRecipes.map(item => {
-    const progress = progressFor(item);
-    const readyPortions = Math.min(progress.ready, progress.target);
-    const cookingPortions = Math.min(progress.cooking, Math.max(0, progress.target - readyPortions));
-    const readyPercent = progress.target ? readyPortions / progress.target * 100 : 0;
-    const cookingPercent = progress.target ? cookingPortions / progress.target * 100 : 0;
-    const remainingPercent = progress.target ? progress.remaining / progress.target * 100 : 0;
-    const yieldCount = Number(item.batchYield || 30);
-    const halfBatch = Math.max(1, Math.round(yieldCount / 2));
-    const quickAmounts = [...new Set([halfBatch, yieldCount])];
-    return `<article class="production-dish-card">
-      <div class="production-dish-heading"><div><span class="tag">${esc(item.category || 'Uncategorized')}</span><h3>${esc(item.name)}</h3></div><span class="production-yield">${yieldCount}<small>portions / full batch</small></span></div>
-      ${item.prepNotes ? `<p class="production-prep-notes">${esc(item.prepNotes)}</p>` : ''}
-      <div class="production-progress-summary" aria-label="${esc(item.name)} production progress against a target of ${progress.target} portions">
-        <span class="production-progress-ready"><small>Ready</small><strong>${progress.ready}</strong></span>
-        <span class="production-progress-cooking"><small>Cooking</small><strong>${progress.cooking}</strong></span>
-        <span class="production-progress-remaining"><small>Remaining</small><strong>${progress.remaining}</strong></span>
-      </div>
-      <div class="production-progress-track" role="progressbar" aria-label="${esc(item.name)} production progress" aria-valuemin="0" aria-valuemax="${progress.target}" aria-valuenow="${Math.min(progress.ready + progress.cooking, progress.target)}" aria-valuetext="${progress.ready} ready, ${progress.cooking} cooking, ${progress.remaining} remaining of ${progress.target} portions">
-        <span class="production-progress-segment progress-ready" style="width:${readyPercent}%"></span><span class="production-progress-segment progress-cooking" style="width:${cookingPercent}%"></span><span class="production-progress-segment progress-remaining" style="width:${remainingPercent}%"></span>
-      </div>
-      <div class="production-card-footer"><small>Service target: ${progress.target} portions. Remaining is target minus ready and cooking.</small>
-        <div class="production-start-actions">${quickAmounts.map((portions, index) => `<button class="${index === quickAmounts.length - 1 ? 'primary-btn' : 'ghost-btn'} compact-btn" data-start-production="${esc(item.id)}" data-portions="${portions}" aria-label="Start ${portions} portions of ${item.name}" ${state.productionBoard.loading ? 'disabled' : ''}>${index === quickAmounts.length - 1 ? `Full batch · ${portions}` : `Half batch · ${portions}`}</button>`).join('')}</div>
-        <div class="production-custom-portions"><label>Custom portions<input data-custom-portions type="number" min="1" max="10000" step="1" value="${yieldCount}" aria-label="Custom portions for ${esc(item.name)}"></label><button class="ghost-btn compact-btn" data-start-production="${esc(item.id)}" data-use-custom-portions="true" ${state.productionBoard.loading ? 'disabled' : ''}>Start custom batch</button></div><small class="production-scaling-note">Ingredient quantities are scaled to the portions you choose.</small>
-      </div>
-    </article>`;
-  }).join('');
   const cooking = rows.filter(item => item.status === 'Cooking').sort((a, b) => String(a.startedAt || '').localeCompare(String(b.startedAt || '')));
   const ready = rows.filter(item => item.status === 'Ready').sort((a, b) => Number(b.batchNumber) - Number(a.batchNumber)).slice(0, 8);
   const batchTime = value => value ? new Date(value).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }) : 'Historical batch';
@@ -2215,17 +2270,64 @@ function productionBoardPage() {
     <div class="production-batch-number">#${item.batchNumber}</div>
     <div class="production-queue-copy"><strong>${esc(item.recipeName || recipe(item.recipeId)?.name || 'Recipe')}</strong><small>${Number(item.expectedCovers || 0)} portions · Started ${esc(batchTime(item.startedAt))} · ${esc(elapsedTime(item.startedAt))}</small></div>
     <button class="primary-btn compact-btn" data-ready-production="${esc(item.id)}" aria-label="Mark batch ${item.batchNumber} of ${esc(item.recipeName || recipe(item.recipeId)?.name || 'recipe')} ready" ${state.productionBoard.loading ? 'disabled' : ''}>Mark ready</button>
-  </div>`).join('') : '<div class="production-queue-empty">Nothing is cooking right now. Start a batch from a dish card below.</div>';
+  </div>`).join('') : '<div class="production-queue-empty">Nothing is cooking right now. Use Start Production to begin a batch.</div>';
   const readyRows = ready.length ? ready.map(item => `<div class="production-queue-row ready-row"><div class="production-batch-number">#${item.batchNumber}</div><div class="production-queue-copy"><strong>${esc(item.recipeName || recipe(item.recipeId)?.name || 'Recipe')}</strong><small>${item.expectedCovers} portions · Ready ${esc(batchTime(item.readyAt))}</small></div><span class="status status-good">Ready</span></div>`).join('') : '<div class="production-queue-empty">Ready batches will appear here as the kitchen completes them.</div>';
-  const categoryTabs = `<button class="${state.productionCategory === 'All' ? 'active' : ''}" data-production-category="All">All dishes</button>${categories.map(item => `<button class="${state.productionCategory === item ? 'active' : ''}" data-production-category="${esc(item)}">${esc(item)}</button>`).join('')}`;
   const error = state.productionBoard.error ? `<div class="production-board-error" role="alert"><strong>Production queue unavailable</strong><span>${esc(state.productionBoard.error)}</span><button class="ghost-btn compact-btn" data-action="retry-production-board">Try again</button></div>` : '';
   const loading = state.productionBoard.loading ? '<div class="production-queue-empty" role="status">Loading today’s production batches…</div>' : '';
   const readyTabActive = state.productionQueueTab === 'ready';
   const readyTab = readyTabActive
     ? `<section class="panel production-ready-panel" aria-label="Ready production batches"><div class="production-queue-list">${readyRows}</div></section>`
     : '';
-  return `${pageHeader('Buffet kitchen', 'Production board', 'Choose a dish and portions for each numbered cooking batch. Quick buttons start half or full recipe yield; use custom portions for a smaller top-up.', `<button class="ghost-btn" data-action="toggle-production-history">${state.productionHistoryOpen ? 'Hide production history' : 'View production history'}</button>`)}
+  const productionLogs = all('productionLogs');
+  const producedByDish = new Map();
+  productionLogs.forEach(log => {
+    const dish = recipe(log.recipeId);
+    if (!dish) return;
+    const key = dish.id;
+    const current = producedByDish.get(key) || { name: dish.name, portions: 0 };
+    const portions = log.coversProduced != null
+      ? Number(log.coversProduced)
+      : Math.round(Number(log.quantity || 0) * Number(dish.batchYield || 30));
+    current.portions += portions;
+    producedByDish.set(key, current);
+  });
+  const mostProduced = [...producedByDish.values()].sort((a, b) => b.portions - a.portions).slice(0, 3);
+  const wasteByDish = new Map();
+  all('preparedFoodWasteLogs').forEach(log => {
+    const key = String(log.dishName || '').trim();
+    if (!key) return;
+    const current = wasteByDish.get(key) || { name: key, portions: 0 };
+    current.portions += Number(log.quantity || 0);
+    wasteByDish.set(key, current);
+  });
+  const mostWasted = [...wasteByDish.values()].sort((a, b) => b.portions - a.portions).slice(0, 3);
+  const consumedIngredients = new Map();
+  productionLogs.forEach(log => {
+    const dish = recipe(log.recipeId);
+    if (!dish) return;
+    const producedPortions = log.coversProduced != null
+      ? Number(log.coversProduced)
+      : Math.round(Number(log.quantity || 0) * Number(dish.batchYield || 30));
+    dish.ingredients.forEach(line => {
+      const product = ingredient(line.ingredientId);
+      if (!product) return;
+      const scale = producedPortions / Math.max(1, Number(dish.batchYield || 30));
+      const current = consumedIngredients.get(product.id) || { name: product.name, unit: product.unit, quantity: 0 };
+      current.quantity += Number(line.quantity || 0) * scale;
+      consumedIngredients.set(product.id, current);
+    });
+  });
+  const topConsumed = [...consumedIngredients.values()].sort((a, b) => b.quantity - a.quantity).slice(0, 3);
+  const analyticsPanel = ['Administrator', 'Manager'].includes(state.role)
+    ? `<section class="kitchen-analytics-grid" aria-label="Kitchen analytics">
+      <div class="kitchen-analytics-card"><h3>Most produced dishes</h3>${mostProduced.length ? `<ol>${mostProduced.map(item => `<li><span>${esc(item.name)}</span><strong>${Number(item.portions.toFixed(2))} portions</strong></li>`).join('')}</ol>` : '<p>No completed production yet.</p>'}</div>
+      <div class="kitchen-analytics-card"><h3>Most wasted dishes</h3>${mostWasted.length ? `<ol>${mostWasted.map(item => `<li><span>${esc(item.name)}</span><strong>${Number(item.portions.toFixed(2))} portions</strong></li>`).join('')}</ol>` : '<p>No prepared-food waste logged.</p>'}</div>
+      <div class="kitchen-analytics-card"><h3>Ingredient consumption</h3>${topConsumed.length ? `<ol>${topConsumed.map(item => `<li><span>${esc(item.name)}</span><strong>${Number(item.quantity.toFixed(2))} ${esc(item.unit)}</strong></li>`).join('')}</ol>` : '<p>No completed consumption recorded.</p>'}</div>
+    </section>`
+    : '';
+  return `${pageHeader('Buffet kitchen', 'Production board', 'Start, monitor, and complete today’s production batches.', `<div class="production-page-actions"><button class="primary-btn" data-action="open-start-production">+ Start Production</button><button class="ghost-btn" data-action="toggle-production-history">${state.productionHistoryOpen ? 'Hide history' : 'View history'}</button></div>`)}
     <div class="production-date-bar"><div><strong>Today’s service</strong><small>${new Date(`${today()}T12:00:00`).toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' })}</small></div><span class="tag">${cooking.length} cooking · ${rows.filter(item => item.status === 'Ready').length} ready</span></div>
+    ${kitchenProductionSummary(rows)}
     ${error}${loading}
     <section class="panel production-in-progress" aria-label="In progress production batches">
       <div class="panel-header"><div><div class="panel-title">In progress <span class="nav-badge">${cooking.length}</span></div><div class="panel-subtitle">Cooking batches awaiting completion.</div></div></div>
@@ -2236,8 +2338,7 @@ function productionBoardPage() {
       <button type="button" class="${readyTabActive ? 'active' : ''}" aria-pressed="${readyTabActive}" data-production-queue-tab="ready">Ready batches <span>${rows.filter(item => item.status === 'Ready').length}</span></button>
     </div>
     ${readyTab}
-    <div class="category-tabs production-category-tabs">${categoryTabs}</div>
-    <section class="production-dish-grid">${recipeCards || '<div class="panel empty-state">No recipes are set up yet. Ask an Administrator or Manager to create recipe cards first.</div>'}</section>
+    ${analyticsPanel}
     ${state.productionHistoryOpen ? productionHistoryPanel() : ''}`;
 }
 async function loadProductionBoard(force = false) {
@@ -2247,7 +2348,7 @@ async function loadProductionBoard(force = false) {
   board.loading = true;
   board.date = date;
   board.error = '';
-  if (state.view === 'production') render();
+  if (['production', 'recipes'].includes(state.view)) render();
   try {
     board.rows = await window.supabaseRecord.loadProductionBatches(date);
     board.loaded = true;
@@ -2259,9 +2360,477 @@ async function loadProductionBoard(force = false) {
     return false;
   } finally {
     board.loading = false;
-    if (state.view === 'production') render();
+    if (['production', 'recipes'].includes(state.view)) render();
   }
 }
+function kitchenProductionSummary(rows) {
+  const activeRecipes = all('recipes').filter(window.CostTrackLogic.isRecipeActive);
+  const target = activeRecipes.reduce((sum, item) => sum + Number(item.prepTarget || 0), 0);
+  const cooking = rows.filter(item => item.status === 'Cooking').reduce((sum, item) => sum + Number(item.expectedCovers || 0), 0);
+  const ready = rows.filter(item => item.status === 'Ready').reduce((sum, item) => sum + Number(item.expectedCovers || 0), 0);
+  const remaining = Math.max(0, target - ready - cooking);
+  const preparedWaste = all('preparedFoodWasteLogs').filter(item => item.date === today())
+    .reduce((sum, item) => sum + Number(item.quantity || 0), 0);
+  const ingredientWasteEntries = all('wasteLogs').filter(item => item.date === today()).length;
+  const lowStock = all('ingredients').filter(item => item.isActive !== false && ['Out of Stock', 'Low Stock'].includes(stockStatus(item))).length;
+  return `
+    <section class="kitchen-operations-summary" aria-label="Today's kitchen operations summary">
+      <div class="kitchen-summary-card"><small>Today's target</small><strong>${target}</strong><span>portions</span></div>
+      <div class="kitchen-summary-card kitchen-summary-cooking"><small>Cooking</small><strong>${cooking}</strong><span>portions</span></div>
+      <div class="kitchen-summary-card kitchen-summary-ready"><small>Ready</small><strong>${ready}</strong><span>portions</span></div>
+      <div class="kitchen-summary-card"><small>Remaining</small><strong>${remaining}</strong><span>portions</span></div>
+      <div class="kitchen-summary-card"><small>Ingredient waste today</small><strong>${ingredientWasteEntries}</strong><span>entries</span></div>
+      <div class="kitchen-summary-card"><small>Prepared waste today</small><strong>${preparedWaste}</strong><span>portions</span></div>
+      <div class="kitchen-summary-card ${lowStock ? 'kitchen-summary-alert' : ''}"><small>Low / out of stock</small><strong>${lowStock}</strong><span>items</span></div>
+    </section>`;
+}
+
+function kitchenRecipeReadiness(recipe, portions) {
+  if (!recipe || !recipe.ingredients?.length) return { status: 'Insufficient Stock', tone: 'danger', lines: [] };
+  const batchYield = Math.max(1, Number(recipe.batchYield || 30));
+  const scale = Number(portions || 0) / batchYield;
+  const lines = recipe.ingredients.map(line => {
+    const product = ingredient(line.ingredientId);
+    const productBatches = all('inventoryBatches').filter(batch => batch.productId === line.ingredientId);
+    const available = window.CostTrackLogic.availableStock(productBatches, manilaBusinessToday());
+    const fallbackAvailable = productBatches.length ? available : 0;
+    const required = Number((Number(line.quantity || 0) * scale).toFixed(4));
+    const snapshot = inventoryBatchVisibility(productBatches);
+    const firstBatch = snapshot.fefoOrder[0] || null;
+    const expiry = firstBatch?.expirationDate || firstBatch?.expiration_date;
+    const expiryStatus = firstBatch
+      ? window.CostTrackLogic.batchStatus(firstBatch, manilaBusinessToday(), 3)
+      : null;
+    return {
+      product,
+      required,
+      available: fallbackAvailable,
+      firstBatch,
+      expiry,
+      expiryStatus
+    };
+  });
+  const insufficient = lines.some(line => line.available < line.required);
+  const low = !insufficient && lines.some(line => line.product && line.available <= line.product.minimum);
+  return {
+    status: insufficient ? 'Insufficient Stock' : low ? 'Low Stock Warning' : 'Stock Available',
+    tone: insufficient ? 'danger' : low ? 'warning' : 'success',
+    lines
+  };
+}
+
+function kitchenReadinessMarkup(readiness) {
+  const statusLabel = readiness.tone === 'danger'
+    ? 'Insufficient stock'
+    : readiness.tone === 'warning' ? 'Low stock' : 'Ready';
+  const numberText = value => Number(Number(value).toFixed(4)).toLocaleString();
+  const lines = readiness.lines.map(line => {
+    const productName = line.product?.name || 'Unknown ingredient';
+    const unit = line.product?.unit || 'unit';
+    const shortBy = Math.max(0, Number(line.required) - Number(line.available));
+    return `<tr>
+      <th scope="row">${esc(productName)}</th>
+      <td>${numberText(line.required)} ${esc(unit)}</td>
+      <td>${numberText(line.available)} ${esc(unit)}</td>
+      <td>${shortBy > 0
+        ? `<span class="start-production-shortage">${numberText(shortBy)} ${esc(unit)}</span>`
+        : '<span class="start-production-stock-ok">OK</span>'}</td>
+    </tr>`;
+  }).join('');
+  const icon = readiness.tone === 'danger'
+    ? '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3 2.8 20h18.4L12 3Z"></path><path d="M12 9v5m0 3h.01"></path></svg>'
+    : '';
+  return `<section class="start-production-readiness ${readiness.tone}" role="status" aria-live="polite">
+    <div class="start-production-readiness-heading">${icon}<strong>${statusLabel}</strong></div>
+    <div class="start-production-stock-table-wrap">
+      <table class="start-production-stock-table">
+        <thead><tr><th scope="col">Ingredient</th><th scope="col">Needed</th><th scope="col">Available</th><th scope="col">Short by</th></tr></thead>
+        <tbody>${lines || '<tr><td colspan="4">No ingredient requirements are recorded for this dish.</td></tr>'}</tbody>
+      </table>
+    </div>
+  </section>`;
+}
+
+function openStartProductionModal() {
+  if (!window.CostTrackLogic.canPerformInventoryAction(state.role, 'production.log')) {
+    return toast('You do not have permission to start production batches.', 'error');
+  }
+  const recipes = all('recipes').filter(item => window.CostTrackLogic.isRecipeActive(item));
+  if (!recipes.length) return toast('No active recipes are available for production.', 'error');
+  const categories = [...new Set(recipes.map(item => item.category || 'Uncategorized'))]
+    .sort((a, b) => a.localeCompare(b));
+  if (!categories.includes('All')) categories.unshift('All');
+  if (!categories.includes('Uncategorized') && recipes.some(item => !item.category)) categories.push('Uncategorized');
+  let selectedCategory = categories.includes(state.productionCategoryFilter)
+    ? state.productionCategoryFilter
+    : 'All';
+  let selectedRecipeId = '';
+  let selectedBatchType = 'full';
+  let currentStep = 1;
+  const dishOptions = (category, query = '') => recipes
+    .filter(item => (category === 'All' || (item.category || 'Uncategorized') === category)
+      && item.name.toLowerCase().includes(query.trim().toLowerCase()))
+    .sort((a, b) => a.name.localeCompare(b.name));
+  modal('Start Production', `
+    <div class="start-production-wizard" data-start-production-wizard>
+      <input type="hidden" name="category" value="">
+      <input type="hidden" name="recipeId" value="">
+      <input type="hidden" name="batchType" value="">
+      <input type="hidden" name="customPortions" value="">
+      <nav class="start-production-progress" aria-label="Production progress">
+        <ol>
+          <li data-start-progress="1" aria-current="step"><span>1</span> Dish</li>
+          <li data-start-progress="2"><span>2</span> Size and review</li>
+        </ol>
+      </nav>
+      <section class="start-production-step" data-start-step="1">
+        <div class="start-production-step-heading">
+          <h3 tabindex="-1">Choose a dish</h3>
+          <p>Filter by category or search, then select a dish to review its stock.</p>
+        </div>
+        <div class="start-production-dish-controls">
+          <div class="start-production-category-tabs" role="tablist" aria-label="Dish categories" data-start-categories></div>
+          <label class="start-production-search">Search dishes
+            <input type="search" data-start-search placeholder="Search by dish name" autocomplete="off">
+          </label>
+        </div>
+        <div class="start-production-dish-grid" id="start-production-dishes" role="tabpanel" data-start-dishes></div>
+        <p class="start-production-empty" data-start-empty hidden>No dishes match this category and search.</p>
+      </section>
+      <section class="start-production-step" data-start-step="2" hidden>
+        <div class="start-production-step-heading">
+          <h3 tabindex="-1">Size and review</h3>
+          <p>Choose the batch size and confirm the ingredients needed before starting.</p>
+        </div>
+        <div class="start-production-batch-grid" data-start-batches role="radiogroup" aria-label="Batch size"></div>
+        <div class="start-production-custom" data-start-custom hidden>
+          <label for="start-production-custom-portions">Custom portions</label>
+          <div class="start-production-stepper">
+            <button type="button" data-start-stepper="-1" aria-label="Decrease portions">−</button>
+            <input id="start-production-custom-portions" name="customPortionsInput" type="number" min="1" max="10000" step="1" placeholder="Enter portions" inputmode="numeric">
+            <button type="button" data-start-stepper="1" aria-label="Increase portions">+</button>
+          </div>
+          <small class="start-production-custom-hint">Enter a whole number of portions.</small>
+        </div>
+        <div class="start-production-review" data-start-review-content></div>
+      </section>
+    </div>
+  `, 'Start batch', 'start-production-modal');
+  const form = document.querySelector('#modalForm');
+  form.dataset.type = 'start-production';
+  const wizard = form.querySelector('[data-start-production-wizard]');
+  const footer = form.querySelector('.modal-actions');
+  footer.classList.add('start-production-footer');
+  footer.innerHTML = `
+    <div class="start-production-footer-left">
+      <button type="button" class="ghost-btn" data-start-back disabled>← Back</button>
+      <span class="start-production-submit-reason" data-start-submit-reason role="status" aria-live="polite"></span>
+    </div>
+    <div class="start-production-footer-right">
+      <button type="button" class="ghost-btn" data-action="close-modal">Cancel</button>
+      <button type="submit" class="primary-btn modal-submit">Start batch</button>
+    </div>`;
+  const submitButton = footer.querySelector('.modal-submit');
+  const backButton = footer.querySelector('[data-start-back]');
+  const submitReason = footer.querySelector('[data-start-submit-reason]');
+  const customInput = form.elements.customPortionsInput;
+  const numberText = value => Number(Number(value).toFixed(4)).toLocaleString();
+
+  const renderCategories = () => {
+    const tabList = wizard.querySelector('[data-start-categories]');
+    tabList.innerHTML = categories.map((category, index) => {
+      const selected = category === selectedCategory;
+      return `<button type="button" role="tab" id="start-production-category-${index}" aria-controls="start-production-dishes" aria-selected="${selected}" tabindex="${selected ? '0' : '-1'}" class="start-production-category-tab${selected ? ' is-selected' : ''}" data-start-category="${esc(category)}">
+        <span>${esc(category)}</span><span class="start-production-selected-check" aria-hidden="true">✓</span>
+      </button>`;
+    }).join('');
+    const activeIndex = categories.indexOf(selectedCategory);
+    wizard.querySelector('[data-start-dishes]').setAttribute('aria-labelledby', `start-production-category-${activeIndex}`);
+  };
+
+  const renderDishes = () => {
+    const dishGrid = wizard.querySelector('[data-start-dishes]');
+    const query = wizard.querySelector('[data-start-search]').value;
+    const filtered = dishOptions(selectedCategory, query);
+    wizard.querySelector('[data-start-empty]').hidden = filtered.length > 0;
+    dishGrid.innerHTML = filtered.map(item => {
+      const readiness = kitchenRecipeReadiness(item, Number(item.batchYield || 30));
+      const readinessClass = readiness.tone === 'danger' ? 'danger' : readiness.tone === 'warning' ? 'warning' : 'success';
+      const readinessLabel = readiness.tone === 'danger' ? 'Insufficient stock' : readiness.tone === 'warning' ? 'Low stock' : 'Ready';
+      const selected = item.id === selectedRecipeId;
+      return `<button type="button" aria-pressed="${selected}" aria-label="${esc(item.name)}, ${Number(item.batchYield || 30)} portions per full batch, ${readinessLabel}" class="start-production-dish-choice${selected ? ' is-selected' : ''}${readiness.tone === 'danger' ? ' is-insufficient' : ''}" data-start-dish="${esc(item.id)}">
+        <span class="start-production-dish-copy"><strong>${esc(item.name)}</strong><small>${Number(item.batchYield || 30)} portions per full batch</small></span>
+        <span class="start-production-readiness-badge ${readinessClass}">${readinessLabel}</span>
+        <span class="start-production-selected-check" aria-hidden="true">✓</span>
+      </button>`;
+    }).join('');
+  };
+
+  const updateBatchOptions = item => {
+    const yieldCount = Number(item.batchYield || 30);
+    const halfCount = Math.max(1, Math.round(yieldCount / 2));
+    const choices = [
+      { type: 'half', title: 'Half batch', portions: halfCount, detail: 'About half of the full recipe' },
+      { type: 'full', title: 'Full batch', portions: yieldCount, detail: 'Full recipe yield' },
+      { type: 'custom', title: 'Custom', portions: null, detail: 'Set a portion count' }
+    ];
+    wizard.querySelector('[data-start-batches]').innerHTML = choices.map(choice => {
+      const selected = selectedBatchType === choice.type;
+      const readiness = choice.portions ? kitchenRecipeReadiness(item, choice.portions) : null;
+      const insufficient = readiness?.tone === 'danger';
+      return `<button type="button" role="radio" aria-checked="${selected}" tabindex="${selected ? '0' : '-1'}" aria-label="${choice.title}${choice.portions ? `, ${choice.portions} portions` : ''}${insufficient ? ', insufficient stock' : ''}" class="start-production-batch-choice${selected ? ' is-selected' : ''}${insufficient ? ' is-insufficient' : ''}" data-start-batch="${choice.type}">
+        <span class="start-production-batch-copy"><strong>${choice.title}</strong><span>${choice.portions ? `${choice.portions} portions` : 'Enter portions'}</span><small>${choice.detail}</small></span>
+        ${insufficient ? '<span class="start-production-readiness-badge danger">Insufficient stock</span>' : ''}
+        <span class="start-production-selected-check" aria-hidden="true">✓</span>
+      </button>`;
+    }).join('');
+  };
+
+  const setSubmitState = (reason, enabled) => {
+    submitButton.disabled = !enabled;
+    submitReason.textContent = reason;
+    submitReason.hidden = !reason;
+  };
+
+  const showStep = (step, focusTarget = true) => {
+    currentStep = step;
+    wizard.querySelectorAll('[data-start-step]').forEach(section => {
+      section.hidden = Number(section.dataset.startStep) !== currentStep;
+    });
+    wizard.querySelectorAll('[data-start-progress]').forEach(progress => {
+      const progressStep = Number(progress.dataset.startProgress);
+      if (progressStep === currentStep) progress.setAttribute('aria-current', 'step');
+      else progress.removeAttribute('aria-current');
+      progress.classList.toggle('is-complete', progressStep < currentStep);
+    });
+    backButton.disabled = currentStep === 1;
+    if (currentStep === 1) {
+      setSubmitState('Choose a dish to continue.', false);
+      const selected = [...wizard.querySelectorAll('[data-start-dish]')].find(button => button.dataset.startDish === selectedRecipeId);
+      requestAnimationFrame(() => (focusTarget && (selected || wizard.querySelector('[role="tab"][aria-selected="true"]')))?.focus());
+    } else {
+      const selected = wizard.querySelector('[data-start-batch][aria-checked="true"]');
+      requestAnimationFrame(() => (focusTarget && (selected || wizard.querySelector('[data-start-step="2"] h3')))?.focus());
+    }
+  };
+
+  const portionsFor = (item, batchType, customPortions = null) => {
+    const yieldCount = Number(item.batchYield || 30);
+    return batchType === 'half'
+      ? Math.max(1, Math.round(yieldCount / 2))
+      : batchType === 'custom'
+        ? Number(customPortions)
+        : yieldCount;
+  };
+
+  const renderReview = () => {
+    const item = recipe(selectedRecipeId);
+    if (!item) return;
+    const customRaw = customInput.value.trim();
+    const customValue = customRaw === '' ? NaN : Number(customRaw);
+    const portions = portionsFor(item, selectedBatchType, customValue);
+    const portionsValid = Number.isInteger(portions) && portions >= 1 && portions <= 10000;
+    const readiness = portionsValid ? kitchenRecipeReadiness(item, portions) : null;
+    form.elements.category.value = selectedCategory;
+    form.elements.recipeId.value = selectedRecipeId;
+    form.elements.batchType.value = selectedBatchType;
+    form.elements.customPortions.value = selectedBatchType === 'custom' && portionsValid ? String(customValue) : '';
+    const batchLabel = selectedBatchType === 'half' ? 'Half batch' : selectedBatchType === 'full' ? 'Full batch' : 'Custom';
+    const itemCategory = item.category || 'Uncategorized';
+    let stockMessage = '';
+    let submitDisabledReason = '';
+    let banner = '';
+    let lotNote = '';
+    let costSummary = '';
+
+    if (!portionsValid) {
+      stockMessage = 'Enter a whole number of portions from 1 to 10,000.';
+      submitDisabledReason = stockMessage;
+    } else if (readiness.tone === 'danger') {
+      stockMessage = 'Not enough stock for this batch size.';
+      submitDisabledReason = stockMessage;
+      const halfPortions = portionsFor(item, 'half');
+      const halfReadiness = kitchenRecipeReadiness(item, halfPortions);
+      const tryHalf = halfReadiness.tone !== 'danger'
+        ? '<button type="button" class="secondary-btn" data-start-try-half>Try a half batch</button>'
+        : '';
+      const canReceive = window.CostTrackLogic.canPerformInventoryAction(state.role, 'inventory.receive');
+      const receiveLink = canReceive
+        ? '<a href="#receiving" data-start-receive-inventory>Receive inventory</a>'
+        : '';
+      banner = `<div class="start-production-stock-alert" role="alert">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3 2.8 20h18.4L12 3Z"></path><path d="M12 9v5m0 3h.01"></path></svg>
+        <div><strong>Not enough stock to start this batch. Receive inventory or choose a smaller batch.</strong><div class="start-production-stock-actions">${tryHalf}${receiveLink}</div></div>
+      </div>`;
+    } else if (readiness.tone === 'warning') {
+      stockMessage = 'Low stock warning. Review ingredient availability before starting.';
+    }
+
+    if (readiness) {
+      const hasDatedLots = readiness.lines.some(line => line.firstBatch && line.expiry);
+      lotNote = `<p class="start-production-lot-note">${hasDatedLots ? 'Uses the earliest-expiring stock first.' : 'No dated lots on record.'}</p>`;
+      if (['Administrator', 'Manager'].includes(state.role)) {
+        const cost = recipeCostBreakdown(item);
+        costSummary = `<div class="start-production-cost-summary"><span>Estimated batch cost <strong>${money(cost.costPerPortion * portions)}</strong></span><span>Cost per portion <strong>${money(cost.costPerPortion)}</strong></span></div>`;
+      }
+    }
+
+    wizard.querySelector('[data-start-review-content]').innerHTML = `
+      <div class="start-production-review-summary">
+        <div><small>Dish</small><strong>${esc(item.name)}</strong></div>
+        <div><small>Category</small><strong>${esc(itemCategory)}</strong></div>
+        <div><small>Batch size</small><strong>${batchLabel}</strong></div>
+        <div><small>Portions</small><strong>${portionsValid ? numberText(portions) : '—'}</strong></div>
+        <div><small>Daily target</small><strong>${numberText(Number(item.prepTarget || 30))} portions</strong></div>
+      </div>
+      ${costSummary}
+      ${!portionsValid ? `<p class="start-production-input-error" role="alert">${stockMessage}</p>` : ''}
+      ${readiness ? kitchenReadinessMarkup(readiness) : '<p class="start-production-stock-prompt">Enter portions to calculate ingredient needs.</p>'}
+      ${banner}
+      ${lotNote}`;
+    setSubmitState(submitDisabledReason, portionsValid && readiness?.tone !== 'danger');
+  };
+
+  const chooseCategory = (category, focus = false) => {
+    if (!categories.includes(category)) return;
+    if (selectedCategory !== category) {
+      state.modalDirty = true;
+      selectedRecipeId = '';
+      selectedBatchType = 'full';
+      form.elements.category.value = '';
+      form.elements.recipeId.value = '';
+      form.elements.batchType.value = '';
+      form.elements.customPortions.value = '';
+      setSubmitState('Choose a dish to continue.', false);
+    }
+    selectedCategory = category;
+    state.productionCategoryFilter = category;
+    renderCategories();
+    renderDishes();
+    if (focus) wizard.querySelector('[role="tab"][aria-selected="true"]')?.focus();
+  };
+
+  const chooseBatchType = (type, focus = false) => {
+    if (!['half', 'full', 'custom'].includes(type)) return;
+    if (selectedBatchType !== type) state.modalDirty = true;
+    selectedBatchType = type;
+    const item = recipe(selectedRecipeId);
+    if (!item) return;
+    updateBatchOptions(item);
+    wizard.querySelector('[data-start-custom]').hidden = type !== 'custom';
+    renderReview();
+    if (focus || type !== 'custom') wizard.querySelector(`[data-start-batch="${type}"]`)?.focus();
+    else if (type === 'custom') requestAnimationFrame(() => customInput.focus());
+  };
+
+  const selectDish = itemId => {
+    const item = recipe(itemId);
+    if (!item || !window.CostTrackLogic.isRecipeActive(item)) return;
+    state.modalDirty = true;
+    selectedRecipeId = itemId;
+    selectedBatchType = 'full';
+    customInput.value = '';
+    updateBatchOptions(item);
+    wizard.querySelector('[data-start-custom]').hidden = true;
+    renderDishes();
+    renderReview();
+    showStep(2);
+  };
+
+  wizard.addEventListener('click', event => {
+    const categoryButton = event.target.closest('[data-start-category]');
+    if (categoryButton) {
+      chooseCategory(categoryButton.dataset.startCategory, true);
+      return;
+    }
+    const dishButton = event.target.closest('[data-start-dish]');
+    if (dishButton) {
+      selectDish(dishButton.dataset.startDish);
+      return;
+    }
+    const batchButton = event.target.closest('[data-start-batch]');
+    if (batchButton) {
+      chooseBatchType(batchButton.dataset.startBatch);
+      return;
+    }
+    const stepperButton = event.target.closest('[data-start-stepper]');
+    if (stepperButton) {
+      const current = Number(customInput.value || 0);
+      const next = Math.min(10000, Math.max(1, current + Number(stepperButton.dataset.startStepper)));
+      customInput.value = String(next);
+      state.modalDirty = true;
+      renderReview();
+      customInput.focus();
+      return;
+    }
+    if (event.target.closest('[data-start-try-half]')) {
+      chooseBatchType('half');
+      return;
+    }
+    if (event.target.closest('[data-start-receive-inventory]')) {
+      event.preventDefault();
+      closeModal(true);
+      setView('receiving');
+    }
+  });
+
+  wizard.addEventListener('input', event => {
+    if (event.target.matches('[data-start-search]')) {
+      renderDishes();
+      return;
+    }
+    if (event.target === customInput) {
+      state.modalDirty = true;
+      renderReview();
+    }
+  });
+
+  wizard.addEventListener('keydown', event => {
+    if (event.target.matches('[data-start-search]') && event.key === 'Enter') {
+      event.preventDefault();
+      return;
+    }
+    const tab = event.target.closest('[role="tab"]');
+    if (tab && ['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) {
+      event.preventDefault();
+      const currentIndex = categories.indexOf(tab.dataset.startCategory);
+      const nextIndex = event.key === 'Home'
+        ? 0
+        : event.key === 'End'
+          ? categories.length - 1
+          : (currentIndex + (event.key === 'ArrowRight' ? 1 : -1) + categories.length) % categories.length;
+      chooseCategory(categories[nextIndex], true);
+      return;
+    }
+    const radio = event.target.closest('[role="radio"]');
+    if (radio && ['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'Home', 'End'].includes(event.key)) {
+      event.preventDefault();
+      const choices = [...wizard.querySelectorAll('[data-start-batch]')];
+      const currentIndex = choices.indexOf(radio);
+      const nextIndex = event.key === 'Home'
+        ? 0
+        : event.key === 'End'
+          ? choices.length - 1
+          : (currentIndex + (['ArrowRight', 'ArrowDown'].includes(event.key) ? 1 : -1) + choices.length) % choices.length;
+      chooseBatchType(choices[nextIndex].dataset.startBatch, true);
+    }
+  });
+
+  backButton.addEventListener('click', () => {
+    if (currentStep === 2) showStep(1);
+  });
+  form.addEventListener('input', event => {
+    if (event.target !== customInput) state.modalDirty = true;
+  });
+  customInput.addEventListener('change', renderReview);
+
+  renderCategories();
+  renderDishes();
+  setSubmitState('Choose a dish to continue.', false);
+  backButton.disabled = true;
+  requestAnimationFrame(() => wizard.querySelector('[role="tab"][aria-selected="true"]')?.focus());
+}
+
 function productionHistoryPanel() {
   const history = state.productionHistory;
   const recipes = all('recipes');
@@ -2590,7 +3159,7 @@ function userManagementStyles() {
     .user-management-card .card-count { color: var(--teal-dark); font-size: 13px; font-weight: 700; }
     .user-management-card .card-icon { display: grid; width: 44px; height: 44px; place-items: center; border-radius: 14px; background: var(--mint); color: var(--teal-dark); font-size: 22px; }
     .user-management-refresh { display: flex; align-items: center; gap: 8px; }
-    .user-refresh-error, .user-invite-error { display: flex; align-items: center; justify-content: space-between; gap: 14px; border: 1px solid #e4a4a0; border-radius: var(--radius-md); background: var(--red-bg); padding: 13px 15px; color: #873e3a; }
+    .user-refresh-error, .user-invite-error { display: flex; align-items: center; justify-content: space-between; gap: 14px; border: 1px solid var(--danger); border-radius: var(--radius-md); background: var(--red-bg); padding: 13px 15px; color: #873e3a; }
     .user-management-nav { display: flex; align-items: center; justify-content: space-between; gap: 14px; }
     .user-back-link { display: inline-flex; min-height: 44px; align-items: center; gap: 8px; border: 0; background: transparent; padding: 0 6px; color: var(--teal-dark); font-weight: 700; cursor: pointer; }
     .user-management-tabs { display: flex; gap: 6px; overflow-x: auto; border-bottom: 1px solid var(--line); scrollbar-width: thin; }
@@ -2609,7 +3178,7 @@ function userManagementStyles() {
     .user-staff-cell > span:last-child { min-width: 0; }
     .user-staff-cell strong, .user-staff-cell small { display: block; overflow-wrap: anywhere; }
     .user-staff-cell small { margin-top: 3px; color: var(--muted); font-size: 11px; }
-    .user-management-role-badge { display: inline-flex; align-items: center; border: 1px solid #d5e7df; border-radius: 999px; background: #f2faf6; padding: 6px 10px; color: #215e4e; font-size: 11px; font-weight: 700; }
+    .user-management-role-badge { display: inline-flex; align-items: center; border: 1px solid var(--line); border-radius: 999px; background: var(--success-bg); padding: 6px 10px; color: #215e4e; font-size: 11px; font-weight: 700; }
     .user-protected { display: inline-grid; gap: 4px; }
     .user-protected strong { width: max-content; border: 1px solid #d8e0dc; border-radius: 999px; background: #f4f6f5; padding: 5px 9px; color: #495751; font-size: 11px; }
     .user-protected small { max-width: 240px; color: var(--muted); font-size: 11px; line-height: 1.4; }
@@ -2624,7 +3193,7 @@ function userManagementStyles() {
     .user-management-empty { display: grid; justify-items: center; gap: 8px; padding: 36px 16px; text-align: center; }
     .user-management-empty p { max-width: 430px; margin: 0 0 8px; color: var(--muted); }
     .user-management-skeleton { display: grid; gap: 10px; padding: 20px; }
-    .user-management-skeleton span { display: block; height: 18px; border-radius: 8px; background: linear-gradient(90deg, #edf2ef 25%, #f7f9f8 50%, #edf2ef 75%); background-size: 200% 100%; animation: user-management-shimmer 1.3s linear infinite; }
+    .user-management-skeleton span { display: block; height: 18px; border-radius: 8px; background: linear-gradient(90deg, var(--line) 25%, #f7f9f8 50%, var(--line) 75%); background-size: 200% 100%; animation: user-management-shimmer 1.3s linear infinite; }
     .user-management-skeleton span:nth-child(3n + 1) { width: 88%; }
     .user-management-skeleton span:nth-child(3n + 2) { width: 72%; }
     .user-management-skeleton span:nth-child(3n) { width: 95%; }
@@ -2634,7 +3203,7 @@ function userManagementStyles() {
     .user-management-form-modal textarea { min-height: 96px; resize: vertical; }
     .user-management-form-modal .field-help, .user-management-form-modal .role-access-note { color: var(--muted); font-size: 12px; font-weight: 400; line-height: 1.5; }
     .user-management-form-modal .role-access-note { margin: -4px 0 0; }
-    .user-management-form-modal .duplicate-invite-notice { display: grid; gap: 8px; border: 1px solid #e8ca91; border-radius: var(--radius-sm); background: #fff8e9; padding: 12px; color: #75521d; font-size: 12px; line-height: 1.45; }
+    .user-management-form-modal .duplicate-invite-notice { display: grid; gap: 8px; border: 1px solid var(--warning); border-radius: var(--radius-sm); background: #fff8e9; padding: 12px; color: #75521d; font-size: 12px; line-height: 1.45; }
     .user-management-form-modal .duplicate-invite-notice[hidden] { display: none; }
     .user-management-form-modal .modal-actions > button { min-height: 44px; }
     @keyframes user-management-shimmer { to { background-position: -200% 0; } }
@@ -5617,6 +6186,44 @@ async function handleSubmit(form, submitter = null) {
       return;
     }
     successMessage = `${table.id} assigned to ${reservation.name || 'the reservation'}.`;
+  } else if (type === 'start-production') {
+    if (!window.CostTrackLogic.canPerformInventoryAction(state.role, 'production.log')) {
+      restoreModalSubmit(form, 'Start batch');
+      return toast('You do not have permission to start production batches.', 'error');
+    }
+    const selectedRecipe = recipe(data.recipeId);
+    if (!selectedRecipe || !window.CostTrackLogic.isRecipeActive(selectedRecipe)) {
+      restoreModalSubmit(form, 'Start batch');
+      return toast('This dish is no longer available for production.', 'error');
+    }
+    const yieldCount = Number(selectedRecipe.batchYield || 30);
+    const portions = data.batchType === 'half'
+      ? Math.max(1, Math.round(yieldCount / 2))
+      : data.batchType === 'custom'
+        ? Number(data.customPortions)
+        : yieldCount;
+    if (!Number.isInteger(portions) || portions < 1 || portions > 10000) {
+      restoreModalSubmit(form, 'Start batch');
+      return toast('Enter a whole number of portions between 1 and 10,000.', 'error');
+    }
+    if (!form.dataset.requestId) form.dataset.requestId = `BATCH-${window.crypto?.randomUUID?.() || id('QUEUE')}`;
+    const submit = form.querySelector('.modal-submit');
+    if (submit) setButtonBusy(submit, 'Starting batch…');
+    try {
+      await window.supabaseRecord.startProductionBatches(selectedRecipe.id, today(), [{
+        id: form.dataset.requestId,
+        portions
+      }]);
+      invalidateReportData();
+      delete form.dataset.requestId;
+      await loadProductionBoard(true);
+      successMessage = `Batch started: ${portions} portions of ${selectedRecipe.name}.`;
+    } catch (error) {
+      console.error('Production batch start failed.', error);
+      restoreModalSubmit(form, 'Start batch');
+      toast(friendlyRpcError(error), 'error');
+      return;
+    }
   } else if (type === 'recipe') {
     const ingredients = state.recipeDraft.map(item => ({ ingredientId: item.ingredientId, quantity: Number(item.quantity) })).filter(item => item.ingredientId && item.quantity > 0);
     if (!ingredients.length) return toast('Add at least one inventory ingredient.', 'error');
@@ -6881,7 +7488,7 @@ async function syncWithSupabase() {
     Administrator: KEYS,
     Manager: KEYS.filter(key => key !== 'users'),
     'Inventory Clerk': ['ingredients', 'inventoryTransactions', 'inventoryBatches', 'physicalCounts', 'wasteLogs', 'preparedFoodWasteLogs', 'notifications', 'auditLogs'],
-    'Chef / Kitchen Staff': ['ingredients', 'recipes', 'productionLogs', 'wasteLogs', 'preparedFoodWasteLogs', 'notifications', 'auditLogs'],
+    'Chef / Kitchen Staff': ['ingredients', 'inventoryBatches', 'recipes', 'productionLogs', 'wasteLogs', 'preparedFoodWasteLogs', 'notifications', 'auditLogs'],
     Receptionist: ['reservations', 'restaurantTables', 'buffetRates', 'chargeItems', 'packageTiers', 'discounts', 'posSettings', 'shifts', 'cashMovements', 'posBills', 'billLines', 'billPayments', 'reservationDeposits', 'billApprovals', 'notifications', 'auditLogs']
   };
   const collections = collectionsByRole[state.role] || [];
@@ -7289,6 +7896,15 @@ window.addEventListener('resize', () => {
   document.querySelector('#sidebar').innerHTML = nav();
 });
 document.querySelector('#loginScreen').addEventListener('click', async event => {
+  const passwordToggle = event.target.closest('[data-login-password-toggle]');
+  if (passwordToggle) {
+    const input = passwordToggle.closest('.login-field').querySelector('input');
+    const showPassword = input.type === 'password';
+    input.type = showPassword ? 'text' : 'password';
+    passwordToggle.setAttribute('aria-label', showPassword ? 'Hide password' : 'Show password');
+    passwordToggle.setAttribute('aria-pressed', String(showPassword));
+    return;
+  }
   if (event.target.id !== 'resetPasswordButton') return;
   const email = document.querySelector('#loginForm [name="email"]').value.trim();
   if (!email) return login('Enter your work email first, then request a reset link.');
@@ -7577,7 +8193,7 @@ function render() {
     console.error('Realtime subscription setup failed.', error);
     setSyncState(navigator.onLine ? 'reconnecting' : 'offline', error.message);
   });
-  if (state.view === 'production') {
+  if (['production', 'recipes'].includes(state.view)) {
     loadProductionBoard();
   }
   if (state.view === 'users' && state.role === 'Administrator') loadUserInvitations();
@@ -7741,12 +8357,20 @@ function initializeReportCharts() {
     console.error('Chart.js is unavailable; report charts could not be rendered.');
     return;
   }
-  const teal = '#146c63';
-  const palette = ['#146c63', '#a94b14', '#3f5d9b', '#72477e', '#7d5a12', '#9b3b3b', '#36704a'];
+  const rootStyles = getComputedStyle(document.documentElement);
+  const cssColor = (name) => rootStyles.getPropertyValue(name).trim();
+  const accent = cssColor('--accent') || '#B55C12';
+  const espresso = cssColor('--espresso') || '#2C1E16';
+  const sage = cssColor('--success') || '#3B7A57';
+  const danger = cssColor('--danger') || '#C83E37';
+  const info = cssColor('--info') || '#4F6D8A';
+  const sand = cssColor('--line') || '#E8E0D4';
+  const chartText = cssColor('--muted') || '#6B5B4E';
+  const palette = [accent, espresso, sage, danger, info, cssColor('--warning') || '#C9A227'];
   reportChartSpecs.forEach(spec => {
     const canvas = document.getElementById(spec.id);
     if (!canvas) return;
-    const color = teal;
+    const color = spec.title && /loss|cost|void|negative/i.test(spec.title) ? danger : accent;
     const circular = spec.type === 'doughnut';
     try {
       const chart = new window.Chart(canvas, {
@@ -7756,8 +8380,8 @@ function initializeReportCharts() {
           datasets: [{
             label: spec.title,
             data: spec.rows.map(item => Number(item[spec.valueKey])),
-            borderColor: circular ? '#ffffff' : color,
-            backgroundColor: circular ? spec.rows.map((_, index) => palette[index % palette.length]) : spec.type === 'line' ? 'rgba(20,108,99,0.18)' : color,
+            borderColor: circular ? '#FFFFFF' : color,
+            backgroundColor: circular ? spec.rows.map((_, index) => palette[index % palette.length]) : spec.type === 'line' ? `${accent}2E` : color,
             borderWidth: circular ? 2 : 2,
             fill: spec.type === 'line',
             tension: 0.25,
@@ -7773,9 +8397,14 @@ function initializeReportCharts() {
             legend: circular ? {
               display: true,
               position: 'bottom',
-              labels: { color: '#33443d', usePointStyle: true, padding: 14 }
+              labels: { color: chartText, usePointStyle: true, padding: 14 }
             } : { display: false },
             tooltip: {
+              backgroundColor: '#2C1E16',
+              titleColor: '#FFFFFF',
+              bodyColor: '#FFFFFF',
+              borderColor: sand,
+              borderWidth: 1,
               callbacks: {
                 label: context => {
                   const value = typeof context.parsed === 'number' ? context.parsed : context.parsed.y;
@@ -7785,10 +8414,11 @@ function initializeReportCharts() {
             }
           },
           ...(circular ? {} : { scales: {
-            x: { grid: { display: false }, ticks: { maxRotation: 45, autoSkip: true } },
+            x: { grid: { color: sand }, ticks: { color: chartText, maxRotation: 45, autoSkip: true } },
             y: {
               beginAtZero: true,
-              ticks: { callback: value => spec.unit === 'currency' ? money(value) : `${Number(value).toLocaleString()}${spec.unit ? ` ${spec.unit}` : ''}` }
+              grid: { color: sand },
+              ticks: { color: chartText, callback: value => spec.unit === 'currency' ? money(value) : `${Number(value).toLocaleString()}${spec.unit ? ` ${spec.unit}` : ''}` }
             }
           } })
         }
@@ -8150,9 +8780,6 @@ document.addEventListener('input', event => {
     && event.target.closest('#modalForm[data-type="walk-in"]')) {
     refreshWalkInTables(event.target.closest('#modalForm'));
   }
-  if (event.target.matches('[data-custom-portions]')) {
-    event.target.closest('.production-dish-card')?.querySelector('[data-use-custom-portions="true"]')?.removeAttribute('data-request-id');
-  }
 });
 window.addEventListener('beforeunload', event => {
   if (!state.modalDirty) return;
@@ -8258,12 +8885,6 @@ document.addEventListener('click', event => {
 });
 
 document.addEventListener('click', async event => {
-  const category = event.target.closest('[data-production-category]')?.dataset.productionCategory;
-  if (category) {
-    state.productionCategory = category;
-    render();
-    return;
-  }
   const queueTab = event.target.closest('[data-production-queue-tab]')?.dataset.productionQueueTab;
   if (queueTab) {
     state.productionQueueTab = queueTab;
@@ -8288,6 +8909,10 @@ document.addEventListener('click', async event => {
     state.wasteFilters = { from: '', to: '', timeFrom: '', timeTo: '', ingredient: 'All', reason: 'All', staff: 'All' };
     state.query = '';
     render();
+    return;
+  }
+  if (action === 'open-start-production') {
+    openStartProductionModal();
     return;
   }
   if (action === 'toggle-production-history') {
@@ -8320,36 +8945,6 @@ document.addEventListener('click', async event => {
   if (action === 'retry-production-board') {
     state.productionBoard.loaded = false;
     await loadProductionBoard(true);
-    return;
-  }
-  const start = event.target.closest('[data-start-production]');
-  if (start) {
-    if (!window.CostTrackLogic.canPerformInventoryAction(state.role, 'production.log')) {
-      return toast('You do not have permission to start production batches.', 'error');
-    }
-    const card = start.closest('.production-dish-card');
-    const recipeId = start.dataset.startProduction;
-    const portions = start.dataset.useCustomPortions === 'true'
-      ? Number(card?.querySelector('[data-custom-portions]')?.value)
-      : Number(start.dataset.portions);
-    if (!Number.isInteger(portions) || portions < 1 || portions > 10000) return toast('Enter a whole number of portions between 1 and 10,000.', 'error');
-    if (!recipe(recipeId)) return toast('This recipe is no longer available.', 'error');
-    const restoreButton = setButtonBusy(start, 'Starting batch…');
-    if (!restoreButton) return;
-    if (!start.dataset.requestId) start.dataset.requestId = `BATCH-${window.crypto?.randomUUID?.() || id('QUEUE')}`;
-    const batchRequests = [{ id: start.dataset.requestId, portions }];
-    try {
-      await window.supabaseRecord.startProductionBatches(recipeId, today(), batchRequests);
-      invalidateReportData();
-      delete start.dataset.requestId;
-      const refreshed = await loadProductionBoard(true);
-      toast(refreshed ? `Batch started: ${portions} portions of ${recipe(recipeId)?.name || 'this dish'}.` : 'The batch was started, but the queue could not refresh. Use Try again to reload it.', refreshed ? 'success' : 'error');
-    } catch (error) {
-      console.error('Production batch start failed.', error);
-      toast(friendlyRpcError(error), 'error');
-    } finally {
-      restoreButton();
-    }
     return;
   }
   const ready = event.target.closest('[data-ready-production]');

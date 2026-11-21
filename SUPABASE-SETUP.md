@@ -273,7 +273,7 @@ Receptionists can mark a table in **Needs cleaning** as **Available** from Table
 
 ## Shared cashier shift (migration 036)
 
-For an existing database, apply the updated [`036_cashier_one_shift_per_business_day.sql`](./supabase/036_cashier_one_shift_per_business_day.sql). It changes shifts to one shared restaurant shift per Manila business day for Administrators, Managers, and Receptionists. All three roles can see the shared shift and use it for cashier actions. Historical shift rows are preserved; the previous per-user date index is removed because it can fail when older duplicate records exist. If a shift has already been opened or closed today, no role can open another until the next Manila business day.
+For an existing database, apply the updated [`036_cashier_one_shift_per_business_day.sql`](./supabase/036_cashier_one_shift_per_business_day.sql). It changes shifts to one shared restaurant shift per Manila business day for Administrators, Managers, and Receptionists. All three roles can see the shared shift and use it for cashier actions. Historical shift rows are preserved; the previous per-user date index is removed because it can fail when older duplicate records exist. If a shift has already been opened or closed today, no role can open another until the next Manila business day. A shift left open overnight can be closed on a later day; it must be closed before another shift can open.
 
 If an earlier attempt failed while creating the old unique index, rerun this updated migration; the failed transaction should not have changed data. Confirm the migration completes before applying 037.
 

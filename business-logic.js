@@ -45,13 +45,13 @@
     { id: 'CAS-2-F1', seats: 2, tableType: 'Casual', area: 'Front' }
   ];
   const RESERVATION_CALENDAR_STATUS = Object.freeze({
-    Pending: Object.freeze({ eventClass: 'pending', color: '#fff0cc', contrastColor: '#5c3b00' }),
-    Confirmed: Object.freeze({ eventClass: 'confirmed', color: '#e4f4f1', contrastColor: '#12594f' }),
-    Seated: Object.freeze({ eventClass: 'seated', color: '#e3f2df', contrastColor: '#285a2b' }),
-    'Checked-in': Object.freeze({ eventClass: 'checked-in', color: '#e3f2df', contrastColor: '#285a2b' }),
-    Completed: Object.freeze({ eventClass: 'completed', color: '#eeeeee', contrastColor: '#414141' }),
-    Cancelled: Object.freeze({ eventClass: 'cancelled', color: '#fae9e7', contrastColor: '#7c2822' }),
-    'No-show': Object.freeze({ eventClass: 'no-show', color: '#fae9e7', contrastColor: '#7c2822' })
+    Pending: Object.freeze({ eventClass: 'pending', color: '#F5EAB8', contrastColor: '#4A3A00' }),
+    Confirmed: Object.freeze({ eventClass: 'confirmed', color: '#EAF0F5', contrastColor: '#36516A' }),
+    Seated: Object.freeze({ eventClass: 'seated', color: '#EAF0F5', contrastColor: '#36516A' }),
+    'Checked-in': Object.freeze({ eventClass: 'checked-in', color: '#EAF0F5', contrastColor: '#36516A' }),
+    Completed: Object.freeze({ eventClass: 'completed', color: '#E8F1EB', contrastColor: '#24563B' }),
+    Cancelled: Object.freeze({ eventClass: 'cancelled', color: '#F9E9E7', contrastColor: '#8F2F2A' }),
+    'No-show': Object.freeze({ eventClass: 'no-show', color: '#F9E9E7', contrastColor: '#8F2F2A' })
   });
   const PAST_UNRESOLVED_RESERVATION_STATUSES = new Set([
     'Pending', 'Confirmed', 'Seated', 'Checked-in'
