@@ -88,10 +88,22 @@ state.billWizard = {
   billId: '',
   countsEditing: false,
   countsConfirmed: false,
+  countBaseline: { adultCount: 0, seniorCount: 0, kidsCount: 0, compedCount: 0 },
   adultCount: 0,
   seniorCount: 0,
   kidsCount: 0,
-  compedCount: 0
+  compedCount: 0,
+  extraLines: [],
+  discountId: '',
+  discountReason: '',
+  chargeExtraPax: false,
+  notes: '',
+  savedBill: null,
+  savedLines: [],
+  closePreview: null,
+  previewError: '',
+  tenderedAmount: '',
+  paymentKey: ''
 };
 state.reportTab = state.reportTab || 'food_cost';
 state.reportGrouping = state.reportGrouping || 'day';
@@ -4527,7 +4539,7 @@ function reservationStatusClass(status) {
   return ['Confirmed', 'Checked-in', 'Seated', 'Completed'].includes(status) ? 'status-good' : ['Cancelled', 'No-show'].includes(status) ? 'status-out' : 'status-low';
 }
 function reservationMealPeriod(item) {
-  const minutes = parseTime12h(item.time);
+  const minutes = parseTime12h(typeof item === 'string' ? item : item.time);
   if (minutes === null) return 'Other';
   if (minutes >= 11 * 60 && minutes < 16 * 60) return 'Lunch';
   if (minutes >= 16 * 60 && minutes <= 22 * 60) return 'Dinner';
@@ -4712,6 +4724,38 @@ function refreshReservationTimeOptions(form) {
 }
 function reservationForm(item = {}, defaults = {}) {
   const isPastReservation = Boolean(item.id && item.date && item.date < today());
+  if (!isPastReservation) {
+    const packageItems = all('chargeItems').filter(charge => charge.type === 'package' && charge.isPackage && charge.isActive !== false);
+    state.reservationWizard = {
+      step: 1,
+      item,
+      draft: {
+        id: item.id || '',
+        status: item.status || 'Pending',
+        type: item.type || 'Reservation',
+        name: item.name || '',
+        email: item.email || '',
+        phone: item.phone || '',
+        date: item.date || defaults.date || today(),
+        time: item.time || defaults.time || '',
+        adults: Number(item.adults ?? item.guests ?? 2),
+        seniorPwdCount: Number(item.seniorPwdCount || 0),
+        children: Number(item.children || 0),
+        table: item.table || '',
+        occasion: item.occasion || '',
+        packageChargeItemId: item.packageChargeItemId || '',
+        packageTierId: item.packageTierId || '',
+        packagePaxCount: item.packagePaxCount || '',
+        packageOverrideReason: item.packageOverrideReason || '',
+        source: item.source || '',
+        preference: item.preference || 'Any available table',
+        request: item.request || ''
+      },
+      packageItems
+    };
+    renderReservationWizard();
+    return;
+  }
   const canCorrectPast = isPastReservation && ['Administrator', 'Manager'].includes(state.role);
   const isReadOnly = isPastReservation && !canCorrectPast;
   const lockHistoricalFields = isPastReservation ? 'disabled' : '';
@@ -4763,6 +4807,206 @@ function reservationForm(item = {}, defaults = {}) {
     const root = document.querySelector('#modalRoot');
     root.querySelector('[data-action="close-modal"]').textContent = 'Close';
     requestAnimationFrame(() => root.querySelector('.modal')?.focus());
+  }
+}
+function reservationTableState(table, {
+  date = '',
+  time = '',
+  partySize = 0,
+  reservationId = '',
+  selectedTableId = ''
+} = {}) {
+  const reservations = all('reservations');
+  const alreadyAssigned = table.id === selectedTableId;
+  const hasCapacity = Number(table.seats) >= Number(partySize || 0);
+  const needsCleaning = table.status === 'Needs cleaning' && !alreadyAssigned;
+  const occupiedBooking = reservations.find(item =>
+    item.id !== reservationId && item.table === table.id && item.date <= date && item.status === 'Seated'
+  );
+  const conflict = window.CostTrackLogic.tableHasReservationConflict(
+    table.id, date, time, reservations, reservationId, today()
+  );
+  const occupied = Boolean(occupiedBooking || (date === today() && table.status === 'Occupied' && !alreadyAssigned));
+  const canSelect = !conflict && !occupied && (!needsCleaning || alreadyAssigned)
+    && (hasCapacity || alreadyAssigned);
+  const status = occupied ? 'Occupied'
+    : conflict ? 'Reserved soon'
+      : needsCleaning ? 'Needs cleaning'
+        : hasCapacity ? 'Available' : 'Too small';
+  const futureReservation = date && time
+    ? reservations
+      .filter(item => item.id !== reservationId
+        && item.table === table.id
+        && item.date === date
+        && ['Pending', 'Confirmed'].includes(item.status)
+        && (window.CostTrackLogic.parseReservationTime(item.time) ?? -1)
+          >= (window.CostTrackLogic.parseReservationTime(time) ?? Number.MAX_SAFE_INTEGER)
+            + window.CostTrackLogic.MAX_TABLE_STAY_MINUTES)
+      .sort((left, right) =>
+        (window.CostTrackLogic.parseReservationTime(left.time) ?? Number.MAX_SAFE_INTEGER)
+        - (window.CostTrackLogic.parseReservationTime(right.time) ?? Number.MAX_SAFE_INTEGER))[0]
+    : null;
+  return {
+    table,
+    canSelect,
+    hasCapacity,
+    status,
+    conflict,
+    occupiedBooking,
+    futureReservation,
+    details: [
+      table.tableType && table.tableType !== 'Unassigned' ? table.tableType : '',
+      table.area && table.area !== 'Unassigned' ? table.area : ''
+    ].filter(Boolean).join(' · ')
+  };
+}
+function reservationTableCardsMarkup({
+  date,
+  time,
+  partySize,
+  reservationId = '',
+  selectedTableId = '',
+  action = 'reservation-wizard-table'
+} = {}) {
+  const tables = all('restaurantTables')
+    .map(table => reservationTableState(table, { date, time, partySize, reservationId, selectedTableId }))
+    .sort((left, right) => String(left.table.id).localeCompare(String(right.table.id), undefined, { numeric: true }));
+  const statusClass = status => ({
+    'Available': 'is-available',
+    'Reserved soon': 'is-reserved',
+    'Occupied': 'is-occupied',
+    'Needs cleaning': 'is-cleaning',
+    'Too small': 'is-too-small'
+  }[status] || 'is-too-small');
+  const cards = tables.map(({ table, canSelect, hasCapacity, status, details, futureReservation }) => {
+    const selected = table.id === selectedTableId;
+    const note = status === 'Reserved soon'
+      ? 'Conflicts with this seating time'
+      : status === 'Needs cleaning'
+        ? 'Not ready for seating'
+        : status === 'Too small'
+          ? `Party exceeds ${Number(table.seats)} seats`
+          : futureReservation
+            ? `Reserved later at ${futureReservation.time}`
+            : details;
+    return `<button type="button" class="table-choice-card${selected ? ' is-selected' : ''}" data-action="${action}" data-table-id="${esc(table.id)}" aria-pressed="${selected}" ${canSelect && hasCapacity ? '' : 'disabled'}><span class="table-choice-heading"><strong>${esc(table.id)}</strong><span class="table-choice-status ${statusClass(status)}"><i aria-hidden="true"></i>${status}</span></span><span class="table-choice-capacity">${Number(table.seats)} seats</span>${note ? `<small>${esc(note)}</small>` : '<small>&nbsp;</small>'}</button>`;
+  }).join('');
+  return tables.length
+    ? cards
+    : '<p class="table-choice-empty">No tables are set up yet. Add tables before assigning a reservation.</p>';
+}
+function reservationWizardHiddenFields(excludedNames = []) {
+  const draft = state.reservationWizard.draft;
+  const fields = [
+    'id', 'status', 'type', 'name', 'email', 'phone', 'date', 'time',
+    'adults', 'seniorPwdCount', 'children', 'table', 'occasion',
+    'packageChargeItemId', 'packageTierId', 'packagePaxCount',
+    'packageOverrideReason', 'source', 'preference', 'request'
+  ];
+  return fields.filter(name => !excludedNames.includes(name))
+    .map(name => `<input type="hidden" name="${name}" value="${esc(draft[name] ?? '')}">`).join('');
+}
+function renderReservationWizard() {
+  const wizard = state.reservationWizard;
+  if (!wizard) return;
+  const { step, draft, item } = wizard;
+  const existing = Boolean(item.id);
+  const partySize = Number(draft.adults || 0) + Number(draft.seniorPwdCount || 0) + Number(draft.children || 0);
+  const steps = ['Guest details', 'Table selection', 'Extras', 'Review'];
+  const progress = `<ol class="reservation-wizard-progress" aria-label="Reservation progress">${steps.map((label, index) => {
+    const number = index + 1;
+    const current = number === step;
+    const complete = number < step;
+    const content = `<span class="reservation-wizard-step-number">${complete ? '✓' : number}</span><span>${label}</span>`;
+    return `<li class="${current ? 'is-current' : complete ? 'is-complete' : ''}">${complete
+      ? `<button type="button" data-action="reservation-wizard-goto" data-step="${number}" aria-label="Go back to step ${number}: ${label}">${content}</button>`
+      : `<span ${current ? 'aria-current="step"' : ''}>${content}</span>`}</li>`;
+  }).join('')}</ol>`;
+  const hidden = excluded => reservationWizardHiddenFields(excluded);
+  const countFields = `<div class="form-grid reservation-count-grid"><label>Adults<input name="adults" type="number" min="0" max="1000" step="1" value="${esc(draft.adults)}" required></label><label>Senior / PWD<input name="seniorPwdCount" type="number" min="0" max="1000" step="1" value="${esc(draft.seniorPwdCount)}" required></label><label>Kids<input name="children" type="number" min="0" max="1000" step="1" value="${esc(draft.children)}" required></label></div>`;
+  const timeOptions = reservationTimeOptionsMarkup(draft.date, draft.time, item);
+  const sourceOptions = ['', 'Website', 'Phone', 'Facebook', 'Walk-in', 'Other']
+    .map(source => `<option value="${esc(source)}" ${String(draft.source || '') === source ? 'selected' : ''}>${source || 'Not specified'}</option>`).join('');
+  const packageOptions = wizard.packageItems.map(charge =>
+    `<option value="${esc(charge.id)}" ${draft.packageChargeItemId === charge.id ? 'selected' : ''}>${esc(charge.name)}</option>`
+  ).join('');
+  const tierOptions = all('packageTiers').filter(tier => tier.isActive !== false).map(tier =>
+    `<option value="${esc(tier.id)}" ${draft.packageTierId === tier.id ? 'selected' : ''}>${esc(tier.name)} · ${money(tier.basePrice)} / pax</option>`
+  ).join('');
+  const receptionistWalkIn = draft.type === 'Walk-in' && state.role === 'Receptionist';
+  const packageDisabled = receptionistWalkIn ? 'disabled' : '';
+  const packageOverrideField = draft.type === 'Walk-in' && ['Manager', 'Administrator'].includes(state.role)
+    ? `<label class="full">Manager override reason<textarea name="packageOverrideReason" minlength="10" maxlength="500">${esc(draft.packageOverrideReason)}</textarea><small class="field-help">Required when adding or changing a Walk-in event package; saved to the package override audit log.</small></label>`
+    : '';
+  const timeHelp = '<small class="field-help">Each booking has a two-hour window. Choose a start from 10:00 AM through 7:00 PM so it ends by closing at 9:00 PM. Past times today are unavailable.</small>';
+  let content = progress;
+  let excluded = [];
+  let submitLabel = step < 4 ? 'Continue' : existing ? 'Save changes' : 'Create Reservation';
+  if (step === 1) {
+    excluded = ['name', 'email', 'phone', 'date', 'time', 'adults', 'seniorPwdCount', 'children'];
+    content += `<section class="reservation-wizard-panel"><div class="reservation-wizard-heading"><div><p class="eyebrow">Step 1 of 4</p><h3>Guest details</h3></div><p>Capture the guest and seating details first.</p></div><div class="form-grid"><label>Guest name<input name="name" value="${esc(draft.name)}" required autocomplete="name"></label><label>Phone<input name="phone" type="tel" value="${esc(draft.phone)}" autocomplete="tel"></label><label>Email<input name="email" type="email" value="${esc(draft.email)}" autocomplete="email"></label><label>Date<input name="date" type="date" min="${today()}" value="${esc(draft.date)}" required></label><label>Time<select name="time" required>${timeOptions}</select>${timeHelp}</label></div><div class="reservation-party-summary" aria-live="polite"><strong>Total guests <span data-reservation-step-total>${partySize}</span></strong><span data-reservation-step-meal>${esc(draft.time ? reservationMealPeriod(draft.time) : 'Choose a time')}</span></div>${countFields}</section>${hidden(excluded)}`;
+  } else if (step === 2) {
+    excluded = ['table'];
+    const selected = draft.table
+      ? reservationTableState(all('restaurantTables').find(table => table.id === draft.table) || { id: draft.table, seats: 0 }, {
+        date: draft.date, time: draft.time, partySize, reservationId: draft.id, selectedTableId: draft.table
+      })
+      : null;
+    const feedback = !selected
+      ? '<span class="is-neutral">Choose a suitable table or leave the reservation unassigned.</span>'
+      : !selected.hasCapacity
+        ? `<span class="is-warning">Table capacity exceeded: ${Number(selected.table.seats)} seats for ${partySize} guests.</span>`
+        : selected.status === 'Occupied' || selected.status === 'Reserved soon' || selected.status === 'Needs cleaning'
+          ? `<span class="is-warning">This table is ${esc(selected.status.toLowerCase())} for the selected time. Choose another table or clear the assignment.</span>`
+          : '<span class="is-success">Table can accommodate this party.</span>';
+    content += `<section class="reservation-wizard-panel"><div class="reservation-wizard-heading"><div><p class="eyebrow">Step 2 of 4</p><h3>Select a table</h3></div><p>${partySize} guests · ${esc(reservationDateLabel(draft.date))} at ${esc(draft.time || 'time not set')}</p></div><div class="reservation-capacity-feedback" aria-live="polite">${feedback}</div><div class="table-choice-grid">${reservationTableCardsMarkup({ date: draft.date, time: draft.time, partySize, reservationId: draft.id, selectedTableId: draft.table })}</div><button type="button" class="ghost-btn reservation-unassigned-button" data-action="reservation-wizard-table" data-table-id="" aria-pressed="${!draft.table}">Leave unassigned</button></section>${hidden(excluded)}`;
+  } else if (step === 3) {
+    excluded = ['occasion', 'packageChargeItemId', 'packageTierId', 'packagePaxCount', 'packageOverrideReason', 'source', 'preference', 'request'];
+    content += `<section class="reservation-wizard-panel"><div class="reservation-wizard-heading"><div><p class="eyebrow">Step 3 of 4</p><h3>Reservation extras</h3></div><p>Optional information can be added now or left blank.</p></div><div class="form-grid"><label>Occasion<input name="occasion" value="${esc(draft.occasion)}"></label><label>Source<select name="source">${sourceOptions}</select></label><label>Seating preference<input name="preference" value="${esc(draft.preference)}"></label><label>Package<select name="packageChargeItemId" ${packageDisabled}><option value="">No package booked</option>${packageOptions}</select></label><label>Package tier<select name="packageTierId" ${packageDisabled}><option value="">Choose a tier</option>${tierOptions}</select></label><label>Booked pax<input name="packagePaxCount" type="number" min="1" max="1000" step="1" value="${esc(draft.packagePaxCount)}" ${packageDisabled}></label>${packageOverrideField}<label class="full">Special requests<textarea name="request">${esc(draft.request)}</textarea></label></div><small class="field-help">${receptionistWalkIn ? 'Event packages cannot be added to Walk-ins by Receptionists. A Manager or Administrator must enter an override reason.' : 'Package price is charged as food revenue. Additional guests are suggested on the bill.'}</small></section>${hidden(excluded)}`;
+  } else {
+    excluded = [];
+    const table = draft.table ? all('restaurantTables').find(entry => entry.id === draft.table) : null;
+    const reviewRows = [
+      ['Guest', draft.name || 'Not provided'],
+      ['Phone', draft.phone || 'Not provided'],
+      ['Email', draft.email || 'Not provided'],
+      ['Date', reservationDateLabel(draft.date)],
+      ['Time', draft.time || 'Not set'],
+      ['Guests', `${partySize} total (${Number(draft.adults || 0)} adults, ${Number(draft.seniorPwdCount || 0)} senior/PWD, ${Number(draft.children || 0)} kids)`],
+      ['Table', table ? `${table.id} · ${Number(table.seats)} seats` : 'Unassigned'],
+      ['Occasion', draft.occasion || 'Not specified'],
+      ['Package', draft.packageChargeItemId ? wizard.packageItems.find(entry => entry.id === draft.packageChargeItemId)?.name || 'Selected package' : 'No package booked'],
+      ['Package tier', draft.packageTierId ? all('packageTiers').find(entry => entry.id === draft.packageTierId)?.name || 'Selected tier' : 'Not specified'],
+      ['Source', draft.source || 'Not specified'],
+      ['Seating preference', draft.preference || 'Not specified'],
+      ['Special requests', draft.request || 'None']
+    ];
+    content += `<section class="reservation-wizard-panel"><div class="reservation-wizard-heading"><div><p class="eyebrow">Step 4 of 4</p><h3>Review &amp; confirm</h3></div><p>Check the details before saving.</p></div><dl class="reservation-review-list">${reviewRows.map(([label, value]) => `<div><dt>${label}</dt><dd>${esc(value)}</dd></div>`).join('')}</dl><div class="reservation-review-edit"><button type="button" class="ghost-btn" data-action="reservation-wizard-goto" data-step="1">Edit guest details</button><button type="button" class="ghost-btn" data-action="reservation-wizard-goto" data-step="2">Edit table</button><button type="button" class="ghost-btn" data-action="reservation-wizard-goto" data-step="3">Edit extras</button></div></section>${hidden(excluded)}`;
+  }
+  const title = existing ? 'Update reservation' : 'New reservation';
+  modal(title, content, submitLabel, 'reservation-wizard-modal');
+  const form = document.querySelector('#modalForm');
+  form.dataset.type = 'reservation';
+  form.dataset.id = draft.id || '';
+  form.dataset.reservationType = draft.type || 'Reservation';
+  form.dataset.reservationWizardStep = String(step);
+  form.querySelector('[name="status"]').value = draft.status || 'Pending';
+  form.querySelector('[name="type"]').value = draft.type || 'Reservation';
+  if (step === 2 && draft.table) {
+    const selected = all('restaurantTables').find(table => table.id === draft.table);
+    const selectedState = selected && reservationTableState(selected, {
+      date: draft.date, time: draft.time, partySize, reservationId: draft.id, selectedTableId: draft.table
+    });
+    const submit = form.querySelector('.modal-submit');
+    if (submit && (!selectedState || !selectedState.canSelect || !selectedState.hasCapacity)) submit.disabled = true;
+  }
+  const backButton = document.createElement('button');
+  if (step > 1) {
+    backButton.type = 'button';
+    backButton.className = 'ghost-btn';
+    backButton.dataset.action = 'reservation-wizard-back';
+    backButton.textContent = 'Back';
+    form.querySelector('.modal-actions .pos-wizard-footer-left')?.append(backButton);
   }
 }
 function walkInTableOptions(partySize = 0, date = today(), time = null) {
@@ -4821,14 +5065,137 @@ function walkInReservationWarning(tableId, booking) {
   }
   return `Table ${tableId} is reserved for ${guest} at ${booking?.time || 'the scheduled time'}; assigning this walk-in may cause an overlap.`;
 }
+function walkInTableList(partySize, date, time) {
+  const reservations = all('reservations');
+  const availableIds = new Set(walkInTableOptions(partySize, date, time).tables.map(table => table.id));
+  const insideHours = window.CostTrackLogic.isReservationTimeWithinOpenHours(time);
+  const start = window.CostTrackLogic.parseReservationTime(time);
+  return all('restaurantTables').map(table => {
+    const conflict = window.CostTrackLogic.tableReservationConflict(table.id, date, time, reservations, '', today());
+    const occupiedBooking = reservations.find(item =>
+      item.table === table.id && item.date <= date && item.status === 'Seated'
+    );
+    const futureReservation = !conflict && start !== null
+      ? reservations.filter(item =>
+        item.table === table.id
+        && item.date === date
+        && ['Pending', 'Confirmed'].includes(item.status)
+        && (window.CostTrackLogic.parseReservationTime(item.time) ?? -1)
+          >= start + window.CostTrackLogic.MAX_TABLE_STAY_MINUTES
+      ).sort((left, right) =>
+        (window.CostTrackLogic.parseReservationTime(left.time) ?? Number.MAX_SAFE_INTEGER)
+        - (window.CostTrackLogic.parseReservationTime(right.time) ?? Number.MAX_SAFE_INTEGER))[0]
+      : null;
+    const hasCapacity = Number(table.seats) >= Number(partySize || 0);
+    const status = occupiedBooking || table.status === 'Occupied' ? 'Occupied'
+      : conflict ? 'Reserved soon'
+        : table.status === 'Needs cleaning' ? 'Needs cleaning'
+          : !hasCapacity ? 'Too small'
+            : insideHours ? 'Available' : 'Unavailable';
+    const canSelect = availableIds.has(table.id) && table.status !== 'Occupied';
+    return {
+      table,
+      canSelect,
+      hasCapacity,
+      status,
+      conflict,
+      futureReservation,
+      details: [table.tableType, table.area].filter(value => value && value !== 'Unassigned').join(' · ')
+    };
+  }).sort((left, right) =>
+    String(left.table.id).localeCompare(String(right.table.id), undefined, { numeric: true }));
+}
+function walkInTableCardsMarkup(tables, selectedTableId) {
+  const statusClass = status => ({
+    'Available': 'is-available',
+    'Reserved soon': 'is-reserved',
+    'Occupied': 'is-occupied',
+    'Needs cleaning': 'is-cleaning',
+    'Too small': 'is-too-small',
+    'Unavailable': 'is-too-small'
+  }[status] || 'is-too-small');
+  if (!tables.length) return '<p class="table-choice-empty">No tables are configured yet.</p>';
+  return tables.map(({ table, canSelect, status, details, futureReservation, conflict }) => {
+    const selected = table.id === selectedTableId;
+    const note = status === 'Reserved soon'
+      ? `Reserved at ${conflict?.time || 'the selected time'}`
+      : status === 'Needs cleaning'
+        ? 'Needs cleaning'
+        : status === 'Too small'
+          ? `Capacity ${Number(table.seats)}`
+          : status === 'Unavailable'
+            ? 'Outside seating hours'
+          : status === 'Occupied'
+            ? 'Currently occupied'
+            : futureReservation
+              ? `Reserved later at ${futureReservation.time}`
+              : details;
+    return `<button type="button" class="table-choice-card${selected ? ' is-selected' : ''}" data-action="select-walkin-table" data-table-id="${esc(table.id)}" aria-pressed="${selected}" ${canSelect ? '' : 'disabled'}><span class="table-choice-heading"><strong>${esc(table.id)}</strong><span class="table-choice-status ${statusClass(status)}"><i aria-hidden="true"></i>${status}</span></span><span class="table-choice-capacity">${Number(table.seats)} seats</span>${note ? `<small>${esc(note)}</small>` : '<small>&nbsp;</small>'}</button>`;
+  }).join('');
+}
+function walkInGuestTotal(form) {
+  return ['adults', 'seniorPwdCount', 'children']
+    .reduce((sum, name) => sum + Number(form?.elements?.[name]?.value || 0), 0);
+}
+function updateWalkInSummary(form, tables) {
+  const selectedTableId = form.elements.table.value;
+  const selected = tables.find(entry => entry.table.id === selectedTableId);
+  const setSummary = (name, value) => {
+    const target = form.querySelector(`[data-walkin-summary-${name}]`);
+    if (target) target.textContent = String(value);
+  };
+  const total = walkInGuestTotal(form);
+  const seatingBadge = form.querySelector('.walk-in-seating-badge');
+  if (seatingBadge) {
+    const ready = Boolean(selected && selected.canSelect && selected.hasCapacity && total > 0);
+    seatingBadge.classList.toggle('is-ready', ready);
+    seatingBadge.lastChild.textContent = ready ? 'Ready to seat' : selected ? 'Check table' : 'Choose a table';
+  }
+  setSummary('adults', Number(form.elements.adults.value || 0));
+  setSummary('seniors', Number(form.elements.seniorPwdCount.value || 0));
+  setSummary('kids', Number(form.elements.children.value || 0));
+  setSummary('total', total);
+  setSummary('name', String(form.elements.name.value || '').trim() || form.dataset.generatedGuestName);
+  setSummary('table', selected ? selected.table.id : 'Choose a table');
+  setSummary('capacity', selected ? `${Number(selected.table.seats)} seats` : '—');
+  setSummary('time', form.dataset.time);
+  setSummary('meal', reservationMealPeriod(form.dataset.time));
+  const feedback = form.querySelector('[data-walkin-capacity-feedback]');
+  const message = form.querySelector('[data-walkin-table-message]');
+  if (!selectedTableId) {
+    if (feedback) {
+      feedback.className = 'walk-in-capacity-feedback is-neutral';
+      feedback.textContent = total ? 'Select an available table to check capacity.' : 'Enter the party size and select a table.';
+    }
+    if (message) message.textContent = tables.some(entry => entry.canSelect)
+      ? 'Select a green Available table. Reserved or occupied tables cannot be assigned.'
+      : 'No suitable table is currently available for this party and seating window.';
+  } else if (!selected || !selected.canSelect || !selected.hasCapacity) {
+    if (feedback) {
+      feedback.className = 'walk-in-capacity-feedback is-warning';
+      feedback.textContent = selected && !selected.hasCapacity
+        ? `Table capacity exceeded: ${Number(selected.table.seats)} seats for ${total} guests.`
+        : `Table ${selectedTableId} is no longer available. Choose another table.`;
+    }
+    if (message) message.textContent = 'The selected table is not suitable for this party.';
+  } else {
+    if (feedback) {
+      feedback.className = 'walk-in-capacity-feedback is-success';
+      feedback.textContent = `Table can accommodate this party of ${total}.`;
+    }
+    if (message) message.textContent = selected.futureReservation
+      ? `Table is available now and reserved later at ${selected.futureReservation.time}.`
+      : 'Table is ready for seating.';
+  }
+}
 function walkInForm() {
   const now = new Date();
   const time = window.CostTrackLogic.formatReservationTime(now.getHours() * 60 + now.getMinutes());
   if (!window.CostTrackLogic.isReservationTimeWithinOpenHours(time)) {
     return toast('Walk-ins must start early enough to finish by closing. The latest seating time is 7:00 PM.', 'error');
   }
-  const available = walkInTableOptions();
-  const tableMessage = `<small class="field-help walk-in-table-message ${available.tables.length ? 'is-hidden' : ''}">No safe table is currently suitable for this party and seating window. Conflicting reservations are shown as disabled options.</small>`;
+  const date = today();
+  const available = walkInTableList(0, date, time);
   const counts = [
     ['Adults', 'adults'],
     ['Senior / PWD', 'seniorPwdCount'],
@@ -4838,36 +5205,52 @@ function walkInForm() {
     `<label>${label}<input name="${name}" type="number" min="0" max="1000" step="1" value="0" required></label>`
   ).join('');
   const hasOpenShift = all('shifts').some(shift => shift.status === 'Open');
-  modal('Record walk-in', `<div class="form-grid">${countFields}<label>Table<select name="table" required ${available.markup ? '' : 'disabled'}><option value="">Select table</option>${available.markup}</select>${tableMessage}</label></div><div class="form-grid"><label>Guest name (optional)<input name="name" maxlength="160" value="Walk-in guest" autocomplete="name"></label><label>Phone (optional)<input name="phone" type="tel" maxlength="40" autocomplete="tel"></label><label>Email (optional)<input name="email" type="email" maxlength="254" autocomplete="email"></label></div><label>Notes<textarea name="notes"></textarea><small class="field-help">Seated time and meal period are recorded automatically. Tables must fit the total covers and have no overlapping two-hour booking.</small></label><div class="walk-in-billing-action"><button type="submit" class="primary-btn" data-walk-in-action="seat-and-open"${available.tables.length && hasOpenShift ? '' : ' disabled'}>Seat and open bill</button><small class="field-help">${hasOpenShift ? 'The bill opens with these same head counts and remains unpaid until you close it.' : 'An open cashier shift is required to create the bill. You can seat only, or open a shift and try again.'}</small></div>`, 'Seat only');
+  const generatedName = `Walk-In Guest #${Math.floor(10000 + Math.random() * 90000)}`;
+  modal('Record walk-in', `<div class="walk-in-layout"><section class="walk-in-entry"><div class="walk-in-section-heading"><div><p class="eyebrow">Quick seating</p><h3>Party details</h3></div><span class="walk-in-seating-badge"><i aria-hidden="true"></i>Ready to seat</span></div><div class="form-grid walk-in-count-grid">${countFields}</div><div class="form-grid walk-in-contact-grid"><label>Guest name <span class="field-help">(optional)</span><input name="name" maxlength="160" autocomplete="name" placeholder="Leave blank to create ${esc(generatedName)}"></label><label>Phone <span class="field-help">(optional)</span><input name="phone" type="tel" maxlength="40" autocomplete="tel"></label><label>Email <span class="field-help">(optional)</span><input name="email" type="email" maxlength="254" autocomplete="email"></label></div><div class="walk-in-table-section"><div class="walk-in-section-heading"><div><h3>Choose a table</h3><p class="field-help">Cards update as the guest count changes.</p></div><div class="walk-in-table-legend"><span class="is-available"><i></i>Available</span><span class="is-reserved"><i></i>Reserved soon</span><span class="is-occupied"><i></i>Occupied</span></div></div><div class="walk-in-table-grid" data-walkin-table-grid>${walkInTableCardsMarkup(available, '')}</div><p class="field-help walk-in-table-message" data-walkin-table-message aria-live="polite"></p></div><label class="walk-in-notes-field">Notes<textarea name="notes" rows="2"></textarea></label><div class="walk-in-billing-action"><button type="submit" class="primary-btn" data-walk-in-action="seat-and-open" disabled>Seat and open bill</button><small class="field-help">${hasOpenShift ? 'The bill opens with these same head counts and remains unpaid until you close it.' : 'An open cashier shift is required to create the bill. You can seat only, or open a shift and try again.'}</small></div></section><aside class="walk-in-summary" aria-label="Walk-in summary"><p class="eyebrow">Submission preview</p><h3>Walk-in summary</h3><dl><div><dt>Adults</dt><dd data-walkin-summary-adults>0</dd></div><div><dt>Seniors / PWD</dt><dd data-walkin-summary-seniors>0</dd></div><div><dt>Kids</dt><dd data-walkin-summary-kids>0</dd></div><div class="walk-in-summary-total"><dt>Total guests</dt><dd data-walkin-summary-total>0</dd></div><div><dt>Guest</dt><dd data-walkin-summary-name>${esc(generatedName)}</dd></div><div><dt>Selected table</dt><dd data-walkin-summary-table>Choose a table</dd></div><div><dt>Capacity</dt><dd data-walkin-summary-capacity>—</dd></div><div><dt>Meal period</dt><dd data-walkin-summary-meal>${esc(reservationMealPeriod(time))}</dd></div><div><dt>Seating time</dt><dd data-walkin-summary-time>${esc(time)}</dd></div></dl><p class="walk-in-capacity-feedback is-neutral" data-walkin-capacity-feedback aria-live="polite">Enter the party size and select a table.</p></aside></div><input type="hidden" name="table" value=""><input type="hidden" name="date" value="${esc(date)}"><input type="hidden" name="time" value="${esc(time)}">`, 'Seat only', 'walk-in-quick-modal');
   const form = document.querySelector('#modalForm');
   form.dataset.type = 'walk-in';
   form.dataset.walkInKey = id('WALKIN');
+  form.dataset.date = date;
+  form.dataset.time = time;
+  form.dataset.generatedGuestName = generatedName;
   form.dataset.hasOpenShift = String(hasOpenShift);
-  form.dataset.hasAvailableTable = String(Boolean(available.tables.length));
+  form.dataset.hasAvailableTable = String(available.some(entry => entry.canSelect));
+  refreshWalkInTables(form);
   const submit = form.querySelector('.modal-submit');
-  if (submit) submit.disabled = !available.tables.length;
   submit?.classList.replace('primary-btn', 'ghost-btn');
+  const clockTimer = window.setInterval(() => {
+    if (!form.isConnected) return window.clearInterval(clockTimer);
+    refreshWalkInTimestamp(form);
+  }, 15000);
 }
 function refreshWalkInTables(form) {
-  const select = form?.elements?.table;
-  const partySize = ['adults', 'seniorPwdCount', 'children']
-    .reduce((sum, name) => sum + Number(form?.elements?.[name]?.value || 0), 0);
-  if (!select) return;
-  const available = walkInTableOptions(partySize);
-  const selected = select.value;
-  select.innerHTML = `<option value="">${available.tables.length ? 'Select table' : 'No available table'}</option>${available.markup}`;
-  select.disabled = !available.markup;
-  if (available.tables.some(table => table.id === selected)) select.value = selected;
-  const message = select.parentElement.querySelector('.walk-in-table-message');
-  if (message) {
-    message.textContent = 'No safe table is currently suitable for this party and seating window. Conflicting reservations are shown as disabled options.';
-    message.classList.toggle('is-hidden', Boolean(available.tables.length));
-  }
-  form.dataset.hasAvailableTable = String(Boolean(available.tables.length));
+  if (!form?.elements?.table) return;
+  const partySize = walkInGuestTotal(form);
+  const tables = walkInTableList(partySize, form.dataset.date, form.dataset.time);
+  const selected = form.elements.table.value;
+  form.querySelector('[data-walkin-table-grid]').innerHTML = walkInTableCardsMarkup(tables, selected);
+  const selectedState = tables.find(entry => entry.table.id === selected);
+  const validSelection = Boolean(selected && partySize > 0 && selectedState?.canSelect && selectedState.hasCapacity);
+  form.dataset.hasAvailableTable = String(tables.some(entry => entry.canSelect));
+  form.dataset.hasValidSelection = String(validSelection);
   const submit = form.querySelector('.modal-submit');
-  if (submit) submit.disabled = !available.tables.length;
+  if (submit) submit.disabled = !validSelection;
   const seatAndOpen = form.querySelector('[data-walk-in-action="seat-and-open"]');
-  if (seatAndOpen) seatAndOpen.disabled = !available.tables.length || form.dataset.hasOpenShift !== 'true';
+  if (seatAndOpen) seatAndOpen.disabled = !validSelection || form.dataset.hasOpenShift !== 'true';
+  updateWalkInSummary(form, tables);
+}
+function refreshWalkInTimestamp(form) {
+  const now = new Date();
+  const date = today();
+  const time = window.CostTrackLogic.formatReservationTime(now.getHours() * 60 + now.getMinutes());
+  const changed = form.dataset.date !== date || form.dataset.time !== time;
+  form.dataset.date = date;
+  form.dataset.time = time;
+  form.elements.date.value = date;
+  form.elements.time.value = time;
+  if (changed) refreshWalkInTables(form);
+  else updateWalkInSummary(form, walkInTableList(walkInGuestTotal(form), date, time));
+  return { now, date, time };
 }
 function rateForm(item = {}) {
   if (!canManageRates()) return toast('Only Administrator and Manager roles can manage buffet rates.', 'error');
@@ -5394,6 +5777,10 @@ function calendarPage() {
   return `${pageHeader('Front of house', 'Reservation calendar', 'Browse bookings by month, week, day, or agenda. Select a date to start a reservation, or select a booking to edit it.', '<span><button class="ghost-btn" data-action="open-walk-in">Record walk-in</button> <button class="primary-btn" data-action="open-reservation">+ New reservation</button></span>')}<div class="panel full-calendar-panel"><div class="full-calendar-filters"><label>Status<select data-reservation-calendar-filter="status">${statusOptions}</select></label><label>Type<select data-reservation-calendar-filter="type">${typeOptions}</select></label><label class="full-calendar-search">Search<input id="reservationCalendarSearch" type="search" value="${esc(state.reservationCalendarQuery)}" placeholder="Guest, email, phone, or table" aria-label="Search reservations"></label><div class="calendar-status-legend" aria-label="Reservation status legend">${statusLegend}<span class="calendar-status-legend-past"><i aria-hidden="true">!</i>Past unresolved</span></div></div><small class="full-calendar-note">Reservations have a two-hour window; the latest start is 7:00 PM so the stay ends by closing at 9:00 PM. Calendar events show the two-hour window, and timed views display 10:00 AM–9:00 PM.</small><div id="reservationFullCalendar" aria-label="Reservations calendar"></div></div>`;
 }
 function restoreModalSubmit(form, label) {
+  if (form.dataset.type === 'walk-in') {
+    restoreWalkInSubmit(form);
+    return;
+  }
   const submit = form.querySelector('.modal-submit');
   if (!submit) return;
   submit.disabled = false;
@@ -5404,14 +5791,14 @@ function restoreModalSubmit(form, label) {
 function restoreWalkInSubmit(form) {
   const seatOnly = form.querySelector('.modal-submit');
   if (seatOnly) {
-    seatOnly.disabled = form.dataset.hasAvailableTable !== 'true';
+    seatOnly.disabled = form.dataset.hasValidSelection !== 'true';
     seatOnly.classList.remove('is-loading');
     seatOnly.removeAttribute('aria-busy');
     seatOnly.textContent = 'Seat only';
   }
   const seatAndOpen = form.querySelector('[data-walk-in-action="seat-and-open"]');
   if (seatAndOpen) {
-    seatAndOpen.disabled = form.dataset.hasAvailableTable !== 'true' || form.dataset.hasOpenShift !== 'true';
+    seatAndOpen.disabled = form.dataset.hasValidSelection !== 'true' || form.dataset.hasOpenShift !== 'true';
     seatAndOpen.classList.remove('is-loading');
     seatAndOpen.removeAttribute('aria-busy');
     seatAndOpen.textContent = 'Seat and open bill';
@@ -5432,8 +5819,8 @@ async function seatAndOpenWalkIn(form) {
   }
 
   const now = new Date();
-  const date = today();
-  const time = window.CostTrackLogic.formatReservationTime(now.getHours() * 60 + now.getMinutes());
+  const date = data.date || today();
+  const time = data.time || window.CostTrackLogic.formatReservationTime(now.getHours() * 60 + now.getMinutes());
   const reservations = all('reservations');
   const occupiedBooking = reservations.find(item =>
     item.table === data.table && item.date <= date && item.status === 'Seated'
@@ -5449,7 +5836,7 @@ async function seatAndOpenWalkIn(form) {
   }
   try {
     const result = await window.supabaseRecord.posSeatAndOpenWalkIn({
-      customerName: String(data.name || '').trim() || 'Walk-in guest',
+      customerName: String(data.name || '').trim() || form.dataset.generatedGuestName,
       phone: String(data.phone || '').trim(),
       email: String(data.email || '').trim(),
       date,
@@ -5490,67 +5877,209 @@ async function seatAndOpenWalkIn(form) {
   }
 }
 async function handleSubmit(form, submitter = null) {
+  if (form.dataset.type === 'walk-in') refreshWalkInTimestamp(form);
   const data = Object.fromEntries(new FormData(form));
   const type = form.dataset.type;
   const editId = form.dataset.id;
-  if (type === 'bill-wizard') {
-    if (form.dataset.screen === '1') return toast('Select a seated party to continue.', 'error');
-    const wizard = state.billWizard;
-    const reservation = all('reservations').find(record => record.id === wizard.reservationId);
-    const counts = [wizard.adultCount, wizard.seniorCount, wizard.kidsCount, wizard.compedCount];
-    if (!counts.every(value => Number.isInteger(Number(value))) || counts.reduce((sum, value) => sum + Number(value), 0) > 1000) {
-      return toast('Enter whole-number head counts totaling no more than 1,000.', 'error');
-    }
-    if (counts.reduce((sum, value) => sum + Number(value), 0) === 0) {
-      return toast('Enter at least one guest.', 'error');
-    }
-    const mismatch = Number(wizard.adultCount) !== Number(reservation?.adults || 0)
-      || Number(wizard.seniorCount) !== Number(reservation?.seniorPwdCount || 0)
-      || Number(wizard.kidsCount) !== Number(reservation?.children || 0);
-    if (mismatch && !wizard.countsConfirmed) return toast('Confirm the changed guest counts before saving.', 'error');
-    const submit = form.querySelector('.modal-submit');
-    if (submit?.dataset.saving === 'true') return;
-    submit?.classList.add('is-loading');
-    submit?.setAttribute('aria-busy', 'true');
-    submit?.setAttribute('disabled', 'true');
-    submit.dataset.saving = 'true';
-    form.dataset.saving = 'true';
-    const originalCounts = `Seating: ${Number(reservation?.adults || 0)} adults, ${Number(reservation?.seniorPwdCount || 0)} senior/PWD, ${Number(reservation?.children || 0)} kids`;
-    const billNote = mismatch ? `${String(reservation?.request || '').trim()} Headcount changed from seating. ${originalCounts}. Bill: ${wizard.adultCount} adults, ${wizard.seniorCount} senior/PWD, ${wizard.kidsCount} kids, ${wizard.compedCount} comped.` : String(reservation?.request || '').trim();
-    try {
-      const result = await window.supabaseRecord.posSaveBill({
-        billId: wizard.billId || null,
-        customerName: reservation?.name || 'Walk-in guest',
-        notes: billNote,
-        reservationId: reservation?.id || null,
-        adultCount: Number(wizard.adultCount),
-        seniorCount: Number(wizard.seniorCount),
-        kidsCount: Number(wizard.kidsCount),
-        compedCount: Number(wizard.compedCount),
-        discountId: null,
-        discountReason: '',
-        extraLines: [],
-        tableId: reservation?.table || null,
-        chargeExtraPax: false,
-        idempotencyKey: wizard.billId ? null : form.dataset.createKey
+  if (type === 'reservation' && form.dataset.reservationWizardStep) {
+    const wizard = state.reservationWizard;
+    const currentStep = Number(form.dataset.reservationWizardStep);
+    if (!wizard || wizard.step !== currentStep) return toast('The reservation form changed. Review the current step and try again.', 'error');
+    Object.assign(wizard.draft, data);
+    if (currentStep === 1) {
+      const existing = all('reservations').find(item => item.id === editId);
+      const dateOrTimeChanged = !existing || data.date !== existing.date || data.time !== existing.time;
+      if (dateOrTimeChanged && window.CostTrackLogic.reservationStartTimeIsInPast(data.date, data.time)) {
+        return toast('That reservation time has already passed. Choose a later time.', 'error');
+      }
+      if (!window.CostTrackLogic.isReservationTimeWithinOpenHours(data.time)) {
+        return toast('Choose a start time from 10:00 AM through 7:00 PM so the two-hour stay ends by closing at 9:00 PM.', 'error');
+      }
+    } else if (currentStep === 2 && wizard.draft.table) {
+      const table = all('restaurantTables').find(entry => entry.id === wizard.draft.table);
+      const partySize = Number(wizard.draft.adults || 0)
+        + Number(wizard.draft.seniorPwdCount || 0)
+        + Number(wizard.draft.children || 0);
+      const selected = table && reservationTableState(table, {
+        date: wizard.draft.date,
+        time: wizard.draft.time,
+        partySize,
+        reservationId: wizard.draft.id,
+        selectedTableId: wizard.draft.table
       });
-      const savedBill = window.supabaseRecord.mapRecord('posBills', result?.bill);
-      if (!savedBill) throw new Error('The bill was saved but the server did not return its updated details.');
-      upsertLocalRecord('posBills', savedBill);
-      const savedLines = (result.lines || []).map(line => window.supabaseRecord.mapRecord('billLines', line));
-      replaceLocalRelatedRecords('billLines', line => line.billId === savedBill.id, savedLines);
-      state.modalDirty = false;
-      closeModal(true);
-      toast(`${savedBill.billNumber || 'Bill'} saved. Subtotal ${money(savedBill.subtotal)} · Balance ${money(savedBill.balanceDue)}.`);
-      render();
-    } catch (error) {
-      console.error('Bill wizard save failed.', error);
-      form.dataset.saving = 'false';
-      submit?.removeAttribute('disabled');
-      submit?.removeAttribute('aria-busy');
-      submit?.classList.remove('is-loading');
-      delete submit?.dataset.saving;
-      toast(friendlyRpcError(error), 'error');
+      if (!selected || !selected.hasCapacity || !selected.canSelect) {
+        return toast('Choose a table that is available and can accommodate this party, or leave the reservation unassigned.', 'error');
+      }
+    } else if (currentStep === 3) {
+      const hasAnyPackageDetail = Boolean(
+        wizard.draft.packageChargeItemId || wizard.draft.packageTierId || wizard.draft.packagePaxCount
+      );
+      if (hasAnyPackageDetail
+        && (!wizard.draft.packageChargeItemId || !wizard.draft.packageTierId
+          || !Number.isInteger(Number(wizard.draft.packagePaxCount))
+          || Number(wizard.draft.packagePaxCount) < 1
+          || Number(wizard.draft.packagePaxCount) > 1000)) {
+        return toast('Choose a package and tier and enter a booked pax count between 1 and 1,000.', 'error');
+      }
+    }
+    if (currentStep < 4) {
+      wizard.step = currentStep + 1;
+      renderReservationWizard();
+      return;
+    }
+  }
+  if (type === 'bill-wizard') {
+    const wizard = state.billWizard;
+    if (wizard.screen === 1) {
+      if (!all('reservations').some(record => record.id === wizard.reservationId && record.status === 'Seated')) {
+        return toast('Select a seated party to continue.', 'error');
+      }
+      wizard.screen = 2;
+      renderBillWizard();
+      return;
+    }
+    if (wizard.screen === 2) {
+      wizard.screen = 3;
+      renderBillWizard();
+      return;
+    }
+    const reservation = all('reservations').find(record => record.id === wizard.reservationId);
+    if (!reservation) return toast('The selected party is no longer available. Return to party selection and refresh.', 'error');
+    if (wizard.screen === 3) {
+      const countNames = ['adultCount', 'seniorCount', 'kidsCount', 'compedCount'];
+      const counts = countNames.map(name => Number(wizard[name] || 0));
+      if (!counts.every(count => Number.isInteger(count) && count >= 0)
+        || counts.reduce((sum, count) => sum + count, 0) > 1000) {
+        return toast('Enter whole-number head counts totaling no more than 1,000.', 'error');
+      }
+      if (counts.reduce((sum, count) => sum + count, 0) === 0) {
+        return toast('Enter at least one guest or extra charge.', 'error');
+      }
+      const discountId = form.elements.discountId.value || null;
+      const discountReason = form.elements.discountReason.value.trim();
+      if (discountId && !discountReason) return toast('Enter a reason for the discount.', 'error');
+      const extraLines = [...form.querySelectorAll('[data-extra-line]')].flatMap(line => {
+        const chargeItemId = line.querySelector('[name="extraChargeItemId"]').value;
+        if (!chargeItemId) return [];
+        return [{
+          line_id: line.querySelector('[name="extraLineId"]').value || null,
+          charge_item_id: chargeItemId,
+          quantity: Number(line.querySelector('[name="extraQuantity"]').value)
+        }];
+      });
+      if (extraLines.some(line => !Number.isFinite(line.quantity) || line.quantity <= 0)) {
+        return toast('Each selected extra needs a quantity greater than zero.', 'error');
+      }
+      const mismatch = Number(wizard.adultCount) !== Number(reservation.adults || 0)
+        || Number(wizard.seniorCount) !== Number(reservation.seniorPwdCount || 0)
+        || Number(wizard.kidsCount) !== Number(reservation.children || 0);
+      if (billWizardCountDifferences(wizard).length && !wizard.countsConfirmed) {
+        return toast('Confirm the changed guest counts on Buffet and package before saving.', 'error');
+      }
+      wizard.discountId = discountId || '';
+      wizard.discountReason = discountReason;
+      wizard.chargeExtraPax = Boolean(form.elements.chargeExtraPax?.checked);
+      wizard.notes = form.elements.notes.value.trim();
+      const originalCounts = `Seating: ${Number(reservation.adults || 0)} adults, ${Number(reservation.seniorPwdCount || 0)} senior/PWD, ${Number(reservation.children || 0)} kids`;
+      const mismatchNote = mismatch
+        ? `Headcount changed from seating. ${originalCounts}. Bill: ${wizard.adultCount} adults, ${wizard.seniorCount} senior/PWD, ${wizard.kidsCount} kids, ${wizard.compedCount} comped.`
+        : '';
+      const baseNotes = String(wizard.notes || '').split('\n')
+        .filter(line => !line.startsWith('Headcount changed from seating.')).join('\n').trim();
+      const notes = [baseNotes, mismatchNote].filter(Boolean).join('\n');
+      if (notes.length > 1000) {
+        return toast('Shorten bill notes to leave room for the required headcount change record (1,000 characters maximum).', 'error');
+      }
+      try {
+        const result = await window.supabaseRecord.posSaveBill({
+          billId: wizard.billId || null,
+          customerName: reservation.name || 'Walk-in guest',
+          notes,
+          reservationId: reservation.id,
+          adultCount: Number(wizard.adultCount),
+          seniorCount: Number(wizard.seniorCount),
+          kidsCount: Number(wizard.kidsCount),
+          compedCount: Number(wizard.compedCount),
+          discountId,
+          discountReason,
+          extraLines,
+          tableId: reservation.table || null,
+          chargeExtraPax: wizard.chargeExtraPax,
+          idempotencyKey: wizard.billId ? null : form.dataset.createKey
+        });
+        const savedBill = window.supabaseRecord.mapRecord('posBills', result?.bill);
+        if (!savedBill) throw new Error('The bill was saved but the server did not return its updated details.');
+        wizard.billId = savedBill.id;
+        wizard.savedBill = savedBill;
+        wizard.countBaseline = {
+          adultCount: Number(savedBill.adultCount ?? wizard.adultCount),
+          seniorCount: Number(savedBill.seniorCount ?? wizard.seniorCount),
+          kidsCount: Number(savedBill.kidsCount ?? wizard.kidsCount),
+          compedCount: Number(savedBill.compedCount ?? wizard.compedCount)
+        };
+        wizard.countsConfirmed = true;
+        wizard.extraLines = extraLines;
+        wizard.savedLines = (result.lines || []).map(line => window.supabaseRecord.mapRecord('billLines', line));
+        rememberLocalChange('posBills', savedBill.id);
+        upsertLocalRecord('posBills', savedBill);
+        wizard.savedLines.forEach(line => rememberLocalChange('billLines', line.id));
+        replaceLocalRelatedRecords('billLines', line => line.billId === savedBill.id, wizard.savedLines);
+        wizard.screen = 4;
+        state.modalDirty = false;
+        await loadBillWizardReview();
+      } catch (error) {
+        console.error('Bill wizard draft save failed.', error);
+        toast(friendlyRpcError(error), 'error');
+      }
+      return;
+    }
+    if (wizard.screen === 4) {
+      const preview = wizard.closePreview;
+      if (!preview) return toast('The server payment preview is unavailable. Retry the preview before payment.', 'error');
+      if (!form.elements.tenderedAmount.value.trim()) {
+        return toast('Enter the cash tendered amount.', 'error');
+      }
+      const tendered = Number(form.elements.tenderedAmount.value);
+      const minimum = Number(preview.balance_after_deposit || 0);
+      if (!Number.isFinite(tendered) || tendered < minimum) {
+        return toast(`Cash tendered must be at least ${money(minimum)}.`, 'error');
+      }
+      if (!wizard.savedBill?.tableId && !reservation.table
+        && !await confirmInApp('This bill has no table linked. Close it anyway?', {
+          title: 'No table linked',
+          confirmLabel: 'Confirm payment'
+        })) return;
+      wizard.tenderedAmount = tendered.toFixed(2);
+      try {
+        const result = await window.supabaseRecord.posCloseBill(
+          wizard.billId, tendered, wizard.paymentKey
+        );
+        const closedBill = window.supabaseRecord.mapRecord('posBills', result?.bill);
+        if (!closedBill) throw new Error('The bill was closed but the server did not return its updated details.');
+        rememberLocalChange('posBills', closedBill.id);
+        upsertLocalRecord('posBills', closedBill);
+        const payment = window.supabaseRecord.mapRecord('billPayments', result?.payment);
+        if (payment) {
+          rememberLocalChange('billPayments', payment.id);
+          upsertLocalRecord('billPayments', payment);
+        }
+        const relatedCollections = ['billPayments'];
+        if (closedBill.reservationId) relatedCollections.push('reservations', 'reservationDeposits');
+        if (closedBill.tableId) relatedCollections.push('restaurantTables');
+        void window.CostTrackLogic.saveThenRefresh(
+          async () => true,
+          () => refreshSavedCollections(relatedCollections),
+          error => showSaveRefreshWarning(relatedCollections, error)
+        );
+        state.modalDirty = false;
+        closeModal(true);
+        toast(`Bill closed. Change due: ${money(Number(result?.payment?.change_amount || 0))}.`);
+        render();
+        printBillingStatement(closedBill.id);
+      } catch (error) {
+        console.error('Bill wizard payment failed.', error);
+        toast(friendlyRpcError(error), 'error');
+      }
     }
     return;
   }
@@ -6011,8 +6540,8 @@ async function handleSubmit(form, submitter = null) {
       return toast(error.message, 'error');
     }
     const now = new Date();
-    const date = today();
-    const time = window.CostTrackLogic.formatReservationTime(now.getHours() * 60 + now.getMinutes());
+    const date = data.date || today();
+    const time = data.time || window.CostTrackLogic.formatReservationTime(now.getHours() * 60 + now.getMinutes());
     const selectedTable = all('restaurantTables').find(table => table.id === data.table);
     if (!window.CostTrackLogic.isReservationTimeWithinOpenHours(time)) {
       restoreModalSubmit(form, 'Record walk-in');
@@ -6036,7 +6565,7 @@ async function handleSubmit(form, submitter = null) {
     }
     const record = {
       id: id('RS'),
-      name: String(data.name || '').trim() || 'Walk-in guest',
+      name: String(data.name || '').trim() || form.dataset.generatedGuestName,
       email: String(data.email || '').trim(),
       phone: String(data.phone || '').trim(),
       date,
@@ -6627,9 +7156,9 @@ function billExtraLineMarkup(line = {}, disabled = false) {
   return `<div class="form-grid pos-extra-line" data-extra-line>
     <input type="hidden" name="extraLineId" value="${esc(line.id || '')}">
     <label class="full">Extra charge<select name="extraChargeItemId" ${disabled ? 'disabled' : ''}>${options}</select></label>
-    <label>Quantity<input name="extraQuantity" type="number" min="0.01" max="10000" step="0.01" value="${Number(line.quantity || 1)}" ${disabled ? 'disabled' : ''}></label>
+    <label>Quantity<div class="pos-extra-quantity"><button type="button" data-extra-quantity-adjust="-1" aria-label="Decrease quantity" ${disabled ? 'disabled' : ''}>−</button><input name="extraQuantity" type="number" min="0.01" max="10000" step="0.01" value="${Number(line.quantity || 1)}" aria-label="Extra quantity" ${disabled ? 'disabled' : ''}><button type="button" data-extra-quantity-adjust="1" aria-label="Increase quantity" ${disabled ? 'disabled' : ''}>+</button></div></label>
     ${line.id ? `<span class="field-help">Saved price: ${money(line.unitPrice)} each. Editing quantity keeps this price snapshot.</span>` : ''}
-    ${disabled ? '' : '<button type="button" class="ghost-btn compact-btn" data-action="remove-bill-extra">Remove extra</button>'}
+    ${disabled ? '' : '<button type="button" class="pos-extra-remove" data-action="remove-bill-extra" aria-label="Remove extra">× <span>Remove</span></button>'}
   </div>`;
 }
 function updateBillHeadcountWarning(form) {
@@ -6675,25 +7204,275 @@ function billForm(item = {}) {
   state.billWizard.adultCount = Number(item.adultCount ?? reservation?.adults ?? 0);
   state.billWizard.seniorCount = Number(item.seniorCount ?? reservation?.seniorPwdCount ?? 0);
   state.billWizard.kidsCount = Number(item.kidsCount ?? reservation?.children ?? 0);
-  state.billWizard.compedCount = Number(item.compedCount || 0);
+  state.billWizard.compedCount = Number(item.compedCount ?? reservation?.compedCount ?? 0);
+  state.billWizard.countBaseline = billWizardCountValues(item.id ? item : reservation || {});
+  state.billWizard.extraLines = item.id
+    ? all('billLines').filter(line => line.billId === item.id && line.lineType === 'charge_item' && !line.isVoided)
+    : [];
+  state.billWizard.discountId = item.discountId || '';
+  state.billWizard.discountReason = item.discountReason || '';
+  state.billWizard.chargeExtraPax = item.id
+    ? all('billLines').some(line => line.billId === item.id && line.lineType === 'package' && /^Extra pax/.test(line.description || ''))
+    : false;
+  state.billWizard.notes = item.notes || '';
+  state.billWizard.savedBill = item.id ? item : null;
+  state.billWizard.savedLines = item.id ? all('billLines').filter(line => line.billId === item.id) : [];
+  state.billWizard.closePreview = null;
+  state.billWizard.previewError = '';
+  state.billWizard.tenderedAmount = '';
+  state.billWizard.paymentKey = id('POSPAY');
+  state.billWizard.createKey = item.id ? '' : id('POSCREATE');
+  state.billWizard.pendingApproval = false;
   state.billWizard.countsEditing = false;
-  state.billWizard.countsConfirmed = false;
+  state.billWizard.countsConfirmed = Boolean(item.id);
   renderBillWizard();
 }
 function renderBillWizard() {
   const wizard = state.billWizard;
   if (!wizard.reservationId) wizard.screen = 1;
-  const progress = `<ol class="pos-wizard-progress" aria-label="Create bill progress"><li class="${wizard.screen === 1 ? 'is-active' : ''}" ${wizard.screen === 1 ? 'aria-current="step"' : ''}><span>1</span> Party</li><li class="${wizard.screen === 2 ? 'is-active' : ''}" ${wizard.screen === 2 ? 'aria-current="step"' : ''}><span>2</span> Buffet and package</li><li><span>3</span> Extras and discounts</li><li><span>4</span> Review and pay</li></ol>`;
-  const content = wizard.screen === 1 ? renderBillPartyScreen() : renderBillBuffetScreen();
-  modal('Create bill', `${progress}${content}`, wizard.screen === 2 ? 'Save and leave open' : 'Continue', 'pos-wizard-modal', 'form');
+  const steps = ['Party', 'Buffet and package', 'Extras and discounts', 'Review and pay'];
+  const progress = `<ol class="pos-wizard-progress" aria-label="Create bill progress">${steps.map((label, index) => {
+    const number = index + 1;
+    const status = number === wizard.screen ? 'is-active' : number < wizard.screen ? 'is-complete' : '';
+    const marker = number < wizard.screen
+      ? `<button type="button" class="pos-wizard-step-button" data-action="bill-wizard-step" data-step="${number}" aria-label="Return to step ${number}: ${esc(label)}"><span aria-hidden="true">✓</span><span>${esc(label)}</span></button>`
+      : `<span class="pos-wizard-step-marker">${number}</span><span class="pos-wizard-step-label">${esc(label)}</span>`;
+    return `<li class="${status}" ${number === wizard.screen ? 'aria-current="step"' : ''}>${marker}</li>`;
+  }).join('')}</ol>`;
+  const content = wizard.screen === 1 ? renderBillPartyScreen()
+    : wizard.screen === 2 ? renderBillBuffetScreen()
+      : wizard.screen === 3 ? renderBillExtrasScreen()
+        : renderBillReviewScreen();
+  const submitLabel = wizard.screen <= 2 ? 'Continue'
+      : wizard.screen === 3 ? 'Review and pay' : 'Confirm payment';
+  modal('Create bill', `${progress}${content}`, submitLabel, 'pos-wizard-modal', 'form');
   const form = document.querySelector('#modalForm');
   form.dataset.type = 'bill-wizard';
   form.dataset.screen = String(wizard.screen);
-  form.dataset.createKey = id('POSCREATE');
+  form.dataset.createKey = wizard.createKey || (wizard.createKey = id('POSCREATE'));
   if (wizard.billId) form.dataset.billId = wizard.billId;
   if (wizard.reservationId) form.dataset.reservationId = wizard.reservationId;
-  if (wizard.screen === 1) form.querySelector('[data-party-search]')?.focus();
-  state.modalDirty = false;
+  const submit = form.querySelector('.modal-submit');
+  if (wizard.screen === 1 && submit) submit.disabled = !wizard.reservationId;
+  if (wizard.screen === 4) {
+    const due = Number(wizard.closePreview?.balance_after_deposit || 0);
+    updateBillCashChangePreview(
+      form.querySelector('[data-cash-change-preview]'),
+      wizard.tenderedAmount || due.toFixed(2),
+      due
+    );
+    const rightActions = form.querySelector('.pos-wizard-footer-right');
+    rightActions?.insertAdjacentHTML('afterbegin', '<button type="button" class="ghost-btn" data-action="bill-wizard-save-open">Save and leave open</button>');
+  }
+  if (wizard.screen === 1) {
+    const focusTarget = wizard.focusAfterRender === 'continue'
+      ? submit : form.querySelector('[data-party-search]');
+    requestAnimationFrame(() => {
+      if (focusTarget?.isConnected) focusTarget.focus();
+      wizard.focusAfterRender = '';
+    });
+  }
+}
+function captureBillWizardForm(form) {
+  if (!form || form.dataset.screen !== '3') return;
+  state.billWizard.extraLines = [...form.querySelectorAll('[data-extra-line]')].flatMap(line => {
+    const chargeItemId = line.querySelector('[name="extraChargeItemId"]').value;
+    if (!chargeItemId) return [];
+    return [{
+      id: line.querySelector('[name="extraLineId"]').value || '',
+      chargeItemId,
+      quantity: Number(line.querySelector('[name="extraQuantity"]').value || 1)
+    }];
+  });
+  state.billWizard.discountId = form.elements.discountId.value || '';
+  state.billWizard.discountReason = form.elements.discountReason.value;
+  state.billWizard.chargeExtraPax = Boolean(form.elements.chargeExtraPax?.checked);
+  state.billWizard.notes = form.elements.notes.value;
+}
+function billWizardCountChips(counts) {
+  const groups = [
+    [counts.adultCount, 'adult', 'adults'],
+    [counts.seniorCount, 'senior/PWD', 'senior/PWD'],
+    [counts.kidsCount, 'kid', 'kids'],
+    [counts.compedCount, 'comped', 'comped']
+  ];
+  return groups.filter(([count]) => Number(count || 0) > 0)
+    .map(([count, singular, plural]) => `<span class="pos-guest-chip">${Number(count)} ${Number(count) === 1 ? singular : plural}</span>`)
+    .join('');
+}
+function billWizardCountValues(source = {}) {
+  return {
+    adultCount: Number(source?.adultCount ?? source?.adults ?? 0),
+    seniorCount: Number(source?.seniorCount ?? source?.seniorPwdCount ?? 0),
+    kidsCount: Number(source?.kidsCount ?? source?.children ?? 0),
+    compedCount: Number(source?.compedCount ?? 0)
+  };
+}
+function billWizardCountDifferences(wizard) {
+  const baseline = wizard.countBaseline || {};
+  return [
+    ['adultCount', 'adults'],
+    ['seniorCount', 'senior/PWD'],
+    ['kidsCount', 'kids'],
+    ['compedCount', 'comped']
+  ].flatMap(([field, label]) => {
+    const from = Number(baseline[field] || 0);
+    const to = Number(wizard[field] || 0);
+    return from === to ? [] : [{ field, label, from, to }];
+  });
+}
+function billWizardGuestSummary(reservation, { showEditCounts = true, heldDeposit = 0 } = {}) {
+  const wizard = state.billWizard;
+  return `<aside class="pos-guest-summary" aria-label="Selected party guest summary">
+    <div class="pos-guest-summary-main"><strong>${esc(reservation.name || 'Walk-in guest')}</strong><div class="pos-guest-chips" data-wizard-guest-total role="status" aria-live="polite">${billWizardCountChips(wizard)}</div></div>
+    <div class="pos-guest-summary-chips"><span class="pos-table-chip">Table ${esc(reservation.table || 'None linked')}</span>${heldDeposit > 0 ? `<span class="pos-deposit-chip">Deposit held: ${money(heldDeposit)}</span>` : ''}</div>
+    ${showEditCounts ? '<button type="button" class="ghost-btn compact-btn" data-action="edit-wizard-counts">Edit counts</button>' : ''}
+  </aside>`;
+}
+function billWizardExtraLinesMarkup() {
+  const wizard = state.billWizard;
+  const savedExtras = wizard.extraLines;
+  return `<div class="pos-extra-lines">${(savedExtras.length ? savedExtras : [{}]).map(line => billExtraLineMarkup(line)).join('')}</div>`;
+}
+function renderBillExtrasScreen() {
+  const reservation = all('reservations').find(record => record.id === state.billWizard.reservationId);
+  if (!reservation) return '<div class="pos-wizard-empty"><strong>Party unavailable.</strong><p>Return to party selection.</p></div>';
+  const wizard = state.billWizard;
+  const leftover = all('chargeItems').find(item => item.code === 'LEFTOVER' && item.isActive !== false
+    && ['food', 'non_food', 'other'].includes(item.type) && !item.isPackage);
+  const discounts = all('discounts').filter(discount =>
+    (discount.isActive !== false && (discount.appliesTo || 'bill') === 'bill')
+      || discount.id === wizard.discountId
+  );
+  const discountOptions = [
+    ['percent', 'Percentage discounts'],
+    ['fixed', 'Fixed amount discounts'],
+    ['waive', 'Full-bill waivers']
+  ].map(([type, label]) => {
+    const options = discounts.filter(discount => discount.discountType === type);
+    if (!options.length) return '';
+    return `<optgroup label="${label}">${options.map(discount => {
+      const value = type === 'percent' ? `${Number(discount.value || 0)}%`
+        : type === 'fixed' ? money(discount.value || 0) : 'Full bill';
+      return `<option value="${esc(discount.id)}" ${wizard.discountId === discount.id ? 'selected' : ''}>${esc(discount.name)} · ${value}</option>`;
+    }).join('')}</optgroup>`;
+  }).join('');
+  const extraPaxRate = Number(all('posSettings').find(setting => setting.key === 'pos_extra_pax_rate')?.value || 0);
+  const seatedCovers = Number(reservation.actualCovers || reservation.guests || 0);
+  const extraPax = Math.max(0, seatedCovers - Number(reservation.packagePaxCount || 0));
+  const packageExtra = reservation.packageChargeItemId && extraPax > 0
+    ? `<label class="pos-extra-pax-choice"><input type="checkbox" name="chargeExtraPax" ${wizard.chargeExtraPax ? 'checked' : ''}> Add ${extraPax} extra pax${extraPaxRate > 0 ? ` at ${money(extraPaxRate)} each` : ''}<small class="field-help">${extraPaxRate > 0 ? 'Optional charge; the server calculates the amount.' : 'No extra-pax rate is configured. Continue without a charge or ask an Administrator to set one.'}</small></label>`
+    : '';
+  return `<div class="pos-wizard-screen pos-wizard-screen-three" data-pos-wizard-screen="3">
+    ${billWizardGuestSummary(reservation)}
+    <fieldset class="product-form-section"><legend>Extras</legend><p class="field-help">Choose catalog items. Prices and totals are calculated by the server; inventory is unchanged.</p>
+      ${billWizardExtraLinesMarkup()}
+      <div class="pos-extra-actions"><button type="button" class="ghost-btn compact-btn" data-action="add-bill-extra">+ Add extra</button>${leftover ? `<button type="button" class="ghost-btn compact-btn" data-action="add-leftover-charge" data-charge-id="${esc(leftover.id)}">Add Leftover charge</button>` : '<span class="field-help">No active Leftover charge is configured.</span>'}</div>
+      ${packageExtra}
+    </fieldset>
+    <fieldset class="product-form-section"><legend>Discount</legend>
+      <div class="pos-discount-grid">
+        <label>Discount<select name="discountId" aria-describedby="bill-discount-help"><option value="">No discount</option>${discountOptions}</select></label>
+        <label>Reason (required when a discount is selected)<textarea name="discountReason" rows="3" maxlength="500">${esc(wizard.discountReason)}</textarea></label>
+        <small id="bill-discount-help" class="field-help">100% discounts and voids require Manager or Administrator approval exactly as before.</small>
+      </div>
+    </fieldset>
+    <label class="pos-wizard-notes-field">Bill notes<textarea name="notes" rows="3" maxlength="1000">${esc(wizard.notes)}</textarea></label>
+  </div>`;
+}
+function renderBillReviewScreen() {
+  const wizard = state.billWizard;
+  const bill = wizard.savedBill;
+  const reservation = all('reservations').find(record => record.id === wizard.reservationId);
+  if (!bill || !reservation) {
+    return `<div class="pos-wizard-screen pos-wizard-review" data-pos-wizard-screen="4"><div class="pos-wizard-empty"><strong>${wizard.previewError ? 'Payment preview unavailable' : 'Save the draft to review server totals.'}</strong><p>${esc(wizard.previewError || 'Go back to Extras and discounts and save the draft.')}</p>${wizard.previewError ? '<button type="button" class="ghost-btn" data-action="retry-wizard-preview">Retry preview</button>' : ''}</div></div>`;
+  }
+  const preview = wizard.closePreview;
+  const pending = all('billApprovals').find(item => item.billId === bill.id
+    && item.requestType === 'full_discount' && item.status === 'Pending');
+  const discount = all('discounts').find(item => item.id === bill.discountId);
+  const fullDiscount = Boolean(discount && (
+    discount.discountType === 'waive'
+    || (discount.discountType === 'percent' && Number(discount.value) >= 100)
+    || (Number(bill.subtotal) > 0 && Number(bill.discountTotal) >= Number(bill.subtotal))
+  ));
+  wizard.pendingApproval = Boolean(pending);
+  if (!wizard.closePreview) {
+    return `<div class="pos-wizard-screen pos-wizard-review" data-pos-wizard-screen="4"><div class="pos-wizard-empty" role="alert"><strong>Payment preview unavailable</strong><p>${esc(wizard.previewError || 'The server has not returned the deposit and balance preview.')}</p><button type="button" class="ghost-btn" data-action="retry-wizard-preview">Retry preview</button></div></div>`;
+  }
+  const packageLines = wizard.savedLines.filter(line => line.lineType === 'package' && !line.isVoided);
+  const lineRows = wizard.savedLines.filter(line => line.lineType === 'charge_item' && !line.isVoided).map(line =>
+    `<li><span>${esc(line.description)} · ${Number(line.quantity)} × ${money(line.unitPrice)}</span><strong>${money(Number(line.foodRevenueAmount || 0) + Number(line.nonFoodRevenueAmount || 0))}</strong></li>`
+  ).join('');
+  const buffetRows = [
+    ['Adults', bill.adultCount, bill.adultRate],
+    ['Senior / PWD', bill.seniorCount, bill.seniorRate],
+    ['Kids', bill.kidsCount, bill.kidsRate],
+    ['Comped', bill.compedCount, 0]
+  ].filter(([, count]) => Number(count || 0) > 0)
+    .map(([label, count, rate]) => `<li><span>${esc(label)} · ${Number(count)} guest${Number(count) === 1 ? '' : 's'} at ${money(rate)} each${packageLines.length ? ' · included in package' : ''}</span><strong>${packageLines.length ? 'Included' : money(Number(count) * Number(rate))}</strong></li>`)
+    .join('');
+  const packageRows = packageLines.map(line =>
+    `<li><span>${esc(line.description)} · ${Number(line.quantity)} × ${money(line.unitPrice)}</span><strong>${money(Number(line.foodRevenueAmount || 0) + Number(line.nonFoodRevenueAmount || 0))}</strong></li>`
+  ).join('');
+  const settings = all('posSettings');
+  const serviceEnabled = (settings.find(setting => setting.key === 'pos_service_charge_mode')?.value || 'none') !== 'none';
+  const changed = Number(bill.adultCount) !== Number(reservation.adults || 0)
+    || Number(bill.seniorCount) !== Number(reservation.seniorPwdCount || 0)
+    || Number(bill.kidsCount) !== Number(reservation.children || 0);
+  const noTable = !bill.tableId && !reservation.table;
+  const warnings = [
+    changed ? '<p class="pos-wizard-warning" role="status">Headcount differs from seating. The difference is recorded in bill notes.</p>' : '',
+    noTable ? '<p class="pos-wizard-warning" role="status">No table is linked to this bill.</p>' : '',
+    Number(preview?.deposit_remainder || 0) > 0 ? `<p class="pos-wizard-warning" role="status">Deposit exceeds the bill by ${money(preview.deposit_remainder)}; the remainder stays held.</p>` : '',
+    pending ? '<p class="pos-wizard-warning" role="status">Full discount approval is pending. A Manager or Administrator must approve before payment.</p>'
+      : fullDiscount ? '<p class="pos-wizard-warning" role="status">Full-bill discounts require Manager or Administrator approval before closing.</p>' : ''
+  ].join('');
+  const due = Number(preview?.balance_after_deposit || 0);
+  return `<div class="pos-wizard-screen pos-wizard-review" data-pos-wizard-screen="4">
+    <div class="pos-wizard-review-scroll">
+      ${warnings}
+      <section class="pos-wizard-bill-summary" aria-label="Server-calculated bill lines">
+        <h3>Bill lines · ${esc(bill.billNumber || '')}<span class="pos-wizard-party-context">${esc(reservation.name || 'Walk-in guest')} · Table ${esc(reservation.table || 'None linked')}</span></h3>
+        <ul class="pos-wizard-line-list">${buffetRows}${packageRows}${lineRows}</ul>
+      </section>
+    </div>
+    <section class="pos-wizard-checkout" aria-label="Bill totals and cash payment">
+      <dl class="pos-wizard-totals">
+        <div><dt>Subtotal</dt><dd>${money(bill.subtotal)}</dd></div>
+        ${serviceEnabled ? `<div><dt>Service charge</dt><dd>${money(bill.serviceCharge)}</dd></div>` : ''}
+        <div><dt>Discount</dt><dd>−${money(bill.discountTotal)}</dd></div>
+        <div class="is-total"><dt>Total</dt><dd>${money(preview.balance_due)}</dd></div>
+        <div><dt>Less: Deposit</dt><dd>−${money(preview.deposit_to_apply)}</dd></div>
+        <div class="is-balance"><dt>Balance due</dt><dd>${money(due)}</dd></div>
+      </dl>
+      <fieldset class="pos-wizard-payment"><legend>Cash payment</legend>
+        <label>Cash tendered<input type="number" name="tenderedAmount" min="${due.toFixed(2)}" step="0.01" value="${esc(wizard.tenderedAmount || due.toFixed(2))}" required aria-describedby="wizard-change-preview"></label>
+        <div class="pos-cash-shortcuts" aria-label="Cash tender shortcuts"><button type="button" class="ghost-btn compact-btn" data-cash-tender="${due.toFixed(2)}">Exact · ${money(due)}</button><button type="button" class="ghost-btn compact-btn" data-cash-tender="500" ${due <= 0 || due > 500 ? 'disabled' : ''}>₱500</button><button type="button" class="ghost-btn compact-btn" data-cash-tender="1000" ${due <= 0 || due > 1000 ? 'disabled' : ''}>₱1,000</button></div>
+        <p class="pos-cash-change" id="wizard-change-preview" data-cash-change-preview data-status="exact" aria-live="polite"><span data-cash-change-label>Change due</span><strong data-cash-change-value>${money(0)}</strong><small data-cash-change-note>Final change is confirmed when payment closes.</small></p>
+      </fieldset>
+    </section>
+  </div>`;
+}
+async function loadBillWizardReview() {
+  const wizard = state.billWizard;
+  if (!wizard.billId) {
+    wizard.previewError = 'Save the bill draft before requesting its payment preview.';
+    renderBillWizard();
+    return;
+  }
+  try {
+    wizard.closePreview = await window.supabaseRecord.posBillClosePreview(wizard.billId);
+    wizard.previewError = '';
+    const due = Number(wizard.closePreview.balance_after_deposit || 0);
+    wizard.tenderedAmount = due.toFixed(2);
+  } catch (error) {
+    console.error('Bill wizard payment preview failed.', error);
+    wizard.closePreview = null;
+    wizard.previewError = friendlyRpcError(error);
+    toast(wizard.previewError, 'error');
+  }
+  renderBillWizard();
 }
 function elapsedSeatingLabel(seatedAt) {
   if (!seatedAt) return 'Seated time unavailable';
@@ -6714,8 +7493,8 @@ function renderBillPartyScreen() {
   ).slice().sort((a, b) => String(b.seatedAt || '').localeCompare(String(a.seatedAt || '')));
   const bills = all('posBills');
   const parties = reservations.filter(res => {
-    const linked = bills.find(bill => bill.reservationId === res.id);
-    return (!linked || linked.status === 'Open');
+    const linked = bills.filter(bill => bill.reservationId === res.id);
+    return linked.some(bill => bill.status === 'Open') || !linked.some(bill => bill.status === 'Closed');
   }).filter(res => {
     if (wizard.filter === 'Walk-ins') return res.type === 'Walk-in';
     if (wizard.filter === 'Seated reservations') return res.type !== 'Walk-in';
@@ -6726,24 +7505,26 @@ function renderBillPartyScreen() {
     return `${res.name || ''} ${res.table || ''}`.toLowerCase().includes(query);
   });
   const tabs = [['All', 'All'], ['Seated reservations', 'Seated reservations'], ['Walk-ins', 'Walk-ins']]
-    .map(([value, label]) => `<button type="button" role="tab" aria-selected="${wizard.filter === value}" class="pos-wizard-filter${wizard.filter === value ? ' is-active' : ''}" data-bill-party-filter="${esc(value)}">${esc(label)}</button>`).join('');
+    .map(([value, label]) => `<button type="button" role="tab" tabindex="${wizard.filter === value ? '0' : '-1'}" aria-selected="${wizard.filter === value}" class="pos-wizard-filter${wizard.filter === value ? ' is-active' : ''}" data-bill-party-filter="${esc(value)}">${esc(label)}</button>`).join('');
   const cards = parties.map(res => {
     const openBill = bills.find(bill => bill.reservationId === res.id && bill.status === 'Open');
     const adults = Number(res.adults || 0);
     const senior = Number(res.seniorPwdCount || 0);
     const kids = Number(res.children || 0);
-    const total = adults + senior + kids + Number(res.compedCount || 0);
     const held = all('reservationDeposits').filter(deposit =>
       deposit.reservationId === res.id && deposit.status === 'Held' && !deposit.billId
     ).reduce((sum, deposit) => sum + Number(deposit.amount || 0), 0);
     const packageName = all('chargeItems').find(item => item.id === res.packageChargeItemId)?.name;
-    return `<button type="button" class="pos-party-card" data-bill-party-id="${esc(res.id)}" aria-label="${openBill ? 'Continue bill' : 'Create bill'} for ${esc(res.name || 'Walk-in guest')}">
-      <span class="pos-party-card-head"><strong>${esc(res.name || 'Walk-in guest')}</strong><span>${esc(res.table || 'No table')}</span></span>
-      <span class="pos-party-guests">${total} guests · ${adults} adults, ${senior} senior/PWD, ${kids} kids</span>
+    const selected = wizard.reservationId === res.id;
+    const partyType = res.type === 'Walk-in' ? 'Walk-in' : 'Reservation';
+    return `<button type="button" class="pos-party-card${selected ? ' is-selected' : ''}" data-bill-party-id="${esc(res.id)}" aria-label="${esc(partyType)}: ${esc(res.name || 'Walk-in guest')}, ${openBill ? 'open bill' : 'no open bill'}" aria-pressed="${selected}">
+      <span class="pos-party-card-head"><strong>${esc(res.name || 'Walk-in guest')}</strong><span class="pos-party-type">${partyType}</span></span>
+      <span class="pos-party-card-details"><span class="pos-party-table-chip">${esc(res.table || 'No table')}</span>${openBill ? '<span class="pos-party-open-label">Open bill</span>' : ''}${selected ? '<span class="pos-party-selected" aria-hidden="true">✓ Selected</span>' : ''}</span>
+      <span class="pos-party-guests" aria-label="Guest counts">${billWizardCountChips({ adultCount: adults, seniorCount: senior, kidsCount: kids, compedCount: Number(res.compedCount || 0) })}</span>
       <span class="pos-party-meta">${esc(formatOperationalDateTime(res.seatedAt))} · ${esc(elapsedSeatingLabel(res.seatedAt))}</span>
       ${packageName ? `<span class="pos-party-meta">Package: ${esc(packageName)} · ${Number(res.packagePaxCount || 0)} pax</span>` : ''}
       ${held > 0 ? `<span class="pos-party-meta">Deposit held: ${money(held)}</span>` : ''}
-      <span class="pos-party-action">${openBill ? 'Continue bill' : 'Open bill'} <span aria-hidden="true">→</span></span>
+      <span class="pos-party-action">${selected ? 'Selected' : 'Select party'}</span>
     </button>`;
   }).join('');
   const unresolvedCards = all('reservations').filter(res =>
@@ -6764,14 +7545,20 @@ function renderBillBuffetScreen() {
   const senior = Number(wizard.seniorCount || 0);
   const kids = Number(wizard.kidsCount || 0);
   const comped = Number(wizard.compedCount || 0);
-  const total = adults + senior + kids + comped;
   const packageItem = all('chargeItems').find(item => item.id === reservation.packageChargeItemId);
   const packageTier = all('packageTiers').find(tier => tier.id === reservation.packageTierId);
-  const extraPax = packageItem ? Math.max(0, total - Number(reservation.packagePaxCount || 0)) : 0;
+  const seatedCovers = Number(reservation.actualCovers || reservation.guests || 0);
+  const extraPax = packageItem ? Math.max(0, seatedCovers - Number(reservation.packagePaxCount || 0)) : 0;
   const seatedAdults = Number(reservation.adults || 0);
   const seatedSenior = Number(reservation.seniorPwdCount || 0);
   const seatedKids = Number(reservation.children || 0);
   const mismatch = adults !== seatedAdults || senior !== seatedSenior || kids !== seatedKids;
+  const countChanges = billWizardCountDifferences(wizard);
+  const seniorCountChanged = senior !== Number(wizard.countBaseline?.seniorCount || 0);
+  const countChangeSource = wizard.billId ? 'saved bill' : 'seating';
+  const countChangeText = countChanges.map(change =>
+    `${change.from} ${change.label} to ${change.to} ${change.label}`
+  ).join('; ');
   const held = all('reservationDeposits').filter(deposit =>
     deposit.reservationId === reservation.id && deposit.status === 'Held' && !deposit.billId
   ).reduce((sum, deposit) => sum + Number(deposit.amount || 0), 0);
@@ -6780,21 +7567,24 @@ function renderBillBuffetScreen() {
   const seniorRate = rates.find(rate => Number(rate.seniorPwdRate) >= 0)?.seniorPwdRate ?? 360;
   const kidsRate = rates.find(rate => Number(rate.childRate) >= 0)?.childRate ?? 225;
   const countEditor = wizard.countsEditing
-    ? `<div class="pos-count-stepper" role="group" aria-label="Edit bill guest counts">
+    ? `<div class="pos-count-stepper" id="bill-count-editor" role="group" aria-label="Edit bill guest counts">
         ${[['adultCount','Adults',adults],['seniorCount','Senior / PWD',senior],['kidsCount','Kids',kids],['compedCount','Comped',comped]].map(([name,label,value]) =>
           `<label>${label}<input type="number" min="0" max="1000" step="1" name="${name}" value="${value}" data-wizard-count></label>`
         ).join('')}
-        ${senior !== seatedSenior ? '<p class="field-help">Senior/PWD changes: check the guest ID before confirming.</p>' : ''}
-        ${mismatch ? `<p class="pos-count-change" role="status">Changed from seating: ${adults !== seatedAdults ? `${seatedAdults} adults to ${adults} adults` : ''}${senior !== seatedSenior ? `${adults !== seatedAdults ? '; ' : ''}${seatedSenior} senior/PWD to ${senior} senior/PWD` : ''}${kids !== seatedKids ? `${adults !== seatedAdults || senior !== seatedSenior ? '; ' : ''}${seatedKids} kids to ${kids} kids` : ''}</p>` : ''}
-        <label class="pos-count-confirm"><input type="checkbox" data-confirm-count-change ${wizard.countsConfirmed ? 'checked' : ''}> I confirm these counts for the bill</label>
+        <p class="field-help" data-senior-id-reminder ${seniorCountChanged ? '' : 'hidden'}>Senior/PWD changes: check the guest ID before confirming.</p>
+        <p class="pos-count-change" data-wizard-count-change role="status" ${countChanges.length ? '' : 'hidden'}>${countChanges.length ? `Changed from ${countChangeSource}: ${countChangeText}` : ''}</p>
+        <label class="pos-count-confirm" data-count-confirmation ${countChanges.length ? '' : 'hidden'}><input type="checkbox" data-confirm-count-change ${wizard.countsConfirmed ? 'checked' : ''}> I confirm these updated counts for the bill</label>
+        <p class="field-help" data-count-baseline-note ${countChanges.length ? 'hidden' : ''}>${wizard.billId ? 'Saved bill counts are already confirmed. Changing a count requires confirmation.' : 'Confirmation is only needed if you change the selected party counts.'}</p>
       </div>`
     : '';
   return `<div class="pos-wizard-screen pos-wizard-screen-two" data-pos-wizard-screen="2">
-    <aside class="pos-guest-summary" aria-label="Selected party guest summary"><strong>${esc(reservation.name || 'Walk-in guest')}</strong><span>Table ${esc(reservation.table || 'None linked')}</span><span>${total} guests · ${adults} adults, ${senior} senior/PWD, ${kids} kids, ${comped} comped</span>${held > 0 ? `<span>Deposit held: ${money(held)}</span>` : ''}<button type="button" class="text-btn" data-action="toggle-wizard-count-edit">${wizard.countsEditing ? 'Done editing' : 'Edit counts'}</button></aside>
+    ${billWizardGuestSummary(reservation, { showEditCounts: false, heldDeposit: held })}
+    <button type="button" class="ghost-btn compact-btn pos-edit-counts" data-action="toggle-wizard-count-edit" aria-expanded="${wizard.countsEditing}" ${wizard.countsEditing ? 'aria-controls="bill-count-editor"' : ''}>${wizard.countsEditing ? 'Done editing' : 'Edit counts'}</button>
     ${countEditor}
-    ${mismatch ? '<p class="pos-wizard-warning" role="status">Headcount differs from seating. The difference will be noted on the bill.</p>' : ''}
-    <section class="pos-buffet-rates"><div class="panel-title">Buffet and rates</div><div class="pos-rate-grid"><span>Adult<strong>${money(adultRate)} each</strong></span><span>Senior/PWD<strong>${money(seniorRate)} each</strong></span><span>Kids<strong>${money(kidsRate)} each</strong></span><span>Comped<strong>₱0.00</strong></span></div></section>
-    ${packageItem && packageTier ? `<section class="pos-package-card"><strong>${esc(packageItem.name)}</strong><span>${esc(packageTier.name)} · ${Number(reservation.packagePaxCount || 0)} pax</span>${extraPax > 0 ? `<p class="pos-wizard-warning">Actual guests exceed package pax by ${extraPax}. Extra-pax charging may be available on save.</p>` : ''}</section>` : `<section class="pos-package-card"><strong>No package booked</strong>${reservation.type === 'Walk-in' ? '<span>Walk-ins cannot select event packages. Extra buffet rates apply.</span>' : '<span>Buffet rates apply.</span>'}</section>`}
+    <p class="pos-wizard-warning" data-wizard-count-warning role="status" ${mismatch ? '' : 'hidden'}>Headcount differs from seating. The difference will be noted on the bill.</p>
+    ${wizard.billId ? '<button type="button" class="ghost-btn compact-btn pos-skip-review" data-action="wizard-skip-to-review">Skip to review</button>' : ''}
+    <section class="pos-buffet-rates"><div class="panel-title">Buffet and rates</div><div class="pos-rate-grid"><span>Adult<strong>${money(adultRate)} each</strong></span><span>Senior/PWD<strong>${money(seniorRate)} each</strong></span><span>Kids<strong>${money(kidsRate)} each</strong></span><span>Comped<strong>₱0.00 each</strong></span></div></section>
+    ${packageItem && packageTier ? `<section class="pos-package-card"><strong>${esc(packageItem.name)}</strong><span>${esc(packageTier.name)} · ${Number(reservation.packagePaxCount || 0)} pax</span>${extraPax > 0 ? `<p class="pos-wizard-warning">Actual guests exceed package pax by ${extraPax}. Extra-pax charging may be available on save.</p>` : ''}</section>` : '<section class="pos-package-card is-unbooked"><strong>No package booked</strong><span>Buffet rates apply.</span></section>'}
   </div>`;
 }
 function legacyBillForm(item = {}) {
@@ -6897,6 +7687,35 @@ function legacyBillForm(item = {}) {
   else form.dataset.createKey = id('POSCREATE');
   updateBillHeadcountWarning(form);
 }
+function updateBillCashChangePreview(preview, tenderedValue, dueValue) {
+  if (!preview) return;
+  const label = preview.querySelector('[data-cash-change-label]');
+  const amount = preview.querySelector('[data-cash-change-value]');
+  const note = preview.querySelector('[data-cash-change-note]');
+  const rawTendered = String(tenderedValue ?? '').trim();
+  const tendered = Number(rawTendered);
+  const due = Number(dueValue);
+  if (!rawTendered || !Number.isFinite(tendered) || !Number.isFinite(due)) {
+    preview.dataset.status = 'empty';
+    label.textContent = 'Enter cash tendered to calculate change';
+    amount.textContent = '';
+    note.textContent = '';
+    return;
+  }
+  if (tendered < due) {
+    const shortfall = Math.round((due - tendered) * 100) / 100;
+    preview.dataset.status = 'short';
+    label.textContent = 'Short by';
+    amount.textContent = money(shortfall);
+    note.textContent = `Enter at least ${money(due)} to continue.`;
+    return;
+  }
+  const change = Math.round((tendered - due) * 100) / 100;
+  preview.dataset.status = change > 0 ? 'change' : 'exact';
+  label.textContent = 'Change due';
+  amount.textContent = money(change);
+  note.textContent = 'Final change is confirmed when payment closes.';
+}
 async function billCloseForm(bill) {
   let preview;
   try {
@@ -6907,12 +7726,14 @@ async function billCloseForm(bill) {
   }
   const minimum = Number(preview.balance_after_deposit || 0);
   modal(`Take cash · ${esc(bill.billNumber)}`,
-    `<div class="pos-payment-summary"><div>Balance before deposit <strong>${money(preview.balance_due)}</strong></div><div>Less: Deposit <strong>${money(preview.deposit_to_apply)}</strong></div><div>Balance due <strong>${money(minimum)}</strong></div>${Number(preview.deposit_remainder || 0) > 0 ? `<p class="field-help">Deposit remainder held for follow-up: ${money(preview.deposit_remainder)}.</p>` : ''}</div><label>Cash tendered<input name="tenderedAmount" type="number" min="${minimum.toFixed(2)}" step="0.01" value="${minimum.toFixed(2)}" required><small class="field-help">The server applies eligible deposits, records the cash payment, and calculates change.</small></label><div class="pos-cash-shortcuts" aria-label="Cash tender shortcuts"><button type="button" class="ghost-btn compact-btn" data-cash-tender="${minimum.toFixed(2)}">Exact · ${money(minimum)}</button><button type="button" class="ghost-btn compact-btn" data-cash-tender="500" ${minimum <= 0 || minimum > 500 ? 'disabled' : ''}>₱500</button><button type="button" class="ghost-btn compact-btn" data-cash-tender="1000" ${minimum <= 0 || minimum > 1000 ? 'disabled' : ''}>₱1,000</button></div>`,
+    `<div class="pos-payment-summary"><div>Balance before deposit <strong>${money(preview.balance_due)}</strong></div><div>Less: Deposit <strong>${money(preview.deposit_to_apply)}</strong></div><div>Balance due <strong>${money(minimum)}</strong></div>${Number(preview.deposit_remainder || 0) > 0 ? `<p class="field-help">Deposit remainder held for follow-up: ${money(preview.deposit_remainder)}.</p>` : ''}</div><label>Cash tendered<input name="tenderedAmount" type="number" min="${minimum.toFixed(2)}" step="0.01" value="${minimum.toFixed(2)}" required aria-describedby="bill-close-change-preview"><small class="field-help">The server applies eligible deposits and records the payment.</small></label><div class="pos-cash-shortcuts" aria-label="Cash tender shortcuts"><button type="button" class="ghost-btn compact-btn" data-cash-tender="${minimum.toFixed(2)}">Exact · ${money(minimum)}</button><button type="button" class="ghost-btn compact-btn" data-cash-tender="500" ${minimum <= 0 || minimum > 500 ? 'disabled' : ''}>₱500</button><button type="button" class="ghost-btn compact-btn" data-cash-tender="1000" ${minimum <= 0 || minimum > 1000 ? 'disabled' : ''}>₱1,000</button></div><p class="pos-cash-change" id="bill-close-change-preview" data-cash-change-preview data-status="exact" aria-live="polite"><span data-cash-change-label>Change due</span><strong data-cash-change-value>${money(0)}</strong><small data-cash-change-note>Final change is confirmed when payment closes.</small></p>`,
     'Confirm cash and close', 'pos-payment-modal', 'money');
   const form = document.querySelector('#modalForm');
   form.dataset.type = 'bill-close';
   form.dataset.id = bill.id;
   form.dataset.paymentKey = id('POSPAY');
+  form.dataset.balanceDue = minimum.toFixed(2);
+  updateBillCashChangePreview(form.querySelector('[data-cash-change-preview]'), minimum.toFixed(2), minimum);
 }
 function billVoidRequestForm(bill) {
   modal(`Request void · ${esc(bill.billNumber)}`,
@@ -7125,12 +7946,84 @@ document.addEventListener('click', event => {
   if (action === 'assign-table') return tableAssignmentForm(table);
   return deleteRecord('table', table.id, actionElement);
 });
+document.addEventListener('click', event => {
+  const actionElement = event.target.closest('[data-action]');
+  const action = actionElement?.dataset.action;
+  if (!action) return;
+  if (action === 'select-walkin-table') {
+    const form = actionElement.closest('#modalForm[data-type="walk-in"]');
+    if (!form || actionElement.disabled) return;
+    form.elements.table.value = actionElement.dataset.tableId || '';
+    state.modalDirty = true;
+    refreshWalkInTables(form);
+    [...form.querySelectorAll('[data-action="select-walkin-table"]')]
+      .find(button => button.dataset.tableId === form.elements.table.value)?.focus();
+    return;
+  }
+  if (action === 'reservation-wizard-back') {
+    if (!state.reservationWizard || state.reservationWizard.step <= 1) return;
+    const form = document.querySelector('#modalForm[data-type="reservation"]');
+    if (form) Object.assign(state.reservationWizard.draft, Object.fromEntries(new FormData(form)));
+    state.reservationWizard.step -= 1;
+    state.modalDirty = true;
+    renderReservationWizard();
+    return;
+  }
+  if (action === 'reservation-wizard-goto') {
+    const targetStep = Number(actionElement.dataset.step);
+    if (!state.reservationWizard || !Number.isInteger(targetStep)
+      || targetStep < 1 || targetStep >= state.reservationWizard.step) return;
+    const form = document.querySelector('#modalForm[data-type="reservation"]');
+    if (form) Object.assign(state.reservationWizard.draft, Object.fromEntries(new FormData(form)));
+    state.reservationWizard.step = targetStep;
+    state.modalDirty = true;
+    renderReservationWizard();
+    return;
+  }
+  if (action === 'reservation-wizard-table') {
+    const wizard = state.reservationWizard;
+    if (!wizard || wizard.step !== 2 || actionElement.disabled) return;
+    const tableId = actionElement.dataset.tableId || '';
+    if (tableId) {
+      const table = all('restaurantTables').find(entry => entry.id === tableId);
+      const partySize = Number(wizard.draft.adults || 0)
+        + Number(wizard.draft.seniorPwdCount || 0)
+        + Number(wizard.draft.children || 0);
+      const tableState = table && reservationTableState(table, {
+        date: wizard.draft.date,
+        time: wizard.draft.time,
+        partySize,
+        reservationId: wizard.draft.id,
+        selectedTableId: wizard.draft.table
+      });
+      if (!tableState?.canSelect || !tableState.hasCapacity) return;
+    }
+    wizard.draft.table = tableId;
+    state.modalDirty = true;
+    renderReservationWizard();
+    if (tableId) {
+      requestAnimationFrame(() => [...document.querySelectorAll('#modalForm [data-action="reservation-wizard-table"]')]
+        .find(button => button.dataset.tableId === tableId)?.focus());
+    }
+  }
+});
 document.addEventListener('click', async event => {
   const cashTender = event.target.closest('[data-cash-tender]');
   if (cashTender) {
     const form = cashTender.closest('#modalForm[data-type="bill-close"]');
-    if (!form) return;
-    form.elements.tenderedAmount.value = cashTender.dataset.cashTender;
+    const wizardForm = cashTender.closest('#modalForm[data-type="bill-wizard"]');
+    const paymentForm = form || wizardForm;
+    if (!paymentForm) return;
+    paymentForm.elements.tenderedAmount.value = cashTender.dataset.cashTender;
+    if (wizardForm) state.billWizard.tenderedAmount = cashTender.dataset.cashTender;
+    const due = wizardForm
+      ? Number(state.billWizard.closePreview?.balance_after_deposit || 0)
+      : Number(form.dataset.balanceDue || 0);
+    updateBillCashChangePreview(
+      paymentForm.querySelector('[data-cash-change-preview]'),
+      cashTender.dataset.cashTender,
+      due
+    );
     state.modalDirty = true;
     return;
   }
@@ -7139,15 +8032,34 @@ document.addEventListener('click', async event => {
     const reservation = all('reservations').find(record => record.id === partyCard.dataset.billPartyId);
     if (!reservation) return toast('This party is no longer available. Refresh the bill list.', 'error');
     const openBill = all('posBills').find(bill => bill.reservationId === reservation.id && bill.status === 'Open');
-    state.billWizard.screen = 2;
+    state.billWizard.screen = 1;
     state.billWizard.reservationId = reservation.id;
     state.billWizard.billId = openBill?.id || '';
     state.billWizard.adultCount = Number(openBill?.adultCount ?? reservation.adults ?? 0);
     state.billWizard.seniorCount = Number(openBill?.seniorCount ?? reservation.seniorPwdCount ?? 0);
     state.billWizard.kidsCount = Number(openBill?.kidsCount ?? reservation.children ?? 0);
-    state.billWizard.compedCount = Number(openBill?.compedCount || 0);
+    state.billWizard.compedCount = Number(openBill?.compedCount ?? reservation.compedCount ?? 0);
+    state.billWizard.countBaseline = billWizardCountValues(openBill || reservation);
+    state.billWizard.extraLines = openBill
+      ? all('billLines').filter(line => line.billId === openBill.id && line.lineType === 'charge_item' && !line.isVoided)
+      : [];
+    state.billWizard.discountId = openBill?.discountId || '';
+    state.billWizard.discountReason = openBill?.discountReason || '';
+    state.billWizard.chargeExtraPax = openBill
+      ? all('billLines').some(line => line.billId === openBill.id && line.lineType === 'package' && /^Extra pax/.test(line.description || ''))
+      : false;
+    state.billWizard.notes = openBill?.notes || '';
+    state.billWizard.savedBill = openBill || null;
+    state.billWizard.savedLines = openBill ? all('billLines').filter(line => line.billId === openBill.id) : [];
+    state.billWizard.closePreview = null;
+    state.billWizard.previewError = '';
+    state.billWizard.tenderedAmount = '';
+    state.billWizard.paymentKey = id('POSPAY');
+    state.billWizard.createKey = openBill ? '' : id('POSCREATE');
+    state.billWizard.pendingApproval = false;
     state.billWizard.countsEditing = false;
-    state.billWizard.countsConfirmed = false;
+    state.billWizard.countsConfirmed = Boolean(openBill);
+    state.billWizard.focusAfterRender = 'continue';
     state.modalDirty = true;
     renderBillWizard();
     return;
@@ -7159,17 +8071,70 @@ document.addEventListener('click', async event => {
     renderBillWizard();
     return;
   }
+  const quantityAdjust = event.target.closest('[data-extra-quantity-adjust]');
+  if (quantityAdjust) {
+    const input = quantityAdjust.closest('[data-extra-line]')?.querySelector('[name="extraQuantity"]');
+    if (!input || input.disabled) return;
+    const minimum = Number(input.min || 0.01);
+    const maximum = Number(input.max || 10000);
+    const current = Number(input.value || 1);
+    const direction = Number(quantityAdjust.dataset.extraQuantityAdjust);
+    input.value = String(Math.max(minimum, Math.min(maximum, Number((current + direction).toFixed(2)))));
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+    input.focus();
+    return;
+  }
   const actionElement = event.target.closest('[data-action]');
   const action = actionElement?.dataset.action;
   if (!action) return;
-  if (action === 'bill-wizard-back') {
-    if (state.billWizard.screen === 2) {
-      state.billWizard.screen = 1;
-      state.billWizard.reservationId = '';
-      state.billWizard.billId = '';
-      state.modalDirty = false;
+  if (action === 'bill-wizard-step') {
+    const targetStep = Number(actionElement.dataset.step);
+    if (targetStep >= 1 && targetStep < state.billWizard.screen) {
+      captureBillWizardForm(actionElement.closest('#modalForm'));
+      state.billWizard.screen = targetStep;
+      if (targetStep === 1) {
+        state.billWizard.reservationId = '';
+        state.billWizard.billId = '';
+      }
       renderBillWizard();
     }
+    return;
+  }
+  if (action === 'bill-wizard-back') {
+    if (state.billWizard.screen > 1) {
+      captureBillWizardForm(actionElement.closest('#modalForm'));
+      state.billWizard.screen -= 1;
+      if (state.billWizard.screen === 1) {
+        state.billWizard.reservationId = '';
+        state.billWizard.billId = '';
+      }
+      renderBillWizard();
+    }
+    return;
+  }
+  if (action === 'bill-wizard-save-open') {
+    state.modalDirty = false;
+    closeModal(true);
+    toast(`${state.billWizard.savedBill?.billNumber || 'Bill'} remains open. Payment can be taken later.`);
+    render();
+    return;
+  }
+  if (action === 'retry-wizard-preview') {
+    void loadBillWizardReview();
+    return;
+  }
+  if (action === 'wizard-skip-to-review') {
+    state.billWizard.screen = 3;
+    renderBillWizard();
+    requestAnimationFrame(() => document.querySelector('#modalForm')?.requestSubmit());
+    return;
+  }
+  if (action === 'edit-wizard-counts') {
+    captureBillWizardForm(actionElement.closest('#modalForm'));
+    state.billWizard.screen = 2;
+    state.billWizard.countsEditing = true;
+    state.modalDirty = true;
+    renderBillWizard();
     return;
   }
   if (action === 'toggle-wizard-count-edit') {
@@ -7186,7 +8151,7 @@ document.addEventListener('click', async event => {
   }
   if (action === 'open-shift-from-wizard') return shiftForm();
   if (action === 'add-leftover-charge') {
-    const form = document.querySelector('#modalForm[data-type="bill"]');
+    const form = document.querySelector('#modalRoot #modalForm[data-type="bill"],#modalRoot #modalForm[data-type="bill-wizard"]');
     const lines = form?.querySelector('.pos-extra-lines');
     const charge = all('chargeItems').find(item => item.id === actionElement.dataset.chargeId
       && item.code === 'LEFTOVER' && item.isActive !== false);
@@ -7206,7 +8171,7 @@ document.addEventListener('click', async event => {
     return;
   }
   if (action === 'add-bill-extra') {
-    const form = document.querySelector('#modalForm[data-type="bill"]');
+    const form = document.querySelector('#modalRoot #modalForm[data-type="bill"],#modalRoot #modalForm[data-type="bill-wizard"]');
     const lines = form?.querySelector('.pos-extra-lines');
     if (!lines) return;
     if (lines.querySelectorAll('[data-extra-line]').length >= 30) return toast('A bill can have no more than 30 extra lines.', 'error');
@@ -7717,12 +8682,6 @@ document.addEventListener('change', event => {
   }
 });
 document.addEventListener('change', event => {
-  if (event.target.matches('[data-wizard-count]')) {
-    state.billWizard[event.target.name] = Math.max(0, Number(event.target.value || 0));
-    state.modalDirty = true;
-    renderBillWizard();
-    return;
-  }
   if (event.target.matches('[data-confirm-count-change]')) {
     state.billWizard.countsConfirmed = event.target.checked;
     state.modalDirty = true;
@@ -7744,6 +8703,20 @@ document.addEventListener('change', event => {
   const form = event.target.closest('#modalForm[data-type="reservation"]');
   if (form && event.target.matches('[name="date"],[name="time"],[name="adults"],[name="seniorPwdCount"],[name="children"]')) {
     if (event.target.matches('[name="date"]')) refreshReservationTimeOptions(form);
+    if (form.dataset.reservationWizardStep) {
+      if (form.dataset.reservationWizardStep === '1') {
+        const total = Number(form.elements.adults.value || 0)
+          + Number(form.elements.seniorPwdCount.value || 0)
+          + Number(form.elements.children.value || 0);
+        const totalTarget = form.querySelector('[data-reservation-step-total]');
+        if (totalTarget) totalTarget.textContent = String(total);
+        const mealTarget = form.querySelector('[data-reservation-step-meal]');
+        if (mealTarget) mealTarget.textContent = form.elements.time.value
+          ? reservationMealPeriod(form.elements.time.value)
+          : 'Choose a time';
+      }
+      return;
+    }
     refreshReservationTables(form);
     return;
   }
@@ -8269,7 +9242,7 @@ function modal(title, content, submit = 'Save record', modalClass = '', modalTyp
   const closeLabel = ['read-only', 'popover', 'menu'].includes(modalType) ? 'Close' : isConfirmation ? 'Cancel' : 'Cancel';
   const actions = isConfirmation
     ? `<div class="modal-actions"><button type="button" class="ghost-btn" data-action="close-modal">${closeLabel}</button><button type="button" class="primary-btn" data-action="confirm-modal">${submit || 'Continue'}</button></div>`
-    : `<div class="modal-actions pos-wizard-footer"><div class="pos-wizard-footer-left">${modalClass === 'pos-wizard-modal' && submit ? '<button type="button" class="ghost-btn" data-action="bill-wizard-back">← Back</button>' : ''}</div><div class="pos-wizard-footer-right"><button type="button" class="ghost-btn" data-action="close-modal">${closeLabel}</button>${submit ? `<button class="primary-btn modal-submit" type="submit">${submit}</button>` : ''}</div></div>`;
+    : `<div class="modal-actions${modalClass === 'pos-wizard-modal' ? ' pos-wizard-footer' : ''}"><div class="pos-wizard-footer-left">${modalClass === 'pos-wizard-modal' && submit && state.billWizard.screen > 1 ? '<button type="button" class="ghost-btn" data-action="bill-wizard-back">← Back</button>' : ''}</div><div class="pos-wizard-footer-right"><button type="button" class="ghost-btn" data-action="close-modal">${closeLabel}</button>${submit ? `<button class="primary-btn modal-submit" type="submit">${submit}</button>` : ''}</div></div>`;
   const markup = `<div class="modal-backdrop" role="presentation"><div class="modal${modalClass ? ` ${esc(modalClass)}` : ''}" role="dialog" aria-modal="true" aria-labelledby="${titleId}" tabindex="-1" data-modal-type="${esc(modalType)}"><div class="modal-header"><div><div class="eyebrow">ROMS workspace</div><h2 id="${titleId}">${title}</h2></div><button type="button" class="modal-close" data-action="close-modal" aria-label="Close dialog">×</button></div><form id="${formId}" novalidate data-modal-type="${esc(modalType)}">${content}${actions}</form></div></div>`;
   if (isConfirmation) root.insertAdjacentHTML('beforeend', markup);
   else root.innerHTML = markup;
@@ -8919,6 +9892,18 @@ document.addEventListener('keydown', event => {
   const backdrop = root.lastElementChild;
   const dialog = backdrop?.querySelector('.modal[role="dialog"]');
   if (!dialog) return;
+  const partyTab = event.target.closest('.pos-wizard-tabs [role="tab"]');
+  if (partyTab && ['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) {
+    event.preventDefault();
+    const tabs = [...dialog.querySelectorAll('.pos-wizard-tabs [role="tab"]')];
+    const current = tabs.indexOf(partyTab);
+    const next = event.key === 'Home' ? 0
+      : event.key === 'End' ? tabs.length - 1
+        : (current + (event.key === 'ArrowRight' ? 1 : -1) + tabs.length) % tabs.length;
+    tabs[next]?.click();
+    requestAnimationFrame(() => document.querySelectorAll('#modalForm .pos-wizard-tabs [role="tab"]')[next]?.focus());
+    return;
+  }
   if (event.key === 'Escape') {
     event.preventDefault();
     event.stopImmediatePropagation();
@@ -9065,9 +10050,76 @@ document.addEventListener('input', event => {
   if (billFormElement && event.target.matches('[name="adultCount"],[name="seniorCount"],[name="kidsCount"]')) {
     updateBillHeadcountWarning(billFormElement);
   }
+  const wizardForm = event.target.closest('#modalForm[data-type="bill-wizard"]');
+  if (wizardForm && event.target.matches('[data-wizard-count]')) {
+    const wizard = state.billWizard;
+    wizard[event.target.name] = Math.max(0, Number(event.target.value || 0));
+    wizard.countsConfirmed = false;
+    const confirmation = wizardForm.querySelector('[data-confirm-count-change]');
+    if (confirmation) confirmation.checked = false;
+    const summary = wizardForm.querySelector('[data-wizard-guest-total]');
+    if (summary) summary.innerHTML = billWizardCountChips(wizard);
+    const reservation = all('reservations').find(item => item.id === wizard.reservationId);
+    const mismatch = Number(wizard.adultCount) !== Number(reservation?.adults || 0)
+      || Number(wizard.seniorCount) !== Number(reservation?.seniorPwdCount || 0)
+      || Number(wizard.kidsCount) !== Number(reservation?.children || 0);
+    const countChanges = billWizardCountDifferences(wizard);
+    const countChangeText = countChanges.map(change =>
+      `${change.from} ${change.label} to ${change.to} ${change.label}`
+    ).join('; ');
+    const changeNotice = wizardForm.querySelector('[data-wizard-count-change]');
+    if (changeNotice) {
+      changeNotice.hidden = countChanges.length === 0;
+      changeNotice.textContent = countChanges.length
+        ? `Changed from ${wizard.billId ? 'saved bill' : 'seating'}: ${countChangeText}` : '';
+    }
+    const countConfirmation = wizardForm.querySelector('[data-count-confirmation]');
+    if (countConfirmation) countConfirmation.hidden = countChanges.length === 0;
+    const baselineNote = wizardForm.querySelector('[data-count-baseline-note]');
+    if (baselineNote) baselineNote.hidden = countChanges.length > 0;
+    const warning = wizardForm.querySelector('[data-wizard-count-warning]');
+    if (warning) warning.hidden = !mismatch;
+    const idReminder = wizardForm.querySelector('[data-senior-id-reminder]');
+    if (idReminder) idReminder.hidden = Number(wizard.seniorCount) === Number(wizard.countBaseline?.seniorCount || 0);
+  }
+  if (wizardForm && event.target.matches('[name="tenderedAmount"]')) {
+    state.billWizard.tenderedAmount = event.target.value;
+    const due = Number(state.billWizard.closePreview?.balance_after_deposit || 0);
+    updateBillCashChangePreview(
+      wizardForm.querySelector('[data-cash-change-preview]'),
+      event.target.value,
+      due
+    );
+  }
+  const billCloseFormElement = event.target.closest('#modalForm[data-type="bill-close"]');
+  if (billCloseFormElement && event.target.matches('[name="tenderedAmount"]')) {
+    updateBillCashChangePreview(
+      billCloseFormElement.querySelector('[data-cash-change-preview]'),
+      event.target.value,
+      Number(billCloseFormElement.dataset.balanceDue || 0)
+    );
+  }
   if (['adults', 'seniorPwdCount', 'children'].includes(event.target.name)
     && event.target.closest('#modalForm[data-type="walk-in"]')) {
     refreshWalkInTables(event.target.closest('#modalForm'));
+    return;
+  }
+  const walkInFormElement = event.target.closest('#modalForm[data-type="walk-in"]');
+  if (walkInFormElement && event.target.name === 'name') {
+    updateWalkInSummary(walkInFormElement, walkInTableList(
+      walkInGuestTotal(walkInFormElement),
+      walkInFormElement.dataset.date,
+      walkInFormElement.dataset.time
+    ));
+    return;
+  }
+  const reservationWizardForm = event.target.closest('#modalForm[data-type="reservation"][data-reservation-wizard-step="1"]');
+  if (reservationWizardForm && ['adults', 'seniorPwdCount', 'children'].includes(event.target.name)) {
+    const total = Number(reservationWizardForm.elements.adults.value || 0)
+      + Number(reservationWizardForm.elements.seniorPwdCount.value || 0)
+      + Number(reservationWizardForm.elements.children.value || 0);
+    const totalTarget = reservationWizardForm.querySelector('[data-reservation-step-total]');
+    if (totalTarget) totalTarget.textContent = String(total);
   }
 });
 window.addEventListener('beforeunload', event => {
@@ -9524,7 +10576,9 @@ document.addEventListener('submit', async event => {
     receiving: 'Recording delivery…',
     ingredient: 'Saving product…',
     bill: 'Saving bill…',
-    'bill-close': 'Closing bill…'
+    'bill-close': 'Closing bill…',
+    'bill-wizard': form.dataset.screen === '4' ? 'Confirming payment…'
+      : form.dataset.screen === '3' ? 'Saving draft…' : 'Continuing…'
   };
   form.dataset.saving = 'true';
   let slowSubmitTimer;

@@ -13,6 +13,10 @@ Phase A is implemented in migrations 011 and 012. Migration 011 adds `senior_pwd
 
 Run `supabase/011_reservation_guest_counts.sql` after `supabase/010_pos_single_source_security.sql`, then run `supabase/012_reservation_guest_count_constraint.sql`. Run `supabase/011_reservation_guest_counts_acceptance.sql` afterward; it ends with `ROLLBACK`. Roll back in reverse order: `supabase/012_reservation_guest_count_constraint_rollback.sql`, then `supabase/011_reservation_guest_counts_rollback.sql`.
 
+### Receptionist reservation and walk-in UX
+
+Walk-ins remain a single-screen workflow. The visual table cards show capacity and availability, update capacity feedback as counts change, and accompany a live submission summary. A blank guest name is saved as a generated `Walk-In Guest #XXXXX` identifier; a provided name is used instead. The four-step reservation flow separates guest details, table selection, optional extras, and review/confirmation. Users can return to earlier steps without losing entered details. These are client-side workflow changes only: existing validation, table-conflict checks, reservation persistence, and the atomic Seat and open bill operation remain in place.
+
 ## Platform and boundaries
 
 - CostTrack is a buffet restaurant system using plain HTML/CSS/JavaScript and Supabase Auth, PostgreSQL, RLS, and RPC.
@@ -147,9 +151,18 @@ Migration `013_walkin_atomic_billing_safeguards.sql` adds the atomic Walk-in RPC
 ### Create Bill guided wizard (Phase B1)
 
 - The Create Bill modal is a four-step flow. Phase B1 implements party selection and buffet/package selection; the party step is the only screen that identifies or types guest names and counts.
-- Screen 1 lists Seated reservations and Walk-ins for the current business date, newest seated first. It supports name/table search and All, Seated reservations, and Walk-ins filters. Open bills show Continue bill and closed bills are excluded. Past Seated parties remain flagged for the existing Unresolved view and are not billable from the wizard.
+- Screen 1 lists Seated reservations and Walk-ins for the current business date, newest seated first. It supports name/table search and All, Seated reservations, and Walk-ins filters. Select a party card, then use the single footer Continue action; selected cards and tabs use an amber border/check treatment, open bills are indicated on the card, and closed bills are excluded. Past Seated parties remain flagged for the existing Unresolved view and are not billable from the wizard.
 - An open shift is required before the party list is shown. The New walk-in shortcut uses the existing seat-and-open-walkin RPC, which preserves the counts entered at seating and continues to Screen 2.
-- Screen 2 keeps a read-only guest summary visible and preloads reservation or walk-in counts, table, package, tier, and held deposit. Counts may be edited in an inline confirmed stepper; the browser only previews the notice and the existing pos_save_bill_phase3 RPC remains the authority for totals and validation.
+- Screen 2 keeps a read-only guest summary visible and preloads reservation or walk-in counts, table, package, tier, and held deposit. Counts may be edited in an inline stepper. Saved bill counts are already confirmed; only values changed from the current reservation (for a new bill) or saved bill (for an edit) require a fresh confirmation. The editor stays open during count review, and the existing pos_save_bill_phase3 RPC remains the authority for totals and validation.
+
+### Create Bill guided wizard (Phase B2)
+
+- Screen 3 adds and removes catalog extras with quantity steppers, the one-tap active `LEFTOVER` shortcut, optional package extra-pax charging, a type-organized bill-level discount picker with a required reason, and bill notes. Back navigation preserves these unsaved values. Catalog prices are displayed for reference; the existing save RPC controls line prices and totals.
+- Saving Screen 3 updates the Open bill through `pos_save_bill_phase3` and advances to Screen 4. An existing bill can skip directly to this save-and-review path. **Save and leave open** exits without taking payment.
+- Completed progress steps navigate back without changing the existing save/close RPC flow. Screen 4 shows guest counts with the bill lines and keeps the party/table identity in the line heading instead of repeating a separate guest-summary card. The server-returned totals, deposit deduction, balance, and cash tender area stay visible while bill lines scroll independently as needed; use the progress steps to edit counts.
+- Screen 4 displays the server-returned bill totals, line amounts, and the existing `pos_bill_close_preview` deposit/balance amounts. It warns for changed headcounts, missing tables, deposit remainder, and full-bill approval requirements. Exact, ₱500, and ₱1,000 shortcuts set cash tender; typing a tender amount immediately previews change or any shortfall, while final payment and change remain server-confirmed.
+- Confirm payment uses the existing `pos_close_bill_phase3` with a stable retry key. The server remains authoritative for approval, deposit application, payment, final change, and bill closure. A successful close updates local records, refreshes related collections, and attempts the existing billing statement print; allow pop-ups or use the existing print action if the browser blocks it.
+- The wizard changes no server totals, RPC arguments/definitions, approval rules, shift behavior, or database rules. No migration or new query is required.
 
 ### Phase C — billing safeguards and Walk-in packages
 
