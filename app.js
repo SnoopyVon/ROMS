@@ -80,6 +80,19 @@ state.reservationMealPeriodFilter = 'All';
 state.reservationDateFilter = 'All';
 state.dateRange = '7';
 state.modalDirty = false;
+state.billWizard = {
+  screen: 1,
+  filter: localStorage.getItem('costtrack_bill_party_filter') || 'All',
+  query: '',
+  reservationId: '',
+  billId: '',
+  countsEditing: false,
+  countsConfirmed: false,
+  adultCount: 0,
+  seniorCount: 0,
+  kidsCount: 0,
+  compedCount: 0
+};
 state.reportTab = state.reportTab || 'food_cost';
 state.reportGrouping = state.reportGrouping || 'day';
 state.reportIncludeWaste = state.reportIncludeWaste !== false;
@@ -5480,6 +5493,67 @@ async function handleSubmit(form, submitter = null) {
   const data = Object.fromEntries(new FormData(form));
   const type = form.dataset.type;
   const editId = form.dataset.id;
+  if (type === 'bill-wizard') {
+    if (form.dataset.screen === '1') return toast('Select a seated party to continue.', 'error');
+    const wizard = state.billWizard;
+    const reservation = all('reservations').find(record => record.id === wizard.reservationId);
+    const counts = [wizard.adultCount, wizard.seniorCount, wizard.kidsCount, wizard.compedCount];
+    if (!counts.every(value => Number.isInteger(Number(value))) || counts.reduce((sum, value) => sum + Number(value), 0) > 1000) {
+      return toast('Enter whole-number head counts totaling no more than 1,000.', 'error');
+    }
+    if (counts.reduce((sum, value) => sum + Number(value), 0) === 0) {
+      return toast('Enter at least one guest.', 'error');
+    }
+    const mismatch = Number(wizard.adultCount) !== Number(reservation?.adults || 0)
+      || Number(wizard.seniorCount) !== Number(reservation?.seniorPwdCount || 0)
+      || Number(wizard.kidsCount) !== Number(reservation?.children || 0);
+    if (mismatch && !wizard.countsConfirmed) return toast('Confirm the changed guest counts before saving.', 'error');
+    const submit = form.querySelector('.modal-submit');
+    if (submit?.dataset.saving === 'true') return;
+    submit?.classList.add('is-loading');
+    submit?.setAttribute('aria-busy', 'true');
+    submit?.setAttribute('disabled', 'true');
+    submit.dataset.saving = 'true';
+    form.dataset.saving = 'true';
+    const originalCounts = `Seating: ${Number(reservation?.adults || 0)} adults, ${Number(reservation?.seniorPwdCount || 0)} senior/PWD, ${Number(reservation?.children || 0)} kids`;
+    const billNote = mismatch ? `${String(reservation?.request || '').trim()} Headcount changed from seating. ${originalCounts}. Bill: ${wizard.adultCount} adults, ${wizard.seniorCount} senior/PWD, ${wizard.kidsCount} kids, ${wizard.compedCount} comped.` : String(reservation?.request || '').trim();
+    try {
+      const result = await window.supabaseRecord.posSaveBill({
+        billId: wizard.billId || null,
+        customerName: reservation?.name || 'Walk-in guest',
+        notes: billNote,
+        reservationId: reservation?.id || null,
+        adultCount: Number(wizard.adultCount),
+        seniorCount: Number(wizard.seniorCount),
+        kidsCount: Number(wizard.kidsCount),
+        compedCount: Number(wizard.compedCount),
+        discountId: null,
+        discountReason: '',
+        extraLines: [],
+        tableId: reservation?.table || null,
+        chargeExtraPax: false,
+        idempotencyKey: wizard.billId ? null : form.dataset.createKey
+      });
+      const savedBill = window.supabaseRecord.mapRecord('posBills', result?.bill);
+      if (!savedBill) throw new Error('The bill was saved but the server did not return its updated details.');
+      upsertLocalRecord('posBills', savedBill);
+      const savedLines = (result.lines || []).map(line => window.supabaseRecord.mapRecord('billLines', line));
+      replaceLocalRelatedRecords('billLines', line => line.billId === savedBill.id, savedLines);
+      state.modalDirty = false;
+      closeModal(true);
+      toast(`${savedBill.billNumber || 'Bill'} saved. Subtotal ${money(savedBill.subtotal)} · Balance ${money(savedBill.balanceDue)}.`);
+      render();
+    } catch (error) {
+      console.error('Bill wizard save failed.', error);
+      form.dataset.saving = 'false';
+      submit?.removeAttribute('disabled');
+      submit?.removeAttribute('aria-busy');
+      submit?.classList.remove('is-loading');
+      delete submit?.dataset.saving;
+      toast(friendlyRpcError(error), 'error');
+    }
+    return;
+  }
   if (type === 'reservation-confirmation') {
     await saveReservationConfirmation(form, data);
     return;
@@ -6592,6 +6666,145 @@ function billForm(item = {}) {
   if (!editing && !all('shifts').some(shift => shift.status === 'Open')) {
     return toast('Open the restaurant cashier shift before creating a bill.', 'error');
   }
+  const reservation = item.reservationId
+    ? all('reservations').find(record => record.id === item.reservationId)
+    : null;
+  state.billWizard.screen = item.reservationId || reservation ? 2 : 1;
+  state.billWizard.reservationId = item.reservationId || reservation?.id || '';
+  state.billWizard.billId = item.id || '';
+  state.billWizard.adultCount = Number(item.adultCount ?? reservation?.adults ?? 0);
+  state.billWizard.seniorCount = Number(item.seniorCount ?? reservation?.seniorPwdCount ?? 0);
+  state.billWizard.kidsCount = Number(item.kidsCount ?? reservation?.children ?? 0);
+  state.billWizard.compedCount = Number(item.compedCount || 0);
+  state.billWizard.countsEditing = false;
+  state.billWizard.countsConfirmed = false;
+  renderBillWizard();
+}
+function renderBillWizard() {
+  const wizard = state.billWizard;
+  if (!wizard.reservationId) wizard.screen = 1;
+  const progress = `<ol class="pos-wizard-progress" aria-label="Create bill progress"><li class="${wizard.screen === 1 ? 'is-active' : ''}" ${wizard.screen === 1 ? 'aria-current="step"' : ''}><span>1</span> Party</li><li class="${wizard.screen === 2 ? 'is-active' : ''}" ${wizard.screen === 2 ? 'aria-current="step"' : ''}><span>2</span> Buffet and package</li><li><span>3</span> Extras and discounts</li><li><span>4</span> Review and pay</li></ol>`;
+  const content = wizard.screen === 1 ? renderBillPartyScreen() : renderBillBuffetScreen();
+  modal('Create bill', `${progress}${content}`, wizard.screen === 2 ? 'Save and leave open' : 'Continue', 'pos-wizard-modal', 'form');
+  const form = document.querySelector('#modalForm');
+  form.dataset.type = 'bill-wizard';
+  form.dataset.screen = String(wizard.screen);
+  form.dataset.createKey = id('POSCREATE');
+  if (wizard.billId) form.dataset.billId = wizard.billId;
+  if (wizard.reservationId) form.dataset.reservationId = wizard.reservationId;
+  if (wizard.screen === 1) form.querySelector('[data-party-search]')?.focus();
+  state.modalDirty = false;
+}
+function elapsedSeatingLabel(seatedAt) {
+  if (!seatedAt) return 'Seated time unavailable';
+  const elapsed = Math.max(0, Date.now() - new Date(seatedAt).getTime());
+  const minutes = Math.floor(elapsed / 60000);
+  if (minutes < 60) return `${minutes} min elapsed`;
+  return `${Math.floor(minutes / 60)} hr ${minutes % 60} min elapsed`;
+}
+function renderBillPartyScreen() {
+  if (!all('shifts').some(shift => shift.status === 'Open')) {
+    return `<div class="pos-wizard-empty" role="status"><span class="large-icon">!</span><h3>No open cashier shift</h3><p>Open a shift before selecting or creating a bill.</p><button type="button" class="primary-btn" data-action="open-shift-from-wizard">Open shift</button></div>`;
+  }
+  const wizard = state.billWizard;
+  const todayDate = today();
+  const reservations = all('reservations').filter(res =>
+    res.status === 'Seated'
+    && (!res.date || res.date === todayDate)
+  ).slice().sort((a, b) => String(b.seatedAt || '').localeCompare(String(a.seatedAt || '')));
+  const bills = all('posBills');
+  const parties = reservations.filter(res => {
+    const linked = bills.find(bill => bill.reservationId === res.id);
+    return (!linked || linked.status === 'Open');
+  }).filter(res => {
+    if (wizard.filter === 'Walk-ins') return res.type === 'Walk-in';
+    if (wizard.filter === 'Seated reservations') return res.type !== 'Walk-in';
+    return true;
+  }).filter(res => {
+    const query = wizard.query.trim().toLowerCase();
+    if (!query) return true;
+    return `${res.name || ''} ${res.table || ''}`.toLowerCase().includes(query);
+  });
+  const tabs = [['All', 'All'], ['Seated reservations', 'Seated reservations'], ['Walk-ins', 'Walk-ins']]
+    .map(([value, label]) => `<button type="button" role="tab" aria-selected="${wizard.filter === value}" class="pos-wizard-filter${wizard.filter === value ? ' is-active' : ''}" data-bill-party-filter="${esc(value)}">${esc(label)}</button>`).join('');
+  const cards = parties.map(res => {
+    const openBill = bills.find(bill => bill.reservationId === res.id && bill.status === 'Open');
+    const adults = Number(res.adults || 0);
+    const senior = Number(res.seniorPwdCount || 0);
+    const kids = Number(res.children || 0);
+    const total = adults + senior + kids + Number(res.compedCount || 0);
+    const held = all('reservationDeposits').filter(deposit =>
+      deposit.reservationId === res.id && deposit.status === 'Held' && !deposit.billId
+    ).reduce((sum, deposit) => sum + Number(deposit.amount || 0), 0);
+    const packageName = all('chargeItems').find(item => item.id === res.packageChargeItemId)?.name;
+    return `<button type="button" class="pos-party-card" data-bill-party-id="${esc(res.id)}" aria-label="${openBill ? 'Continue bill' : 'Create bill'} for ${esc(res.name || 'Walk-in guest')}">
+      <span class="pos-party-card-head"><strong>${esc(res.name || 'Walk-in guest')}</strong><span>${esc(res.table || 'No table')}</span></span>
+      <span class="pos-party-guests">${total} guests · ${adults} adults, ${senior} senior/PWD, ${kids} kids</span>
+      <span class="pos-party-meta">${esc(formatOperationalDateTime(res.seatedAt))} · ${esc(elapsedSeatingLabel(res.seatedAt))}</span>
+      ${packageName ? `<span class="pos-party-meta">Package: ${esc(packageName)} · ${Number(res.packagePaxCount || 0)} pax</span>` : ''}
+      ${held > 0 ? `<span class="pos-party-meta">Deposit held: ${money(held)}</span>` : ''}
+      <span class="pos-party-action">${openBill ? 'Continue bill' : 'Open bill'} <span aria-hidden="true">→</span></span>
+    </button>`;
+  }).join('');
+  const unresolvedCards = all('reservations').filter(res =>
+    res.status === 'Seated' && res.date && res.date < todayDate
+  ).slice(0, 6).map(res => `<div class="pos-party-card pos-party-card-unresolved" aria-label="Past unresolved seated party"><span class="pos-party-card-head"><strong>${esc(res.name || 'Walk-in guest')}</strong><span>Unresolved</span></span><span class="pos-party-guests">${Number(res.guests || res.actualCovers || 0)} guests · Table ${esc(res.table || 'None linked')}</span><span class="pos-party-meta">${esc(reservationDateLabel(res.date))}</span><button type="button" class="text-btn" data-action="open-wizard-unresolved">Open Unresolved view</button></div>`).join('');
+  const partyCards = [cards, unresolvedCards].filter(Boolean).join('');
+  return `<div class="pos-wizard-screen" data-pos-wizard-screen="1">
+    <div class="pos-wizard-toolbar"><label>Search parties<input type="search" data-party-search value="${esc(wizard.query)}" placeholder="Name or table" aria-label="Search by name or table"></label><button type="button" class="primary-btn" data-action="open-walk-in">+ New walk-in</button></div>
+    <div class="pos-wizard-tabs" role="tablist" aria-label="Party type">${tabs}</div>
+    ${partyCards ? `<div class="pos-party-grid">${partyCards}</div>` : `<div class="pos-wizard-empty"><strong>No seated parties to bill.</strong><p>Seat a reservation or record a walk-in first.</p><div><button type="button" class="ghost-btn" data-action="open-reservation">Seat reservation</button><button type="button" class="primary-btn" data-action="open-walk-in">Record walk-in</button></div></div>`}
+  </div>`;
+}
+function renderBillBuffetScreen() {
+  const reservation = all('reservations').find(record => record.id === state.billWizard.reservationId);
+  if (!reservation) return '<div class="pos-wizard-empty"><strong>Party unavailable.</strong><p>Return to party selection.</p></div>';
+  const wizard = state.billWizard;
+  const adults = Number(wizard.adultCount || 0);
+  const senior = Number(wizard.seniorCount || 0);
+  const kids = Number(wizard.kidsCount || 0);
+  const comped = Number(wizard.compedCount || 0);
+  const total = adults + senior + kids + comped;
+  const packageItem = all('chargeItems').find(item => item.id === reservation.packageChargeItemId);
+  const packageTier = all('packageTiers').find(tier => tier.id === reservation.packageTierId);
+  const extraPax = packageItem ? Math.max(0, total - Number(reservation.packagePaxCount || 0)) : 0;
+  const seatedAdults = Number(reservation.adults || 0);
+  const seatedSenior = Number(reservation.seniorPwdCount || 0);
+  const seatedKids = Number(reservation.children || 0);
+  const mismatch = adults !== seatedAdults || senior !== seatedSenior || kids !== seatedKids;
+  const held = all('reservationDeposits').filter(deposit =>
+    deposit.reservationId === reservation.id && deposit.status === 'Held' && !deposit.billId
+  ).reduce((sum, deposit) => sum + Number(deposit.amount || 0), 0);
+  const rates = all('buffetRates').filter(rate => rate.isActive !== false);
+  const adultRate = rates.find(rate => Number(rate.adultRate) >= 0)?.adultRate ?? 449;
+  const seniorRate = rates.find(rate => Number(rate.seniorPwdRate) >= 0)?.seniorPwdRate ?? 360;
+  const kidsRate = rates.find(rate => Number(rate.childRate) >= 0)?.childRate ?? 225;
+  const countEditor = wizard.countsEditing
+    ? `<div class="pos-count-stepper" role="group" aria-label="Edit bill guest counts">
+        ${[['adultCount','Adults',adults],['seniorCount','Senior / PWD',senior],['kidsCount','Kids',kids],['compedCount','Comped',comped]].map(([name,label,value]) =>
+          `<label>${label}<input type="number" min="0" max="1000" step="1" name="${name}" value="${value}" data-wizard-count></label>`
+        ).join('')}
+        ${senior !== seatedSenior ? '<p class="field-help">Senior/PWD changes: check the guest ID before confirming.</p>' : ''}
+        ${mismatch ? `<p class="pos-count-change" role="status">Changed from seating: ${adults !== seatedAdults ? `${seatedAdults} adults to ${adults} adults` : ''}${senior !== seatedSenior ? `${adults !== seatedAdults ? '; ' : ''}${seatedSenior} senior/PWD to ${senior} senior/PWD` : ''}${kids !== seatedKids ? `${adults !== seatedAdults || senior !== seatedSenior ? '; ' : ''}${seatedKids} kids to ${kids} kids` : ''}</p>` : ''}
+        <label class="pos-count-confirm"><input type="checkbox" data-confirm-count-change ${wizard.countsConfirmed ? 'checked' : ''}> I confirm these counts for the bill</label>
+      </div>`
+    : '';
+  return `<div class="pos-wizard-screen pos-wizard-screen-two" data-pos-wizard-screen="2">
+    <aside class="pos-guest-summary" aria-label="Selected party guest summary"><strong>${esc(reservation.name || 'Walk-in guest')}</strong><span>Table ${esc(reservation.table || 'None linked')}</span><span>${total} guests · ${adults} adults, ${senior} senior/PWD, ${kids} kids, ${comped} comped</span>${held > 0 ? `<span>Deposit held: ${money(held)}</span>` : ''}<button type="button" class="text-btn" data-action="toggle-wizard-count-edit">${wizard.countsEditing ? 'Done editing' : 'Edit counts'}</button></aside>
+    ${countEditor}
+    ${mismatch ? '<p class="pos-wizard-warning" role="status">Headcount differs from seating. The difference will be noted on the bill.</p>' : ''}
+    <section class="pos-buffet-rates"><div class="panel-title">Buffet and rates</div><div class="pos-rate-grid"><span>Adult<strong>${money(adultRate)} each</strong></span><span>Senior/PWD<strong>${money(seniorRate)} each</strong></span><span>Kids<strong>${money(kidsRate)} each</strong></span><span>Comped<strong>₱0.00</strong></span></div></section>
+    ${packageItem && packageTier ? `<section class="pos-package-card"><strong>${esc(packageItem.name)}</strong><span>${esc(packageTier.name)} · ${Number(reservation.packagePaxCount || 0)} pax</span>${extraPax > 0 ? `<p class="pos-wizard-warning">Actual guests exceed package pax by ${extraPax}. Extra-pax charging may be available on save.</p>` : ''}</section>` : `<section class="pos-package-card"><strong>No package booked</strong>${reservation.type === 'Walk-in' ? '<span>Walk-ins cannot select event packages. Extra buffet rates apply.</span>' : '<span>Buffet rates apply.</span>'}</section>`}
+  </div>`;
+}
+function legacyBillForm(item = {}) {
+  const editing = Boolean(item.id);
+  if (editing && state.role === 'Receptionist' && item.createdBy !== state.user?.id) {
+    return toast('Receptionists can only view bills they created.', 'error');
+  }
+  if (!editing && !all('shifts').some(shift => shift.status === 'Open' && shift.openedBy === state.user?.id)) {
+    return toast('Open your cashier shift before creating a bill.', 'error');
+  }
   const editable = !editing || (item.status === 'Open'
     && (state.role !== 'Receptionist' || item.createdBy === state.user?.id));
   const disabled = editable ? '' : 'disabled';
@@ -6921,9 +7134,57 @@ document.addEventListener('click', async event => {
     state.modalDirty = true;
     return;
   }
+  const partyCard = event.target.closest('[data-bill-party-id]');
+  if (partyCard) {
+    const reservation = all('reservations').find(record => record.id === partyCard.dataset.billPartyId);
+    if (!reservation) return toast('This party is no longer available. Refresh the bill list.', 'error');
+    const openBill = all('posBills').find(bill => bill.reservationId === reservation.id && bill.status === 'Open');
+    state.billWizard.screen = 2;
+    state.billWizard.reservationId = reservation.id;
+    state.billWizard.billId = openBill?.id || '';
+    state.billWizard.adultCount = Number(openBill?.adultCount ?? reservation.adults ?? 0);
+    state.billWizard.seniorCount = Number(openBill?.seniorCount ?? reservation.seniorPwdCount ?? 0);
+    state.billWizard.kidsCount = Number(openBill?.kidsCount ?? reservation.children ?? 0);
+    state.billWizard.compedCount = Number(openBill?.compedCount || 0);
+    state.billWizard.countsEditing = false;
+    state.billWizard.countsConfirmed = false;
+    state.modalDirty = true;
+    renderBillWizard();
+    return;
+  }
+  const partyFilter = event.target.closest('[data-bill-party-filter]');
+  if (partyFilter) {
+    state.billWizard.filter = partyFilter.dataset.billPartyFilter;
+    localStorage.setItem('costtrack_bill_party_filter', state.billWizard.filter);
+    renderBillWizard();
+    return;
+  }
   const actionElement = event.target.closest('[data-action]');
   const action = actionElement?.dataset.action;
   if (!action) return;
+  if (action === 'bill-wizard-back') {
+    if (state.billWizard.screen === 2) {
+      state.billWizard.screen = 1;
+      state.billWizard.reservationId = '';
+      state.billWizard.billId = '';
+      state.modalDirty = false;
+      renderBillWizard();
+    }
+    return;
+  }
+  if (action === 'toggle-wizard-count-edit') {
+    state.billWizard.countsEditing = !state.billWizard.countsEditing;
+    state.modalDirty = true;
+    renderBillWizard();
+    return;
+  }
+  if (action === 'open-wizard-unresolved') {
+    closeModal(true);
+    state.reservationFilter = 'Unresolved';
+    setView('reservations');
+    return;
+  }
+  if (action === 'open-shift-from-wizard') return shiftForm();
   if (action === 'add-leftover-charge') {
     const form = document.querySelector('#modalForm[data-type="bill"]');
     const lines = form?.querySelector('.pos-extra-lines');
@@ -7281,6 +7542,23 @@ document.addEventListener('submit', async event => {
 });
 document.addEventListener('input', event => {
   const searchInput = event.target;
+  if (searchInput.matches('[data-party-search]')) {
+    state.billWizard.query = searchInput.value;
+    const position = searchInput.selectionStart;
+    renderBillWizard();
+    const replacement = document.querySelector('[data-party-search]');
+    replacement?.focus();
+    replacement?.setSelectionRange(position, position);
+    return;
+  }
+  if (searchInput.matches('[data-wizard-count]')) {
+    const field = searchInput.name;
+    if (['adultCount', 'seniorCount', 'kidsCount', 'compedCount'].includes(field)) {
+      state.billWizard[field] = Math.max(0, Number(searchInput.value || 0));
+      state.modalDirty = true;
+    }
+    return;
+  }
   if (searchInput.id === 'userManagementSearch') {
     state.userManagementSearch = searchInput.value;
     const query = state.userManagementSearch.toLowerCase();
@@ -7439,6 +7717,17 @@ document.addEventListener('change', event => {
   }
 });
 document.addEventListener('change', event => {
+  if (event.target.matches('[data-wizard-count]')) {
+    state.billWizard[event.target.name] = Math.max(0, Number(event.target.value || 0));
+    state.modalDirty = true;
+    renderBillWizard();
+    return;
+  }
+  if (event.target.matches('[data-confirm-count-change]')) {
+    state.billWizard.countsConfirmed = event.target.checked;
+    state.modalDirty = true;
+    return;
+  }
   const form = event.target.closest('#modalForm[data-type="count"]');
   if (!form || !event.target.matches('[name="ingredientId"]')) return;
   const selectedProduct = ingredient(event.target.value);
@@ -7980,7 +8269,7 @@ function modal(title, content, submit = 'Save record', modalClass = '', modalTyp
   const closeLabel = ['read-only', 'popover', 'menu'].includes(modalType) ? 'Close' : isConfirmation ? 'Cancel' : 'Cancel';
   const actions = isConfirmation
     ? `<div class="modal-actions"><button type="button" class="ghost-btn" data-action="close-modal">${closeLabel}</button><button type="button" class="primary-btn" data-action="confirm-modal">${submit || 'Continue'}</button></div>`
-    : `<div class="modal-actions"><button type="button" class="ghost-btn" data-action="close-modal">${closeLabel}</button>${submit ? `<button class="primary-btn modal-submit" type="submit">${submit}</button>` : ''}</div>`;
+    : `<div class="modal-actions pos-wizard-footer"><div class="pos-wizard-footer-left">${modalClass === 'pos-wizard-modal' && submit ? '<button type="button" class="ghost-btn" data-action="bill-wizard-back">← Back</button>' : ''}</div><div class="pos-wizard-footer-right"><button type="button" class="ghost-btn" data-action="close-modal">${closeLabel}</button>${submit ? `<button class="primary-btn modal-submit" type="submit">${submit}</button>` : ''}</div></div>`;
   const markup = `<div class="modal-backdrop" role="presentation"><div class="modal${modalClass ? ` ${esc(modalClass)}` : ''}" role="dialog" aria-modal="true" aria-labelledby="${titleId}" tabindex="-1" data-modal-type="${esc(modalType)}"><div class="modal-header"><div><div class="eyebrow">ROMS workspace</div><h2 id="${titleId}">${title}</h2></div><button type="button" class="modal-close" data-action="close-modal" aria-label="Close dialog">×</button></div><form id="${formId}" novalidate data-modal-type="${esc(modalType)}">${content}${actions}</form></div></div>`;
   if (isConfirmation) root.insertAdjacentHTML('beforeend', markup);
   else root.innerHTML = markup;

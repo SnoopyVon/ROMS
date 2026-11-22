@@ -144,6 +144,13 @@ Migration `013_walkin_atomic_billing_safeguards.sql` adds the atomic Walk-in RPC
 - A cashier/idempotency-key pair is unique. Retrying the same request returns its existing reservation and bill. The existing one-open-bill-per-reservation constraint still rejects a second bill.
 - A failed step rolls back both records and table-status changes. The browser request times out after 15 seconds and retains the same key on retry. Payment remains due after the meal; no pay-upfront path is added.
 
+### Create Bill guided wizard (Phase B1)
+
+- The Create Bill modal is a four-step flow. Phase B1 implements party selection and buffet/package selection; the party step is the only screen that identifies or types guest names and counts.
+- Screen 1 lists Seated reservations and Walk-ins for the current business date, newest seated first. It supports name/table search and All, Seated reservations, and Walk-ins filters. Open bills show Continue bill and closed bills are excluded. Past Seated parties remain flagged for the existing Unresolved view and are not billable from the wizard.
+- An open shift is required before the party list is shown. The New walk-in shortcut uses the existing seat-and-open-walkin RPC, which preserves the counts entered at seating and continues to Screen 2.
+- Screen 2 keeps a read-only guest summary visible and preloads reservation or walk-in counts, table, package, tier, and held deposit. Counts may be edited in an inline confirmed stepper; the browser only previews the notice and the existing pos_save_bill_phase3 RPC remains the authority for totals and validation.
+
 ### Phase C — billing safeguards and Walk-in packages
 
 - Reservation-linked bills display reservation and bill counts by category. Any category mismatch shows a warning and requires confirmation on save; it does not block saving.

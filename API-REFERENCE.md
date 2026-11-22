@@ -196,6 +196,10 @@ Run `supabase/020_closed_bill_revenue_reporting.sql` after migration 019, follow
 
 The browser exposes this operation as **Seat and open bill**; **Seat only** remains available. The operation has the existing 15-second timeout behavior, and retries from the same form reuse its key. Payment is still taken after the meal.
 
+#### Create Bill wizard Phase B1
+
+The wizard UI calls only existing POS RPCs: `pos_save_bill_phase3` for party, count, package, and bill preview/save changes; `pos_seat_and_open_walkin` for the New walk-in shortcut; and existing close/approval RPCs remain unchanged for later screens. Party selection uses local seated reservation and POS bill collections; no new read query or migration is required. Server-calculated totals, shift ownership, table/price/rate lookup, and duplicate-open-bill rules are not changed by this flow.
+
 Migration 013 also adds database guards for event packages attached to Walk-ins. A Manager or Administrator must provide a 10–500 character reason when adding or changing the package booking; the actor, reason, package, tier, pax, and timestamp are written to `pos_walkin_package_overrides`. A package bill line for a Walk-in must match both its current authorized reservation package and an override audit row. Direct table/RPC attempts by Receptionists cannot bypass this rule. Non-package extras remain available.
 
 The bill UI compares reservation and bill counts by adult, Senior/PWD, and kid categories. Differences require a cashier confirmation before save but are not blocked. Closing without a linked table shows a confirmation warning. **Add Leftover charge** reads the active `LEFTOVER` item from `pos_charge_items`; the server remains the source of price and totals. Exact, ₱500, and ₱1,000 payment shortcuts only set the tender input; `pos_close_bill_phase3` remains responsible for payment and change calculation. Bill-close requests and the follow-up related-record refresh have 15-second limits so the UI exits its loading state and reports a timeout or refresh warning. Retrying from the same payment form reuses its idempotency key.
