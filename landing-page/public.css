@@ -102,7 +102,7 @@ nav a:hover,
 .book:hover,
 .primary:hover,
 .primary-btn:hover {
-  background: var(--brand);
+  background: var(--accent-hover);
 }
 
 .outline {
@@ -256,6 +256,56 @@ nav a:hover,
   color: #e9e0d0;
 }
 
+body:has(nav a.active[href="#about"]) .inner-hero h1 {
+  color: var(--ink);
+}
+
+body:has(nav a.active[href="#about"]) .inner-hero p {
+  color: var(--muted);
+}
+
+body:has(nav a.active[href="#menu"]) .inner-hero h1 {
+  color: var(--ink);
+}
+
+body:has(nav a.active[href="#menu"]) .inner-hero p {
+  color: var(--muted);
+}
+
+body:has(nav a.active[href="#buffet"]) .inner-hero h1 {
+  color: var(--ink);
+}
+
+body:has(nav a.active[href="#buffet"]) .inner-hero p {
+  color: var(--muted);
+}
+
+body:has(nav a.active[href="#gallery"]) .inner-hero h1 {
+  color: var(--ink);
+}
+
+body:has(nav a.active[href="#contact"]) .inner-hero h1 {
+  color: var(--ink);
+}
+
+body:has(nav a.active[href="#contact"]) .inner-hero p {
+  color: var(--muted);
+}
+
+body:has(nav a.active[href="#buffet"]) .packages article.featured {
+  color: var(--ink);
+}
+
+body:has(nav a.active[href="#buffet"]) .packages article.featured p,
+body:has(nav a.active[href="#buffet"]) .packages article.featured li {
+  color: var(--muted);
+}
+
+body:has(nav a.active[href="#buffet"]) .packages article.featured button.primary:hover {
+  color: var(--paper);
+  background: var(--accent-hover);
+}
+
 .menu-hero,
 .buffet-hero {
   background-blend-mode: multiply;
@@ -290,6 +340,15 @@ footer b {
 footer span,
 footer p {
   color: #e9e0d0;
+}
+
+footer b {
+  color: var(--accent);
+}
+
+footer span,
+footer p {
+  color: var(--muted);
 }
 
 .cta {
@@ -586,25 +645,30 @@ body:has(#publicApp > .hero) .intro {
 }
 
 .cta {
-  background: var(--brand);
+  background: var(--cream);
 }
 
 .cta small {
-  color: #dccdb3;
+  color: var(--accent);
+}
+
+.cta h2 {
+  color: var(--ink);
 }
 
 .cta h2 em {
-  color: #dccdb3;
+  color: var(--accent);
 }
 
 .cta .outline.light {
   border-color: #dccdb3;
-  color: var(--paper);
+  color: #2C1E16;
 }
 
 .cta .outline.light:hover {
-  color: var(--brand);
-  background: var(--canvas);
+  color: var(--paper);
+  border-color: var(--accent);
+  background: var(--accent);
 }
 
 @media (max-width: 850px) {

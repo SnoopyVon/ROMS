@@ -435,13 +435,6 @@ table td,
   color: #fff;
 }
 
-.table-page-summary {
-  margin: 0 4px;
-  color: var(--muted);
-  font-size: 12px;
-  white-space: nowrap;
-}
-
 @media (max-width: 760px) {
   .table-panel table,
   .report-table-scroll table,
@@ -617,11 +610,6 @@ table td,
     justify-content: center;
   }
 
-  .table-page-summary {
-    flex-basis: 100%;
-    order: 2;
-    text-align: center;
-  }
 }
 
 .empty-table small {

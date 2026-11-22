@@ -461,6 +461,7 @@ function lowStock() { return all('ingredients').filter(item => item.isActive !==
 function esc(value) { return String(value ?? '').replace(/[&<>"']/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#039;' }[char])); }
 let toastTimeoutId;
 function toast(message, type = 'success', retryCollections = [], retryUserManagement = false) {
+  if (type !== 'error') return;
   const root = document.querySelector('#toastRoot');
   const retryButton = retryCollections.length
     ? `<button type="button" class="toast-retry" data-retry-refresh="${esc(retryCollections.join(','))}">Retry</button>`
@@ -899,6 +900,14 @@ const sidebarGroups = [
 
 const shellIconPaths = {
   dashboard: '<rect x="3" y="3" width="7" height="7" rx="1.5"></rect><rect x="14" y="3" width="7" height="5" rx="1.5"></rect><rect x="14" y="11" width="7" height="10" rx="1.5"></rect><rect x="3" y="13" width="7" height="8" rx="1.5"></rect>',
+  peso: '<path d="M7 20V4h6.5a5 5 0 0 1 0 10H7"></path><path d="M5 8h12M5 11h12"></path>',
+  'bill-list': '<rect x="4" y="3" width="16" height="18" rx="2"></rect><path d="M8 3v4h8V3M8 11h8M8 15h8M8 18h5"></path>',
+  person: '<circle cx="12" cy="7" r="3"></circle><path d="M7 21v-2a5 5 0 0 1 10 0v2M5 21h14"></path>',
+  'trend-up': '<path d="m3 17 6-6 4 4 8-8"></path><path d="M15 7h6v6"></path>',
+  minus: '<path d="M5 12h14"></path>',
+  'trend-down': '<path d="m3 7 6 6 4-4 8 8"></path><path d="M15 17h6v-6"></path>',
+  clock: '<circle cx="12" cy="12" r="9"></circle><path d="M12 7v5l3 2"></path>',
+  home: '<path d="m3 11 9-8 9 8"></path><path d="M5 10v10h14V10M9 20v-6h6v6"></path>',
   calendar: '<rect x="3" y="5" width="18" height="16" rx="2"></rect><path d="M16 3v4M8 3v4M3 10h18"></path>',
   'calendar-plus': '<rect x="3" y="5" width="18" height="16" rx="2"></rect><path d="M16 3v4M8 3v4M3 10h18M12 13v5M9.5 15.5h5"></path>',
   'calendar-days': '<rect x="3" y="5" width="18" height="16" rx="2"></rect><path d="M16 3v4M8 3v4M3 10h18M8 14h.01M12 14h.01M16 14h.01M8 17h.01M12 17h.01"></path>',
@@ -1544,7 +1553,7 @@ function nav() {
   const overview = canAccess('dashboard') ? `<div class="nav-single-wrap">${renderNavItem('dashboard', 'dashboard', 'Dashboard', { single: true })}</div>` : '';
   const collapseLabel = collapsed ? 'Expand sidebar' : 'Collapse sidebar';
   return `<div class="sidebar-top">
-      <button class="drawer-close" type="button" data-shell-action="close-drawer" aria-label="Close navigation">${shellIcon('close')}<span>Close</span></button>
+      <button class="drawer-close" type="button" data-shell-action="close-drawer" aria-label="Close navigation"><span aria-hidden="true">×</span></button>
       <div class="brand">
         <img class="brand-logo" src="images/isobel_logo.jpg" alt="Isobel Buffet Restaurant">
         <button class="sidebar-collapse" type="button" data-shell-action="toggle-sidebar" aria-label="${collapseLabel}" title="${collapseLabel}">${shellIcon('panel')}</button>
@@ -1793,7 +1802,7 @@ function tablePage(config) {
     return `<button type="button" class="${page === currentPage ? 'active' : ''}" data-table-page="${page}" data-table-id="${esc(tableId)}" ${page === currentPage ? 'aria-current="page"' : ''}>${page}</button>`;
   }).join('');
   const pagination = rows.length
-    ? `<div class="table-pagination" aria-label="${esc(config.title || 'Table')} pagination"><button type="button" class="ghost-btn compact-btn" data-table-page="${currentPage - 1}" data-table-id="${esc(tableId)}" ${currentPage <= 1 ? 'disabled' : ''}>Previous</button><div class="table-page-numbers">${pageButtons}</div><span class="table-page-summary">${((currentPage - 1) * pageSize) + 1}–${Math.min(currentPage * pageSize, rows.length)} of ${rows.length}</span><button type="button" class="ghost-btn compact-btn" data-table-page="${currentPage + 1}" data-table-id="${esc(tableId)}" ${currentPage >= pageCount ? 'disabled' : ''}>Next</button></div>`
+    ? `<div class="table-pagination" aria-label="${esc(config.title || 'Table')} pagination"><button type="button" class="ghost-btn compact-btn" data-table-page="${currentPage - 1}" data-table-id="${esc(tableId)}" ${currentPage <= 1 ? 'disabled' : ''}>Previous</button><div class="table-page-numbers">${pageButtons}</div><button type="button" class="ghost-btn compact-btn" data-table-page="${currentPage + 1}" data-table-id="${esc(tableId)}" ${currentPage >= pageCount ? 'disabled' : ''}>Next</button></div>`
     : '';
   return `${pageHeader(config.eyebrow, config.title, config.subtitle, config.action)}${config.beforeTable || ''}<div class="toolbar"><div class="search-box">⌕<input id="tableSearch" placeholder="Search ${config.search || 'records'}..." value="${esc(state.query)}"></div>${config.filters || ''}<span class="record-count">${rows.length} records</span></div><div class="panel table-panel${tableClass}"><div class="table-scroll"><table data-table="${esc(tableId)}"><thead><tr>${headerMarkup}</tr></thead><tbody>${mobileRows.length ? mobileRows.join('') : `<tr><td colspan="${config.headers.length}" class="empty-state">${esc(emptyMessage)}</td></tr>`}</tbody></table></div>${pagination}</div>`;
 }
@@ -1870,16 +1879,16 @@ function roleDashboard() {
   const revenueData = revenueDashboardData || {};
   const revenueLoadingLabel = revenueDashboardError ? 'Unavailable' : revenueDashboardLoading || !revenueDashboardData ? 'Loading…' : null;
   const revenueDashboardCards = [
-    metric("Today's Revenue", revenueLoadingLabel || money(revenueData.today_revenue), '₱', 'green-icon', revenueDashboardError ? 'Unable to load POS report' : 'Closed POS bills · Manila business date'),
-    metric('Closed Bills', revenueLoadingLabel || Number(revenueData.closed_bill_count || 0).toLocaleString(), '▤', 'purple-icon', 'Counted once by closed bill'),
-    metric('Customers Served', revenueLoadingLabel || Number(revenueData.customers_served || 0).toLocaleString(), '♙', 'purple-icon', 'Actual bill head counts'),
-    metric('Average Check', revenueLoadingLabel || money(revenueData.average_check), '↗', 'green-icon', 'Net revenue per closed bill'),
-    metric('Discount Total', revenueLoadingLabel || money(revenueData.discount_total), '−', 'orange-icon', 'Closed bills only'),
-    metric('Voided Bills', revenueLoadingLabel || Number(revenueData.voided_bill_count || 0).toLocaleString(), '!', 'red-icon', `${money(revenueData.voided_bill_amount)} reversed sales`),
-    metric('Voided Bill Amount', revenueLoadingLabel || money(revenueData.voided_bill_amount), '₱', 'red-icon', 'Shown separately · excluded from revenue')
+    metric("Today's Revenue", revenueLoadingLabel || money(revenueData.today_revenue), shellIcon('peso'), 'green-icon', revenueDashboardError ? 'Unable to load POS report' : 'Closed POS bills · Manila business date'),
+    metric('Closed Bills', revenueLoadingLabel || Number(revenueData.closed_bill_count || 0).toLocaleString(), shellIcon('bill-list'), 'purple-icon', 'Counted once by closed bill'),
+    metric('Customers Served', revenueLoadingLabel || Number(revenueData.customers_served || 0).toLocaleString(), shellIcon('person'), 'purple-icon', 'Actual bill head counts'),
+    metric('Average Check', revenueLoadingLabel || money(revenueData.average_check), shellIcon('trend-up'), 'green-icon', 'Net revenue per closed bill'),
+    metric('Discount Total', revenueLoadingLabel || money(revenueData.discount_total), shellIcon('minus'), 'orange-icon', 'Closed bills only'),
+    metric('Voided Bills', revenueLoadingLabel || Number(revenueData.voided_bill_count || 0).toLocaleString(), shellIcon('alert'), 'red-icon', `${money(revenueData.voided_bill_amount)} reversed sales`),
+    metric('Voided Bill Amount', revenueLoadingLabel || money(revenueData.voided_bill_amount), shellIcon('peso'), 'red-icon', 'Shown separately · excluded from revenue')
   ];
   const cards = state.role === 'Receptionist'
-    ? [metric("Today's reservations", todayReservations.length, '▤', 'orange-icon', `${pendingReservations.length} awaiting confirmation`), metric('Guests expected', todayReservations.reduce((sum, item) => sum + Number(item.guests), 0), '♙', 'green-icon', 'Across today’s bookings'), metric('Checked in', checkedInReservations, '✓', 'purple-icon', 'Guests currently seated'), metric('Open tables', all('restaurantTables').filter(table => table.status !== 'Needs cleaning' && ['Available', 'Reserved Later'].includes(liveTableAvailability(table, todayDate, reservations).status)).length, '⌂', 'orange-icon', 'Includes tables with a safe gap before reservations')]
+    ? [metric("Today's reservations", todayReservations.length, shellIcon('calendar'), 'orange-icon', `${pendingReservations.length} awaiting confirmation`), metric('Guests expected', todayReservations.reduce((sum, item) => sum + Number(item.guests), 0), shellIcon('person'), 'green-icon', 'Across today’s bookings'), metric('Checked in', checkedInReservations, shellIcon('check'), 'purple-icon', 'Guests currently seated'), metric('Open tables', all('restaurantTables').filter(table => table.status !== 'Needs cleaning' && ['Available', 'Reserved Later'].includes(liveTableAvailability(table, todayDate, reservations).status)).length, shellIcon('home'), 'orange-icon', 'Includes tables with a safe gap before reservations')]
     : state.role === 'Chef / Kitchen Staff'
     ? (() => {
       const todayRows = state.productionBoard.loaded
@@ -1892,20 +1901,20 @@ function roleDashboard() {
         .reduce((sum, item) => sum + Number(item.quantity || 0), 0);
       const lowStockToday = ingredients.filter(item => ['Out of Stock', 'Low Stock'].includes(stockStatus(item))).length;
       return [
-        metric("Today's production target", target, '◎', 'purple-icon', `${activeRecipes.length} active recipes`),
-        metric('Cooking portions', cooking, '♨', 'orange-icon', 'Currently in progress'),
-        metric('Ready portions', ready, '✓', 'green-icon', 'Available for service'),
-        metric('Remaining portions', Math.max(0, target - ready - cooking), '↗', 'purple-icon', 'Target less ready and cooking'),
-        metric('Ingredient waste today', all('wasteLogs').filter(item => item.date === todayDate).length, '◌', 'red-icon', 'Raw ingredient entries'),
-        metric('Prepared waste today', preparedWasteToday, '◌', 'red-icon', 'Discarded prepared portions'),
-        metric('Low stock alerts', lowStockToday, '!', 'orange-icon', 'Out of stock or below minimum')
+        metric("Today's production target", target, shellIcon('chef-hat'), 'purple-icon', `${activeRecipes.length} active recipes`),
+        metric('Cooking portions', cooking, shellIcon('clock'), 'orange-icon', 'Currently in progress'),
+        metric('Ready portions', ready, shellIcon('check'), 'green-icon', 'Available for service'),
+        metric('Remaining portions', Math.max(0, target - ready - cooking), shellIcon('trend-up'), 'purple-icon', 'Target less ready and cooking'),
+        metric('Ingredient waste today', all('wasteLogs').filter(item => item.date === todayDate).length, shellIcon('trash'), 'red-icon', 'Raw ingredient entries'),
+        metric('Prepared waste today', preparedWasteToday, shellIcon('trash'), 'red-icon', 'Discarded prepared portions'),
+        metric('Low stock alerts', lowStockToday, shellIcon('alert'), 'orange-icon', 'Out of stock or below minimum')
       ];
     })()
     : state.role === 'Inventory Clerk'
-      ? [metric('Out of stock items', out, '!', 'red-icon', 'Immediate replenishment needed'), metric('Low stock items', low, '↓', 'orange-icon', 'Below minimum level'), metric('Healthy stock items', healthy, '✓', 'green-icon', 'At safe stock level'), metric('Total ingredients', ingredients.length, '◈', 'purple-icon', money(inventoryValue()) + ' inventory value')]
+      ? [metric('Out of stock items', out, shellIcon('alert'), 'red-icon', 'Immediate replenishment needed'), metric('Low stock items', low, shellIcon('trend-down'), 'orange-icon', 'Below minimum level'), metric('Healthy stock items', healthy, shellIcon('check'), 'green-icon', 'At safe stock level'), metric('Total ingredients', ingredients.length, shellIcon('package'), 'purple-icon', money(inventoryValue()) + ' inventory value')]
       : canAccessRevenue()
         ? revenueDashboardCards
-        : [metric('Low stock items', low + out, '!', 'red-icon', 'Needs attention')];
+        : [metric('Low stock items', low + out, shellIcon('alert'), 'red-icon', 'Needs attention')];
   const recipeCategories = [...new Set(activeRecipes.map(item => item.category))];
   const kitchenPanel = `<div class="panel"><div class="panel-header"><div><div class="panel-title">Kitchen activity</div><div class="panel-subtitle">Active recipes and production by category</div></div><button class="text-btn" data-view="production">Open production board →</button></div><div class="dashboard-list">${activeRecipes.slice(0, 5).map(item => `<div class="dashboard-list-row"><span class="recipe-icon">◇</span><div><strong>${esc(item.name)}</strong><small>${esc(item.category)} · ${item.ingredients.length} ingredients</small></div>${canSeeRecipeCosts ? `<span class="tag">${money(recipePortionCost(item))} / portion</span>` : ''}</div>`).join('') || '<p class="panel-subtitle">No active recipes are available.</p>'}</div><div class="category-chips">${recipeCategories.map(item => `<span>${esc(item)}</span>`).join('')}</div></div>`;
   const inventoryPanel = `<div class="panel inventory-health-panel"><div class="panel-header"><div><div class="panel-title">Inventory health</div><div class="panel-subtitle">Filter stock levels for quick action</div></div><button class="text-btn" data-view="ingredients">Manage inventory</button></div><div class="quick-filters">${['All', 'Out of Stock', 'Low Stock', 'Healthy'].map(item => `<button class="${state.ingredientStatus === item ? 'active' : ''}" data-dashboard-status="${item}">${item}<b>${item === 'All' ? ingredients.length : ingredients.filter(x => stockStatus(x) === item).length}</b></button>`).join('')}</div><div class="dashboard-list">${ingredients.filter(item => state.ingredientStatus === 'All' || stockStatus(item) === state.ingredientStatus).slice(0, 6).map(item => `<div class="dashboard-list-row" data-view="ingredients"><span class="ingredient-dot">${item.name[0]}</span><div><strong>${esc(item.name)}</strong><small>${formatStockQuantity(item.stock)} ${esc(item.unit)} · minimum ${formatStockQuantity(item.minimum)} ${esc(item.unit)}</small></div><span class="status ${stockStatus(item) === 'Healthy' ? 'status-good' : 'status-low'}">${stockStatus(item)}</span></div>`).join('')}</div></div>`;
@@ -1918,7 +1927,7 @@ function roleDashboard() {
   const revenueDashboardErrorPanel = canAccessRevenue() && revenueDashboardError
     ? `<div class="panel error-state" role="alert">${esc(revenueDashboardError)} <button class="ghost-btn" data-action="retry-revenue-dashboard">Retry dashboard</button></div>`
     : '';
-  const fohMetrics = canAccess('reservations') ? `<div class="panel"><div class="panel-title">Front-of-house today</div><div class="metric-grid compact-metric-grid">${metric('Reservations', todayReservations.length, '▤', 'orange-icon', 'Scheduled today')}${metric('Walk-ins', todayWalkIns, '⌂', 'purple-icon', 'Recorded today')}${metric('Seated covers', seatedCovers, '✓', 'green-icon', 'Currently seated')}</div></div>` : '';
+  const fohMetrics = canAccess('reservations') ? `<div class="panel"><div class="panel-title">Front-of-house today</div><div class="metric-grid compact-metric-grid">${metric('Reservations', todayReservations.length, shellIcon('calendar'), 'orange-icon', 'Scheduled today')}${metric('Walk-ins', todayWalkIns, shellIcon('person'), 'purple-icon', 'Recorded today')}${metric('Seated covers', seatedCovers, shellIcon('check'), 'green-icon', 'Currently seated')}</div></div>` : '';
   return `<div class="welcome-row"><div><div class="eyebrow">${eyebrow}</div><h1>${dashboardGreeting()}</h1><p>${subtitle}</p><p class="dashboard-date">Business date · <time datetime="${businessDate}">${esc(businessDateLabel)}</time></p></div>${state.role === 'Receptionist' ? '<button class="primary-btn" data-action="open-reservation">+ New reservation</button>' : state.role === 'Inventory Clerk' || state.role === 'Administrator' || state.role === 'Manager' ? '<button class="primary-btn" data-action="open-receiving">+ Receive inventory</button>' : '<button class="primary-btn" data-view="production">Open production board</button>'}</div>${revenueDashboardErrorPanel}<div class="metric-grid role-metric-grid">${cards.join('')}</div>${fohMetrics}${state.role === 'Receptionist' ? `<div class="dashboard-grid">${reservationPanel}<div class="panel"><div class="panel-title">Front-of-house checklist</div><div class="checklist"><span>✓ Confirm pending bookings</span><span>○ Check in arriving guests</span><span>○ Review table assignments</span></div></div></div>` : state.role === 'Chef / Kitchen Staff' ? `<div class="dashboard-grid">${kitchenPanel}<div class="panel"><div class="panel-title">Today’s kitchen checklist</div><div class="checklist"><span>✓ Review today’s prep targets</span><span>○ Start a batch from the production board</span><span>○ Mark each cooked batch ready</span></div></div></div>` : state.role === 'Inventory Clerk' ? inventoryPanel : state.role === 'Manager' ? `<div class="dashboard-grid">${inventoryPanel}${reservationPanel}</div>` : `<div class="dashboard-grid">${reservationPanel}${inventoryPanel}</div>`}${state.role === 'Chef / Kitchen Staff' ? '' : costAnalytics}`;
 }
 function inventoryBatchVisibility(productBatches, asOfDate = manilaBusinessToday()) {
@@ -2188,7 +2197,7 @@ function logsPage(type) {
       return `<button type="button" class="${page === wastePage ? 'active' : ''}" data-table-page="${page}" data-table-id="waste" ${page === wastePage ? 'aria-current="page"' : ''}>${page}</button>`;
     }).join('');
     const wastePagination = rows.length
-      ? `<div class="table-pagination" aria-label="Waste log pagination"><button type="button" class="ghost-btn compact-btn" data-table-page="${wastePage - 1}" data-table-id="waste" ${wastePage <= 1 ? 'disabled' : ''}>Previous</button><div class="table-page-numbers">${wastePageButtons}</div><span class="table-page-summary">${((wastePage - 1) * pageSize) + 1}–${Math.min(wastePage * pageSize, rows.length)} of ${rows.length}</span><button type="button" class="ghost-btn compact-btn" data-table-page="${wastePage + 1}" data-table-id="waste" ${wastePage >= wastePageCount ? 'disabled' : ''}>Next</button></div>`
+      ? `<div class="table-pagination" aria-label="Waste log pagination"><button type="button" class="ghost-btn compact-btn" data-table-page="${wastePage - 1}" data-table-id="waste" ${wastePage <= 1 ? 'disabled' : ''}>Previous</button><div class="table-page-numbers">${wastePageButtons}</div><button type="button" class="ghost-btn compact-btn" data-table-page="${wastePage + 1}" data-table-id="waste" ${wastePage >= wastePageCount ? 'disabled' : ''}>Next</button></div>`
       : '';
     const preparedRows = preparedMatches.map(item => {
       const activityTime = item.recordedAt
@@ -2208,7 +2217,7 @@ function logsPage(type) {
       return `<button type="button" class="${page === preparedPage ? 'active' : ''}" data-table-page="${page}" data-table-id="preparedWaste" ${page === preparedPage ? 'aria-current="page"' : ''}>${page}</button>`;
     }).join('');
     const preparedPagination = preparedRows.length
-      ? `<div class="table-pagination" aria-label="Prepared-food waste pagination"><button type="button" class="ghost-btn compact-btn" data-table-page="${preparedPage - 1}" data-table-id="preparedWaste" ${preparedPage <= 1 ? 'disabled' : ''}>Previous</button><div class="table-page-numbers">${preparedPageButtons}</div><span class="table-page-summary">${((preparedPage - 1) * pageSize) + 1}–${Math.min(preparedPage * pageSize, preparedRows.length)} of ${preparedRows.length}</span><button type="button" class="ghost-btn compact-btn" data-table-page="${preparedPage + 1}" data-table-id="preparedWaste" ${preparedPage >= preparedPageCount ? 'disabled' : ''}>Next</button></div>`
+      ? `<div class="table-pagination" aria-label="Prepared-food waste pagination"><button type="button" class="ghost-btn compact-btn" data-table-page="${preparedPage - 1}" data-table-id="preparedWaste" ${preparedPage <= 1 ? 'disabled' : ''}>Previous</button><div class="table-page-numbers">${preparedPageButtons}</div><button type="button" class="ghost-btn compact-btn" data-table-page="${preparedPage + 1}" data-table-id="preparedWaste" ${preparedPage >= preparedPageCount ? 'disabled' : ''}>Next</button></div>`
       : '';
     const ingredientInsight = new Map();
     matches.forEach(item => {
@@ -3186,7 +3195,8 @@ function userManagementStyles() {
     .user-management-refresh { display: flex; align-items: center; gap: 8px; }
     .user-refresh-error, .user-invite-error { display: flex; align-items: center; justify-content: space-between; gap: 14px; border: 1px solid var(--danger); border-radius: var(--radius-md); background: var(--red-bg); padding: 13px 15px; color: #873e3a; }
     .user-management-nav { display: flex; align-items: center; justify-content: space-between; gap: 14px; }
-    .user-back-link { display: inline-flex; min-height: 44px; align-items: center; gap: 8px; border: 0; background: transparent; padding: 0 6px; color: var(--teal-dark); font-weight: 700; cursor: pointer; }
+    .user-back-link { display: inline-flex; min-height: 44px; align-items: center; gap: 8px; border: 1px solid var(--accent); border-radius: var(--radius-sm); background: var(--accent); padding: 0 14px; color: var(--paper); font-weight: 700; cursor: pointer; }
+    .user-back-link:hover { border-color: var(--accent-hover); background: var(--accent-hover); }
     .user-management-tabs { display: flex; gap: 6px; overflow-x: auto; border-bottom: 1px solid var(--line); scrollbar-width: thin; }
     .user-management-tabs button { flex: 0 0 auto; border: 0; border-bottom: 3px solid transparent; background: transparent; padding: 10px 18px; color: var(--muted); font-size: 14px; font-weight: 700; cursor: pointer; }
     .user-management-tabs button[aria-selected="true"] { border-bottom-color: var(--teal); color: var(--teal-dark); }
@@ -3977,6 +3987,13 @@ async function openForm(type, item) {
     ])].sort((a, b) => a.localeCompare(b)).map(supplier => `<option value="${esc(supplier)}"></option>`).join('');
     const noCategories = catalogs.categories.length === 0;
     const noUnits = catalogs.units.length === 0;
+    const lifecycleControls = edit && state.role === 'Administrator'
+      ? `<fieldset class="product-form-section product-lifecycle-controls">
+          <legend>Product status</legend>
+          <p>${item.isActive === false ? 'This product is inactive.' : 'This product is active.'}</p>
+          <button type="button" class="${item.isActive === false ? 'primary-btn' : 'danger-btn'}" data-action="product-lifecycle-${item.isActive === false ? 'reactivate' : 'deactivate'}" data-id="${esc(item.id)}">${item.isActive === false ? 'Activate product' : 'Deactivate product'}</button>
+        </fieldset>`
+      : '';
     const content = `<div class="product-form">
       <p class="product-form-intro">Set up the product details used for inventory, receiving, and stock alerts.</p>
       <fieldset class="product-form-section">
@@ -4000,6 +4017,7 @@ async function openForm(type, item) {
         <legend>Additional information</legend>
         <label class="product-notes-field">Product notes <span class="field-help">Optional — storage, handling, or ordering details.</span><textarea name="notes" rows="3" maxlength="1000" placeholder="Add helpful details for the inventory team">${esc(value('notes'))}</textarea></label>
       </fieldset>
+      ${lifecycleControls}
       <p class="product-stock-note">Starting stock and purchase cost are recorded through inventory receiving, not in this form.</p>
     </div>`;
     modal(edit ? 'Edit product' : 'Add product', content, 'Save product', 'product-modal');
@@ -4341,23 +4359,25 @@ function productLifecycleDialogMarkup(product, details) {
   const activeRecipes = Array.isArray(details.active_recipes) ? details.active_recipes : [];
   let actionMarkup = '';
   if (!details.is_active) {
-    actionMarkup = `<button type="button" class="primary-btn" data-action="product-lifecycle-reactivate">Reactivate product</button>${details.is_used ? '' : '<button type="button" class="danger-btn" data-action="product-lifecycle-delete">Delete permanently</button>'}`;
-  } else if (!details.is_used) {
-    actionMarkup = '<button type="button" class="danger-btn" data-action="product-lifecycle-delete">Delete permanently</button>';
-  } else if (activeRecipes.length) {
-    actionMarkup = '<p class="product-lifecycle-blocker" role="status">Deactivate or update the active recipe(s) below before deactivating this product.</p>';
+    actionMarkup = '<button type="button" class="primary-btn" data-action="product-lifecycle-reactivate">Reactivate product</button><button type="button" class="danger-btn" data-action="product-lifecycle-delete">Delete permanently</button>';
   } else {
     actionMarkup = '<button type="button" class="primary-btn" data-action="product-lifecycle-deactivate">Deactivate product</button>';
   }
   const recipeList = activeRecipes.length
     ? `<div class="product-lifecycle-recipes"><strong>Active recipes that use this product</strong><ul>${activeRecipes.map(recipe => `<li>${esc(recipe.name)} <small>(${esc(recipe.source)})</small></li>`).join('')}</ul></div>`
     : '';
-  const deleteRestriction = details.is_used
-    ? '<p class="product-lifecycle-blocker" role="status">This product has recorded history, so it cannot be permanently deleted. Deactivating it keeps past records available.</p>'
+  const activeRecipeNotice = details.is_active && activeRecipes.length
+    ? '<p class="product-lifecycle-blocker" role="status">This product is used by active recipes. Deactivating it will not deactivate those recipes.</p>'
     : '';
   return `<p class="product-lifecycle-summary"><strong>${esc(product.name)}</strong> is currently ${details.is_active ? 'active' : 'inactive'}.</p>
-    ${usages ? `<div class="product-lifecycle-usage"><strong>Recorded uses</strong><ul>${usages}</ul><small>These records remain available in history and reports.</small></div>` : '<p class="product-lifecycle-usage">No recorded uses were found.</p>'}
-    ${deleteRestriction}${recipeList}<div class="product-lifecycle-actions">${actionMarkup}</div>`;
+    ${usages ? `<div class="product-lifecycle-usage"><strong>Recorded uses</strong><ul>${usages}</ul><small>These records remain unless the product is permanently deleted.</small></div>` : '<p class="product-lifecycle-usage">No recorded uses were found.</p>'}
+    ${recipeList}${activeRecipeNotice}<div class="product-lifecycle-actions">${actionMarkup}</div>`;
+}
+function showProductLifecycleDetails(product, details) {
+  modal(`Manage ${esc(product.name)}`, productLifecycleDialogMarkup(product, details), null, 'product-lifecycle-modal', 'form');
+  const form = document.querySelector('#modalForm');
+  form.dataset.type = 'product-lifecycle-actions';
+  form.dataset.id = product.id;
 }
 async function manageProductLifecycle(productId) {
   if (state.role !== 'Administrator') return toast('Only Administrators can manage product lifecycle.', 'error');
@@ -4369,14 +4389,7 @@ async function manageProductLifecycle(productId) {
   try {
     const details = await window.supabaseRecord.productLifecycle('inspect', productId);
     if (!backdrop.isConnected) return;
-    if (details.is_active && !details.is_used) {
-      await confirmProductLifecycleAction('delete', productId);
-      return;
-    }
-    modal(`Manage ${esc(product.name)}`, productLifecycleDialogMarkup(product, details), null, 'product-lifecycle-modal', 'form');
-    const form = document.querySelector('#modalForm');
-    form.dataset.type = 'product-lifecycle-actions';
-    form.dataset.id = productId;
+    showProductLifecycleDetails(product, details);
   } catch (error) {
     console.error('Product lifecycle details could not be loaded.', error);
     if (backdrop.isConnected) {
@@ -4387,8 +4400,38 @@ async function manageProductLifecycle(productId) {
     toast(error.message || 'Product lifecycle details could not be loaded.', 'error');
   }
 }
-function openProductDeactivationForm(product) {
+async function beginProductDeactivation(product) {
+  if (state.role !== 'Administrator') return toast('Only Administrators can deactivate products.', 'error');
+  try {
+    const details = await window.supabaseRecord.productLifecycle('inspect', product.id);
+    if (!details.is_active) return toast('This product is already inactive.', 'error');
+    openProductDeactivationForm(product, details.active_recipes);
+  } catch (error) {
+    console.error('Product could not be checked before deactivation.', error);
+    toast(error.message || 'Product usage could not be checked.', 'error');
+  }
+}
+async function deleteInactiveProduct(productId) {
+  if (state.role !== 'Administrator') return toast('Only Administrators can delete products.', 'error');
+  const product = ingredient(productId);
+  if (!product) return toast('This product is no longer available. Reload the page and try again.', 'error');
+  try {
+    const details = await window.supabaseRecord.productLifecycle('inspect', productId);
+    if (details.is_active) return toast('Deactivate this product before deleting it.', 'error');
+    await confirmProductLifecycleAction('delete', productId);
+  } catch (error) {
+    console.error('Inactive product could not be checked for deletion.', error);
+    toast(error.message || 'Product usage could not be checked.', 'error');
+  }
+}
+function openProductDeactivationForm(product, activeRecipes = []) {
+  if (state.role !== 'Administrator') return toast('Only Administrators can deactivate products.', 'error');
+  const recipeNotice = activeRecipes.length
+    ? `<div class="product-lifecycle-recipes"><strong>Active recipes that use this product</strong><ul>${activeRecipes.map(recipe => `<li>${esc(recipe.name)} <small>(${esc(recipe.source)})</small></li>`).join('')}</ul><small>These recipes will remain active.</small></div>`
+    : '';
   modal(`Deactivate ${esc(product.name)}`, `<p class="confirmation-message">Historical records remain available, but this product will no longer be offered for new receiving, recipes, waste, or counts.</p>
+    ${recipeNotice}
+    <p class="product-lifecycle-blocker" role="alert" data-product-lifecycle-error hidden></p>
     <label class="full">Reason for deactivation<textarea name="reason" rows="3" maxlength="500" required placeholder="Explain why this product is being deactivated"></textarea></label>`, 'Deactivate product', 'product-lifecycle-modal');
   const form = document.querySelector('#modalForm');
   form.dataset.type = 'product-lifecycle';
@@ -4410,9 +4453,7 @@ async function runProductLifecycle(action, product, reason = '', processingBackd
     rememberLocalChange('ingredients', product.id);
     state.modalDirty = false;
     closeModal(true);
-    toast(action === 'delete'
-      ? `${product.name} permanently deleted.`
-      : `${product.name} ${action === 'deactivate' ? 'deactivated' : 'reactivated'}.`);
+    if (action === 'reactivate') toast(`${product.name} reactivated.`);
     render();
     void refetchCollection('ingredients')
       .then(() => render())
@@ -4421,7 +4462,15 @@ async function runProductLifecycle(action, product, reason = '', processingBackd
     console.error(`Product ${action} failed.`, error);
     if (processingBackdrop?.isConnected) closeModal(true);
     const outcome = { delete: 'deleted', deactivate: 'deactivated', reactivate: 'reactivated' }[action];
-    toast(error.message || `The product could not be ${outcome}.`, 'error');
+    const message = error.message || `The product could not be ${outcome}.`;
+    const inlineError = action === 'deactivate'
+      ? document.querySelector('#modalForm[data-type="product-lifecycle"] [data-product-lifecycle-error]')
+      : null;
+    if (inlineError) {
+      inlineError.textContent = message;
+      inlineError.hidden = false;
+    }
+    toast(message, 'error');
   }
 }
 async function submitProductLifecycle(form, data) {
@@ -4450,13 +4499,17 @@ async function submitProductLifecycle(form, data) {
   }
 }
 async function confirmProductLifecycleAction(action, productId) {
+  if (state.role !== 'Administrator') return toast('Only Administrators can manage product lifecycle.', 'error');
   const product = ingredient(productId);
   if (!product) return toast('This product is no longer available. Reload the page and try again.', 'error');
+  if (action === 'delete' && product.isActive !== false) {
+    return toast('Deactivate this product before deleting it.', 'error');
+  }
   closeModal(true);
   const deleting = action === 'delete';
   const confirmed = await confirmInApp(
     deleting
-      ? `${product.name} has no recorded uses and will be permanently deleted.`
+      ? `${product.name} and its linked recipe ingredients, inventory, receiving, waste, count, and production-consumption records will be permanently deleted. The recipes themselves will remain. This cannot be undone.`
       : `Reactivate ${product.name}? It will be available for new inventory operations.`,
     {
       title: deleting ? 'Delete product?' : 'Reactivate product?',
@@ -4805,7 +4858,7 @@ function reservationForm(item = {}, defaults = {}) {
   document.querySelector('#modalForm').dataset.reservationType = item.type || 'Reservation';
   if (isReadOnly) {
     const root = document.querySelector('#modalRoot');
-    root.querySelector('[data-action="close-modal"]').textContent = 'Close';
+    root.querySelector('[data-action="close-modal"]').textContent = '×';
     requestAnimationFrame(() => root.querySelector('.modal')?.focus());
   }
 }
@@ -5881,6 +5934,10 @@ async function handleSubmit(form, submitter = null) {
   const data = Object.fromEntries(new FormData(form));
   const type = form.dataset.type;
   const editId = form.dataset.id;
+  if (type === 'product-lifecycle') {
+    await submitProductLifecycle(form, data);
+    return;
+  }
   if (type === 'reservation' && form.dataset.reservationWizardStep) {
     const wizard = state.reservationWizard;
     const currentStep = Number(form.dataset.reservationWizardStep);
@@ -6854,7 +6911,7 @@ async function handleSubmit(form, submitter = null) {
     await save('ingredients', editId
       ? all('ingredients').map(item => item.id === editId ? { ...item, ...record } : item)
       : [...all('ingredients'), record]);
-    successMessage = editId ? 'Product updated successfully.' : 'Product added successfully.';
+    successMessage = editId ? 'Product updated successfully.' : '';
   } else {
     const collection = collections[type];
     if (!collection) return toast('This record type cannot be saved from the browser.', 'error');
@@ -6869,7 +6926,7 @@ async function handleSubmit(form, submitter = null) {
     }
   }
   closeModal(true);
-  toast(successMessage);
+  if (successMessage) toast(successMessage);
   render();
 }
 async function transitionReservation(itemId, nextStatus, button = null) {
@@ -8409,6 +8466,8 @@ document.addEventListener('click', event => {
     state.recipeDraft.splice(Number(action.dataset.index), 1);
     renderRecipeModal();
     state.modalDirty = true;
+  } else if (name === 'product-lifecycle-delete-inactive') {
+    void deleteInactiveProduct(action.dataset.id);
   } else if (name === 'product-lifecycle-delete' || name === 'product-lifecycle-reactivate') {
     const form = document.querySelector('#modalForm[data-type="product-lifecycle-actions"]');
     const lifecycleAction = name === 'product-lifecycle-delete' ? 'delete' : 'reactivate';
@@ -8417,7 +8476,7 @@ document.addEventListener('click', event => {
     const form = document.querySelector('#modalForm[data-type="product-lifecycle-actions"]');
     const product = ingredient(form?.dataset.id || action.dataset.id);
     if (!product) return toast('This product is no longer available. Reload the page and try again.', 'error');
-    openProductDeactivationForm(product);
+    void beginProductDeactivation(product);
   } else if (name.startsWith('view-')) {
     const type = name.replace('view-', '');
     const map = { ingredient: 'ingredients', recipe: 'recipes' };
@@ -8816,10 +8875,8 @@ async function openAuthenticatedSession(session) {
   state.unresolvedBookings = { rows: [], loading: false, loaded: false, error: '' };
   window.supabaseRecord.clearVersions();
   const requestedView = window.location.hash.slice(1) || 'dashboard';
-  state.view = requestedView === 'users'
-    ? 'users'
-    : canAccess(requestedView) ? requestedView : (roleAccess[state.role][0] || 'dashboard');
-  if (state.view === 'reservations') state.reservationMealPeriodFilter = 'All';
+  state.view = 'dashboard';
+  state.focusPageAfterNavigation = false;
   if (state.view !== requestedView) window.history.replaceState(null, '', `#${state.view}`);
   document.querySelector('#loginScreen').classList.add('is-hidden');
   document.querySelector('#appShell').classList.remove('is-hidden');
@@ -9239,10 +9296,11 @@ function modal(title, content, submit = 'Save record', modalClass = '', modalTyp
   const sequence = ++modalSequence;
   const titleId = `modalTitle-${sequence}`;
   const formId = isConfirmation ? `modalConfirmationForm-${sequence}` : 'modalForm';
-  const closeLabel = ['read-only', 'popover', 'menu'].includes(modalType) ? 'Close' : isConfirmation ? 'Cancel' : 'Cancel';
+  const closeLabel = ['read-only', 'popover', 'menu'].includes(modalType) ? '×' : 'Cancel';
+  const closeAriaLabel = closeLabel === '×' ? 'Close dialog' : closeLabel;
   const actions = isConfirmation
-    ? `<div class="modal-actions"><button type="button" class="ghost-btn" data-action="close-modal">${closeLabel}</button><button type="button" class="primary-btn" data-action="confirm-modal">${submit || 'Continue'}</button></div>`
-    : `<div class="modal-actions${modalClass === 'pos-wizard-modal' ? ' pos-wizard-footer' : ''}"><div class="pos-wizard-footer-left">${modalClass === 'pos-wizard-modal' && submit && state.billWizard.screen > 1 ? '<button type="button" class="ghost-btn" data-action="bill-wizard-back">← Back</button>' : ''}</div><div class="pos-wizard-footer-right"><button type="button" class="ghost-btn" data-action="close-modal">${closeLabel}</button>${submit ? `<button class="primary-btn modal-submit" type="submit">${submit}</button>` : ''}</div></div>`;
+    ? `<div class="modal-actions"><button type="button" class="ghost-btn" data-action="close-modal" aria-label="${closeAriaLabel}">${closeLabel}</button><button type="button" class="primary-btn" data-action="confirm-modal">${submit || 'Continue'}</button></div>`
+    : `<div class="modal-actions${modalClass === 'pos-wizard-modal' ? ' pos-wizard-footer' : ''}"><div class="pos-wizard-footer-left">${modalClass === 'pos-wizard-modal' && submit && state.billWizard.screen > 1 ? '<button type="button" class="ghost-btn" data-action="bill-wizard-back">← Back</button>' : ''}</div><div class="pos-wizard-footer-right"><button type="button" class="ghost-btn" data-action="close-modal" aria-label="${closeAriaLabel}">${closeLabel}</button>${submit ? `<button class="primary-btn modal-submit" type="submit">${submit}</button>` : ''}</div></div>`;
   const markup = `<div class="modal-backdrop" role="presentation"><div class="modal${modalClass ? ` ${esc(modalClass)}` : ''}" role="dialog" aria-modal="true" aria-labelledby="${titleId}" tabindex="-1" data-modal-type="${esc(modalType)}"><div class="modal-header"><div><div class="eyebrow">ROMS workspace</div><h2 id="${titleId}">${title}</h2></div><button type="button" class="modal-close" data-action="close-modal" aria-label="Close dialog">×</button></div><form id="${formId}" novalidate data-modal-type="${esc(modalType)}">${content}${actions}</form></div></div>`;
   if (isConfirmation) root.insertAdjacentHTML('beforeend', markup);
   else root.innerHTML = markup;
@@ -9494,8 +9552,8 @@ function actions(type, itemId, item = null) {
   const viewable = ['ingredient', 'recipe'].includes(type);
   const editable = (type === 'ingredient' && window.CostTrackLogic.canPerformInventoryAction(state.role, 'product.manage'))
     || (type === 'recipe' && window.CostTrackLogic.canPerformInventoryAction(state.role, 'recipe.manage'));
-  const lifecycleAction = type === 'ingredient' && state.role === 'Administrator'
-    ? `<button type="button" class="product-lifecycle-action" data-action="manage-product" data-id="${esc(itemId)}" aria-label="${item?.isActive === false ? 'Reactivate' : 'Delete or deactivate'} ${esc(item?.name || 'product')}"><span class="tooltip">${item?.isActive === false ? 'Reactivate' : 'Delete / deactivate'}</span>${item?.isActive === false ? '↻' : icon('delete')}</button>`
+  const lifecycleAction = type === 'ingredient' && state.role === 'Administrator' && item?.isActive === false
+    ? `<button type="button" class="product-lifecycle-action" data-action="product-lifecycle-delete-inactive" data-id="${esc(itemId)}" aria-label="Delete inactive ${esc(item?.name || 'product')}"><span class="tooltip">Delete inactive product</span>${icon('delete')}</button>`
     : '';
   return `<div class="row-actions">${viewable ? `<button type="button" data-action="view-${type}" data-id="${itemId}" aria-label="${labels.view}"><span class="tooltip">${labels.view}</span>${icon('view')}</button>` : ''}${editable ? `<button type="button" data-action="edit-${type}" data-id="${itemId}" aria-label="${labels.edit}"><span class="tooltip">${labels.edit}</span>${icon('edit')}</button>` : ''}${lifecycleAction}</div>`;
 }

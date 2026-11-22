@@ -1604,15 +1604,16 @@ kbd {
   .drawer-close {
     display: inline-flex;
     align-items: center;
+    justify-content: center;
+    width: 44px;
     min-height: 44px;
-    gap: 8px;
     border: 0;
     border-radius: 8px;
     margin: 0 0 7px auto;
-    padding: 0 9px;
+    padding: 0;
     color: #5b6b63;
     background: transparent;
-    font-size: 14px;
+    font-size: 24px;
   }
 
   .drawer-close .shell-icon {
