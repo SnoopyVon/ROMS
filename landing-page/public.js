@@ -34,16 +34,21 @@ function setPublicButtonBusy(button, label) {
   };
 }
 function publicReservationTimeOptions(date, selectedTime = '') {
-  return window.CostTrackLogic.reservationTimeSlots(date)
-    .map(time => `<option value="${time}" ${selectedTime === time ? 'selected' : ''}>${time}</option>`)
-    .join('');
+  const slots = window.CostTrackLogic.reservationTimeSlots(date);
+  if (!slots.length) return '<p class="reservation-empty-slots" role="status">No start times remain for this date. Choose another date.</p>';
+  return slots.map((time, index) => {
+    const id = `reservationTime-${index}`;
+    return `<input class="reservation-time-input" id="${id}" type="radio" name="time" value="${escapeHTML(time)}" required ${selectedTime === time ? 'checked' : ''}><label class="reservation-time-slot" for="${id}">${escapeHTML(time)}</label>`;
+  }).join('');
 }
 function refreshPublicReservationTimeOptions(form) {
-  const select = form.elements.time;
-  const selectedTime = select.value;
+  const container = form.querySelector('[data-time-slots]');
+  const selectedTime = container.querySelector('input[name="time"]:checked')?.value || '';
   const slots = window.CostTrackLogic.reservationTimeSlots(form.elements.date.value);
-  select.innerHTML = `<option value="" selected disabled>Choose a time</option>${publicReservationTimeOptions(form.elements.date.value, selectedTime)}`;
-  if (slots.includes(selectedTime)) select.value = selectedTime;
+  container.innerHTML = publicReservationTimeOptions(form.elements.date.value, slots.includes(selectedTime) ? selectedTime : '');
+  const error = form.querySelector('[data-time-error]');
+  error.textContent = 'Select a reservation start time to continue.';
+  error.hidden = true;
 }
 function refreshPublicReservationGuestTotal(form) {
   const total = form.querySelector('[data-guest-total]');
@@ -63,6 +68,120 @@ function refreshPublicReservationGuestTotal(form) {
     total.textContent = '—';
     errorMessage.hidden = false;
   }
+}
+function publicReservationDateLabel(value) {
+  if (!value) return 'Choose a date';
+  const date = new Date(`${value}T12:00:00`);
+  if (Number.isNaN(date.getTime())) return 'Choose a date';
+  return new Intl.DateTimeFormat('en-US', { month: 'short', day: 'numeric', year: 'numeric' }).format(date);
+}
+function publicReservationGuestLabel(form) {
+  try {
+    const counts = window.CostTrackLogic.normalizeReservationGuestCounts(
+      form.elements.adults.value,
+      form.elements.seniorPwdCount.value,
+      form.elements.children.value
+    );
+    const breakdown = [
+      counts.adults ? `${counts.adults} adult${counts.adults === 1 ? '' : 's'}` : '',
+      counts.seniorPwdCount ? `${counts.seniorPwdCount} Senior/PWD` : '',
+      counts.children ? `${counts.children} kid${counts.children === 1 ? '' : 's'}` : ''
+    ].filter(Boolean).join(', ');
+    return `${counts.total} guest${counts.total === 1 ? '' : 's'} · ${breakdown}`;
+  } catch (error) {
+    if (!(error instanceof RangeError)) throw error;
+    return 'Add your party size';
+  }
+}
+function updatePublicReservationSummary(form) {
+  const values = {
+    guests: publicReservationGuestLabel(form),
+    date: publicReservationDateLabel(form.elements.date.value),
+    time: form.querySelector('input[name="time"]:checked')?.value || 'Choose a time',
+    occasion: form.querySelector('input[name="occasion"]:checked')?.value || 'No special occasion',
+    name: form.elements.name.value.trim() || 'Add your name',
+    phone: form.elements.phone.value.trim() || 'Add a contact number',
+    email: form.elements.email.value.trim() || 'Add your email',
+    requests: form.elements.requests.value.trim() || 'None'
+  };
+  const summaryRoot = form.closest('.form-layout') || form;
+  Object.entries(values).forEach(([key, value]) => {
+    summaryRoot.querySelectorAll(`[data-summary="${key}"],[data-review="${key}"]`).forEach(target => {
+      target.textContent = value;
+    });
+  });
+}
+function renderPublicReservationStep(form, step, focusHeading = true) {
+  const currentStep = Math.min(4, Math.max(1, step));
+  form.dataset.currentStep = String(currentStep);
+  form.querySelectorAll('[data-reservation-step-panel]').forEach(panel => {
+    panel.hidden = Number(panel.dataset.reservationStepPanel) !== currentStep;
+  });
+  form.querySelectorAll('[data-reservation-progress-step]').forEach(item => {
+    const itemStep = Number(item.dataset.reservationProgressStep);
+    item.classList.toggle('is-current', itemStep === currentStep);
+    item.classList.toggle('is-complete', itemStep < currentStep);
+    if (itemStep === currentStep) item.setAttribute('aria-current', 'step');
+    else item.removeAttribute('aria-current');
+  });
+  form.querySelector('[data-reservation-step-count]').textContent = `Step ${currentStep} of 4`;
+  updatePublicReservationSummary(form);
+  if (focusHeading) form.querySelector(`[data-reservation-step-panel="${currentStep}"] h3`)?.focus();
+}
+function validatePublicReservationStep(form, step) {
+  const panel = form.querySelector(`[data-reservation-step-panel="${step}"]`);
+  if (step === 1) {
+    try {
+      window.CostTrackLogic.normalizeReservationGuestCounts(
+        form.elements.adults.value,
+        form.elements.seniorPwdCount.value,
+        form.elements.children.value
+      );
+      form.querySelector('[data-guest-count-error]').hidden = true;
+      return true;
+    } catch (error) {
+      if (!(error instanceof RangeError)) throw error;
+      form.querySelector('[data-guest-count-error]').hidden = false;
+      form.querySelector('#reservationAdults').focus();
+      return false;
+    }
+  }
+  if (step === 2) {
+    const date = form.elements.date;
+    if (!date.checkValidity()) {
+      date.reportValidity();
+      return false;
+    }
+    if (!form.querySelector('input[name="time"]:checked')) {
+      const error = form.querySelector('[data-time-error]');
+      if (!form.querySelector('[data-time-slots] input[name="time"]')) {
+        error.textContent = 'No start times remain for this date. Choose another date.';
+        error.hidden = false;
+        date.focus();
+        return false;
+      }
+      error.hidden = false;
+      form.querySelector('[data-time-slots] input[name="time"]')?.focus();
+      return false;
+    }
+    form.querySelector('[data-time-error]').hidden = true;
+    return true;
+  }
+  const invalidControl = [...panel.querySelectorAll('input,select,textarea')]
+    .find(control => !control.checkValidity());
+  if (!invalidControl) return true;
+  invalidControl.reportValidity();
+  return false;
+}
+function validatePublicReservationBeforeSubmit(form) {
+  for (let step = 1; step <= 3; step += 1) {
+    renderPublicReservationStep(form, step, false);
+    if (!validatePublicReservationStep(form, step)) {
+      return false;
+    }
+  }
+  renderPublicReservationStep(form, 4, false);
+  return true;
 }
 const publicReservationCooldownMs = 60 * 1000;
 const publicReservationCooldownKey = 'isobel_public_reservation_cooldown';
@@ -92,7 +211,103 @@ function about() { return shell('about', `<section class="inner-hero"><small>Our
 function menuPage() { return shell('menu', `<section class="inner-hero menu-hero"><small>The menu</small><h1>Flavors with<br><em>a point of view.</em></h1><p>Filipino favorites, reimagined with seasonal ingredients and a little ISOBEL magic.</p></section><section class="section menu-page"><div class="filters">${['All dishes','Main Course','Appetizers','Desserts','Beverages','Buffet Specials'].map((c,i)=>`<button class="${i?'':'active'}" data-filter="${c}">${c}</button>`).join('')}</div><div class="menu-grid">${menu.map(dishCard).join('')}</div></section>`); }
 function buffet() { const packs = [['Silver','499',['Main dishes','Desserts','Unlimited drinks']],['Gold','799',['Premium menu selection','Seafood options','Desserts','Unlimited drinks']],['Platinum','999',['Full buffet experience','Premium menu','VIP seating','Unlimited drinks']]]; return shell('buffet', `<section class="inner-hero buffet-hero"><small>Gather generously</small><h1>There is always<br><em>room for more.</em></h1><p>Our buffet packages are made for birthdays, reunions, and the stories that happen around a full table.</p></section><section class="section"><small>Choose your experience</small><h2>Made for <em>your gathering.</em></h2><div class="packages">${packs.map((p,i)=>`<article class="${i===1?'featured':''}"><small>${p[0]} package</small><h3>₱${p[1]} <i>per person</i></h3><p>A generous spread for easy, joyful gatherings.</p><ul>${p[2].map(f=>`<li>✓ ${f}</li>`).join('')}</ul><button class="${i===1?'primary':'outline'}" data-page="reservation">Choose ${p[0]} ↗</button></article>`).join('')}</div></section>`); }
 function reservation() {
-  return shell('reservation', `<section class="form-hero"><div><small>A seat at our table</small><h1>Reserve your<br><em>moment.</em></h1><p>Tell us a little about your visit and we will take care of the rest.</p></div><img src="https://images.unsplash.com/photo-1414235077428-338989a2e8c0?auto=format&fit=crop&w=1000&q=85" alt="Set restaurant table"></section><section class="form-layout"><form id="reservationForm"><label class="honeypot" aria-hidden="true">Website<input name="website" tabindex="-1" autocomplete="off"></label><small>Reservation details</small><h2>Let's make it <em>special.</em></h2><div class="form-row"><label>Full name<input name="name" required placeholder="Your full name"></label><label>Contact number<input name="phone" required placeholder="09XX XXX XXXX"></label></div><label>Email address<input name="email" type="email" required placeholder="you@email.com"></label><fieldset class="guest-count-fields"><legend>Number of guests</legend><div class="guest-count-row"><label>Adults<input id="reservationAdults" name="adults" type="number" min="0" max="1000" step="1" value="2" required></label><label>Senior / PWD<input id="reservationSeniorPwdCount" name="seniorPwdCount" type="number" min="0" max="1000" step="1" value="0" required></label><label>Kids<input id="reservationChildren" name="children" type="number" min="0" max="1000" step="1" value="0" required></label></div><p class="guest-total">Total guests: <output data-guest-total for="reservationAdults reservationSeniorPwdCount reservationChildren" aria-live="polite">2</output><span data-guest-count-error hidden> Enter whole-number counts and include at least one guest.</span></p></fieldset><div class="form-row"><label>Reservation date<input name="date" type="date" required></label><label>Reservation time<select name="time" required><option value="" selected disabled>Choose a time</option>${publicReservationTimeOptions()}</select><small>Each reservation has a two-hour seating window. Choose a start from 10:00 AM through 7:00 PM so it ends by closing at 9:00 PM. Past times today are unavailable.</small></label></div><label>Occasion<select name="occasion"><option>Birthday</option><option>Anniversary</option><option>Family gathering</option><option>Business meeting</option></select></label><label>Special requests<textarea name="requests" rows="4" placeholder="Dietary requirements or seating preferences"></textarea></label><button class="primary">Request reservation ↗</button></form><aside><small>Good to know</small><h3>We hold your table for 15 minutes after your reservation time.</h3><p>Enter every guest by category above. The total updates automatically, including for large parties.</p><button class="link" data-page="status">Check reservation status →</button></aside></section>`);
+  return shell('reservation', `<section class="form-hero"><div><small>A seat at our table</small><h1>Reserve your<br><em>moment.</em></h1><p>Start with your party, choose a time, then send us your request.</p></div><img src="https://images.unsplash.com/photo-1414235077428-338989a2e8c0?auto=format&fit=crop&w=1000&q=85" alt="A table set for a restaurant reservation"></section>
+    <section class="form-layout reservation-layout">
+      <form id="reservationForm" novalidate>
+        <label class="honeypot" aria-hidden="true">Website<input name="website" tabindex="-1" autocomplete="off"></label>
+        <div class="reservation-wizard-heading"><small>Table reservation</small><h2>Let's make it <em>special.</em></h2><p>Four quick steps to request your table.</p></div>
+        <ol class="reservation-progress" aria-label="Reservation progress">
+          <li class="is-current" data-reservation-progress-step="1" aria-current="step"><span>1</span><strong>Party Size</strong></li>
+          <li data-reservation-progress-step="2"><span>2</span><strong>Date &amp; Time</strong></li>
+          <li data-reservation-progress-step="3"><span>3</span><strong>Your Details</strong></li>
+          <li data-reservation-progress-step="4"><span>4</span><strong>Review</strong></li>
+        </ol>
+        <p class="reservation-step-count" data-reservation-step-count>Step 1 of 4</p>
+
+        <section class="reservation-step-panel" data-reservation-step-panel="1" aria-labelledby="reservationPartyHeading">
+          <h3 id="reservationPartyHeading" tabindex="-1">How many are joining us?</h3>
+          <p>Start with your group size. You can update these numbers before sending your request.</p>
+          <fieldset class="guest-count-fields">
+            <legend>Guests by category</legend>
+            <div class="guest-count-row">
+              <label>Adults<input id="reservationAdults" name="adults" type="number" min="0" max="1000" step="1" value="2" required inputmode="numeric"></label>
+              <label>Senior / PWD<input id="reservationSeniorPwdCount" name="seniorPwdCount" type="number" min="0" max="1000" step="1" value="0" required inputmode="numeric"></label>
+              <label>Kids<input id="reservationChildren" name="children" type="number" min="0" max="1000" step="1" value="0" required inputmode="numeric"></label>
+            </div>
+            <p class="guest-total">Total guests: <output data-guest-total for="reservationAdults reservationSeniorPwdCount reservationChildren" aria-live="polite">2</output><span data-guest-count-error role="alert" hidden> Enter whole-number counts and include at least one guest.</span></p>
+            <small class="guest-count-help">Count each person once in the category that applies. Enter 0 for categories you are not using.</small>
+          </fieldset>
+          <div class="reservation-step-actions"><span></span><button type="button" class="primary" data-reservation-next>Choose date &amp; time →</button></div>
+        </section>
+
+        <section class="reservation-step-panel" data-reservation-step-panel="2" aria-labelledby="reservationScheduleHeading" hidden>
+          <h3 id="reservationScheduleHeading" tabindex="-1">When would you like to visit?</h3>
+          <label class="reservation-date-label">Reservation date<input name="date" type="date" required></label>
+          <fieldset class="reservation-time-fieldset">
+            <legend>Choose a start time</legend>
+            <p>These are requestable start times, not live table availability. Your request is subject to restaurant approval.</p>
+            <div class="reservation-time-slots" data-time-slots>${publicReservationTimeOptions()}</div>
+            <p class="reservation-step-error" data-time-error role="alert" hidden>Select a reservation start time to continue.</p>
+            <small>Each seating lasts up to two hours. Start times run from 10:00 AM to 7:00 PM so your visit ends by closing at 9:00 PM.</small>
+          </fieldset>
+          <fieldset class="reservation-occasion-fieldset">
+            <legend>Are you celebrating anything? <span>Optional</span></legend>
+            <div class="reservation-choice-grid">
+              <input id="occasionNone" type="radio" name="occasion" value="" checked><label for="occasionNone">No special occasion</label>
+              <input id="occasionBirthday" type="radio" name="occasion" value="Birthday"><label for="occasionBirthday">Birthday</label>
+              <input id="occasionAnniversary" type="radio" name="occasion" value="Anniversary"><label for="occasionAnniversary">Anniversary</label>
+              <input id="occasionFamily" type="radio" name="occasion" value="Family gathering"><label for="occasionFamily">Family gathering</label>
+              <input id="occasionBusiness" type="radio" name="occasion" value="Business meeting"><label for="occasionBusiness">Business</label>
+              <input id="occasionOther" type="radio" name="occasion" value="Other"><label for="occasionOther">Other</label>
+            </div>
+            <small>If you choose Other, share a note in the next step.</small>
+          </fieldset>
+          <div class="reservation-step-actions"><button type="button" class="outline" data-reservation-back>← Party size</button><button type="button" class="primary" data-reservation-next>Continue to your details →</button></div>
+        </section>
+
+        <section class="reservation-step-panel" data-reservation-step-panel="3" aria-labelledby="reservationContactHeading" hidden>
+          <h3 id="reservationContactHeading" tabindex="-1">How can we reach you?</h3>
+          <p>We use your email to send your reservation reference and your phone number if the team needs to reach you.</p>
+          <label>Full name<input name="name" required autocomplete="name" placeholder="Your full name"></label>
+          <div class="form-row">
+            <label>Contact number<input name="phone" type="tel" required autocomplete="tel" placeholder="09XX XXX XXXX"></label>
+            <label>Email address<input name="email" type="email" required autocomplete="email" placeholder="you@email.com"></label>
+          </div>
+          <label>Special requests <span class="optional-label">Optional</span><textarea name="requests" rows="4" placeholder="Dietary requirements, seating preferences, or details about your occasion"></textarea></label>
+          <div class="reservation-step-actions"><button type="button" class="outline" data-reservation-back>← Date &amp; time</button><button type="button" class="primary" data-reservation-next>Review reservation →</button></div>
+        </section>
+
+        <section class="reservation-step-panel" data-reservation-step-panel="4" aria-labelledby="reservationReviewHeading" hidden>
+          <h3 id="reservationReviewHeading" tabindex="-1">Review your reservation request</h3>
+          <p>Check your details before sending. Your table is not confirmed until the restaurant approves the request.</p>
+          <dl class="reservation-review-list">
+            <div><dt>Party size</dt><dd data-review="guests"></dd><button type="button" class="link" data-reservation-edit="1">Edit</button></div>
+            <div><dt>Date &amp; time</dt><dd><span data-review="date"></span> · <span data-review="time"></span></dd><button type="button" class="link" data-reservation-edit="2">Edit</button></div>
+            <div><dt>Occasion</dt><dd data-review="occasion"></dd></div>
+            <div><dt>Name</dt><dd data-review="name"></dd><button type="button" class="link" data-reservation-edit="3">Edit</button></div>
+            <div><dt>Contact</dt><dd><span data-review="phone"></span><br><span data-review="email"></span></dd></div>
+            <div><dt>Special requests</dt><dd data-review="requests"></dd></div>
+          </dl>
+          <p class="reservation-approval-note">Sending this request does not confirm your table. The restaurant will review it and update its status.</p>
+          <div class="reservation-step-actions"><button type="button" class="outline" data-reservation-back>← Your details</button><button type="submit" class="primary">Request reservation ↗</button></div>
+        </section>
+      </form>
+
+      <aside class="reservation-summary" aria-label="Your reservation summary">
+        <details class="reservation-summary-details" open>
+          <summary>Your Reservation</summary>
+          <p class="reservation-summary-caption">Updates as you make your choices.</p>
+          <dl aria-live="polite" aria-relevant="text">
+            <div><dt>Guests</dt><dd data-summary="guests">2 guests · 2 adults</dd></div>
+            <div><dt>Date</dt><dd data-summary="date">Choose a date</dd></div>
+            <div><dt>Time</dt><dd data-summary="time">Choose a time</dd></div>
+            <div><dt>Occasion</dt><dd data-summary="occasion">No special occasion</dd></div>
+          </dl>
+          <p class="reservation-summary-note">Your request is pending until the restaurant approves it.</p>
+        </details>
+        <div class="reservation-good-to-know"><small>Good to know</small><h3>We hold your table for 15 minutes after your reservation time.</h3><button class="link" type="button" data-page="status">Check reservation status →</button></div>
+      </aside>
+    </section>`);
 }
 function status() { return shell('status', `<section class="inner-hero status-hero"><small>Your reservation</small><h1>We saved you<br><em>a seat.</em></h1><p>Enter your reservation reference below to see the latest update.</p></section><section class="status-section"><form id="statusForm"><label>Reservation number<input name="reference" value="RES-2026-001" placeholder="RES-2026-001"></label><button class="primary">Check status ↗</button></form><div id="statusResult" role="status" aria-live="polite"></div></section>`); }
 function gallery() { const pics = [['Dining area','https://images.unsplash.com/photo-1517248135467-4c7edcad34c4?auto=format&fit=crop&w=1000&q=85'],['Private rooms','https://images.unsplash.com/photo-1550966871-3ed3cdb5ed0c?auto=format&fit=crop&w=1000&q=85'],['Signature dishes','https://images.unsplash.com/photo-1547592180-85f173990554?auto=format&fit=crop&w=1000&q=85'],['The buffet','https://images.unsplash.com/photo-1555244162-803834f70033?auto=format&fit=crop&w=1000&q=85'],['Good company','https://images.unsplash.com/photo-1528605248644-14dd04022da1?auto=format&fit=crop&w=1000&q=85'],['Little celebrations','https://images.unsplash.com/photo-1519671482749-fd09be7ccebf?auto=format&fit=crop&w=1000&q=85']]; return shell('gallery', `<section class="inner-hero gallery-hero"><small>A glimpse inside</small><h1>Gather beautifully.<br><em>Stay awhile.</em></h1></section><section class="gallery">${pics.map(p=>`<figure><img src="${p[1]}" alt="${p[0]}"><figcaption>${p[0]} <b>↗</b></figcaption></figure>`).join('')}</section>`); }
@@ -102,18 +317,25 @@ function render(page = location.hash.slice(1) || 'home') {
   app.innerHTML = pages[page] ? pages[page]() : pages.home();
   const date = document.querySelector('#reservationForm [name="date"]');
   const reservationForm = document.querySelector('#reservationForm');
-  if (date) {
-    date.min = localDateStr(new Date());
-    date.closest('form').addEventListener('change', event => {
-      if (event.target.matches('[name="date"]')) refreshPublicReservationTimeOptions(event.currentTarget);
-    });
-  }
   if (reservationForm) {
+    date.min = localDateStr(new Date());
+    refreshPublicReservationTimeOptions(reservationForm);
     refreshPublicReservationGuestTotal(reservationForm);
+    renderPublicReservationStep(reservationForm, 1, false);
     reservationForm.addEventListener('input', event => {
       if (event.target.matches('[name="adults"],[name="seniorPwdCount"],[name="children"]')) {
         refreshPublicReservationGuestTotal(reservationForm);
       }
+      updatePublicReservationSummary(reservationForm);
+    });
+    reservationForm.addEventListener('change', event => {
+      if (event.target.matches('[name="date"]')) refreshPublicReservationTimeOptions(reservationForm);
+      if (event.target.matches('[name="time"]')) {
+        const timeError = reservationForm.querySelector('[data-time-error]');
+        timeError.textContent = 'Select a reservation start time to continue.';
+        timeError.hidden = true;
+      }
+      updatePublicReservationSummary(reservationForm);
     });
   }
   const statusForm = document.querySelector('#statusForm');
@@ -131,10 +353,21 @@ function bind() {
   document.querySelectorAll('[data-filter]').forEach(el => el.addEventListener('click', () => { document.querySelectorAll('[data-filter]').forEach(item => item.classList.toggle('active', item === el)); document.querySelectorAll('.menu-grid article').forEach(item => item.hidden = el.dataset.filter !== 'All dishes' && !item.querySelector('small').textContent.includes(el.dataset.filter)); }));
   const reservationForm = document.querySelector('#reservationForm');
   if (reservationForm && !reservationForm.elements.website) reservationForm.insertAdjacentHTML('afterbegin', '<label class="honeypot" aria-hidden="true">Website<input name="website" tabindex="-1" autocomplete="off"></label>');
+  reservationForm?.querySelectorAll('[data-reservation-next]').forEach(button => button.addEventListener('click', () => {
+    const step = Number(reservationForm.dataset.currentStep || 1);
+    if (validatePublicReservationStep(reservationForm, step)) renderPublicReservationStep(reservationForm, step + 1);
+  }));
+  reservationForm?.querySelectorAll('[data-reservation-back]').forEach(button => button.addEventListener('click', () => {
+    renderPublicReservationStep(reservationForm, Number(reservationForm.dataset.currentStep || 1) - 1);
+  }));
+  reservationForm?.querySelectorAll('[data-reservation-edit]').forEach(button => button.addEventListener('click', () => {
+    renderPublicReservationStep(reservationForm, Number(button.dataset.reservationEdit));
+  }));
   reservationForm?.addEventListener('submit', async event => {
     event.preventDefault();
     const formElement = event.currentTarget;
     if (formElement.dataset.saving === 'true') return;
+    if (!validatePublicReservationBeforeSubmit(formElement)) return;
     const form = new FormData(formElement);
     if (window.CostTrackLogic.reservationStartTimeIsInPast(form.get('date'), form.get('time'))) {
       let message = formElement.querySelector('.form-error');
@@ -186,6 +419,7 @@ function bind() {
       const reference = typeof reservation === 'string' ? reservation : reservation.id || reservation.reference;
       if (!reference) throw new Error('The reservation was submitted but no reference was returned.');
       const email = String(form.get('email')).trim();
+      formElement.closest('.reservation-layout')?.classList.add('is-submitted');
       formElement.innerHTML = `<div class="success"><span aria-hidden="true">✦</span><small>Reservation request received</small><h2>Thank you, ${escapeHTML(String(form.get('name')).trim().split(' ')[0])}.</h2><p>Your table request is with our team. It is not confirmed until the restaurant approves it.</p><b>${escapeHTML(reference)}</b><p id="reservationReferenceEmailNotice" role="status" aria-live="polite">Sending your reservation reference to ${escapeHTML(email)}…</p><button class="link" data-page="status">Check reservation status →</button></div>`;
       sessionStorage.setItem(publicReservationCooldownKey, String(Date.now() + publicReservationCooldownMs));
       bind();
