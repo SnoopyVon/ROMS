@@ -346,3 +346,124 @@
 @media(max-width:1024px){.pos-party-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.pos-wizard-modal{width:calc(100vw - 24px)}}
 @media(max-width:768px){.pos-wizard-progress{padding:8px 12px}.pos-wizard-progress li{justify-content:center;gap:4px;font-size:11px}.pos-wizard-progress li .pos-wizard-step-button{flex-direction:column;gap:2px}.pos-wizard-progress li .pos-wizard-step-label{max-width:80px;text-align:center}.pos-wizard-screen:not(.pos-wizard-review){padding:16px}.pos-wizard-screen.pos-wizard-review{overflow-y:auto}.pos-party-grid{grid-template-columns:1fr}.pos-count-stepper,.pos-rate-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.pos-guest-summary{align-items:flex-start;flex-wrap:wrap}.pos-guest-summary-chips{justify-content:flex-start}.pos-wizard-footer{padding:10px 16px!important}.pos-wizard-toolbar{align-items:stretch;flex-direction:column}.pos-wizard-review-scroll{flex:0 0 auto;overflow:visible;padding:12px 16px}.pos-wizard-checkout{grid-template-columns:1fr;gap:8px;padding:8px 16px 10px}.pos-wizard-totals{grid-template-columns:repeat(2,minmax(0,1fr));column-gap:12px}.pos-wizard-totals .is-total,.pos-wizard-totals .is-balance{grid-column:1/-1}.pos-wizard-payment label{grid-template-columns:1fr}.pos-discount-grid{grid-template-columns:1fr}.pos-discount-grid .field-help{grid-column:auto}.pos-wizard-bill-summary h3{align-items:flex-start;flex-direction:column;gap:3px}.pos-wizard-party-context{text-align:left}.pos-wizard-modal{height:90vh}}
 @media(max-width:360px){.pos-wizard-modal{width:calc(100vw - 16px)}.pos-wizard-footer-right{margin-left:auto}.pos-wizard-footer button{padding-left:10px;padding-right:10px}.pos-rate-grid{grid-template-columns:1fr}}
+
+.applicant-review-modal{width:min(760px,calc(100vw - 32px));max-height:min(92vh,900px);overflow:auto}
+.applicant-review-modal [hidden]{display:none!important}
+.applicant-review-modal #modalForm{display:grid;gap:20px}
+.applicant-review-progress{display:grid;grid-template-columns:repeat(8,minmax(0,1fr));gap:7px;margin:0;padding:0;list-style:none}
+.applicant-review-progress li{display:flex;align-items:center;gap:7px;min-width:0;color:#6b7972;font-size:11px;line-height:1.3}
+.applicant-review-progress li.is-active{color:var(--teal-dark);font-weight:800}
+.applicant-review-progress li.is-complete{color:#32704e}
+.applicant-review-step-number{display:grid;place-items:center;flex:0 0 25px;width:25px;height:25px;border:1px solid var(--line);border-radius:50%;background:#fff;font-size:11px;font-weight:800}
+.applicant-review-progress li.is-active .applicant-review-step-number{border-color:var(--teal);background:var(--mint);color:var(--teal-dark)}
+.applicant-review-progress li.is-complete .applicant-review-step-number{border-color:#b9d8c6;background:#eaf6ed}
+.applicant-review-panel{display:grid;gap:14px;min-width:0}
+.applicant-review-panel h3{margin:0;font:700 18px 'Plus Jakarta Sans',sans-serif}
+.applicant-review-panel>.field-help,.applicant-id-help{margin:0;color:var(--muted);font-size:12px;line-height:1.5}
+.applicant-id-upload{display:grid;gap:12px;padding:16px;border:1px dashed #b6ccc1;border-radius:12px;background:#f8fbf8}
+.applicant-id-empty{display:grid;justify-items:center;gap:9px;padding:16px;text-align:center;color:var(--muted);font-size:12px}
+.applicant-id-upload-icon{display:grid;place-items:center;width:42px;height:42px;border-radius:50%;background:var(--mint);color:var(--teal-dark);font-size:24px}
+.applicant-id-selected{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);align-items:center;gap:16px}
+.applicant-id-preview-frame{display:grid;place-items:center;min-height:180px;overflow:hidden;border:1px solid var(--line);border-radius:9px;background:#eef2ef}
+.applicant-id-preview-frame img{display:block;width:100%;max-height:240px;object-fit:contain}
+.applicant-id-file-details{display:grid;gap:10px;min-width:0;font-size:12px}
+.applicant-id-file-details strong{overflow-wrap:anywhere}
+.applicant-id-file-actions{display:flex;flex-wrap:wrap;gap:8px}
+.applicant-id-error,.applicant-ocr-warning{margin:0;padding:10px 12px;border:1px solid #e5c498;border-radius:8px;background:#fff8eb;color:#754b1d;font-size:12px;line-height:1.5}
+.applicant-ocr-progress{display:grid;grid-template-columns:minmax(90px,1fr) 2fr;align-items:center;gap:10px;color:var(--muted);font-size:12px}
+.applicant-ocr-progress progress{width:100%;height:8px;accent-color:var(--teal)}
+.applicant-ocr-fields{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px}
+.applicant-ocr-field{display:grid;gap:6px;min-width:0;color:var(--ink);font-size:12px;font-weight:700}
+.applicant-ocr-field input{box-sizing:border-box;width:100%;min-height:44px;padding:10px 12px;border:1px solid var(--line);border-radius:8px;background:#fff;color:var(--ink);font:500 14px 'DM Sans',sans-serif}
+.applicant-ocr-field input:focus{border-color:var(--teal);outline:2px solid #b9ded2;outline-offset:1px}
+.applicant-ocr-field small{color:var(--muted);font-size:11px;font-weight:400;line-height:1.4}
+.applicant-review-actions{display:flex;align-items:center;justify-content:space-between;gap:10px;padding-top:14px;border-top:1px solid var(--line)}
+.applicant-review-actions-right{display:flex;justify-content:flex-end;gap:8px}
+.applicant-face-camera-frame{position:relative;display:grid;place-items:center;min-height:220px;aspect-ratio:4/3;overflow:hidden;border:1px solid var(--line);border-radius:12px;background:#17211e}
+.applicant-face-camera-frame video,.applicant-face-camera-frame img{display:block;width:100%;height:100%;max-height:420px;object-fit:contain}
+.applicant-face-camera-placeholder{margin:0;padding:20px;color:#f3f6f4;font-size:13px;text-align:center}
+.applicant-face-camera-status,.applicant-face-camera-error{margin:0;font-size:12px;line-height:1.5}
+.applicant-face-camera-status{color:var(--muted)}
+.applicant-face-camera-error{padding:10px 12px;border:1px solid #e5c498;border-radius:8px;background:#fff8eb;color:#754b1d}
+.applicant-face-camera-controls{display:flex;flex-wrap:wrap;gap:8px}
+.applicant-face-match-progress,.applicant-face-match-error{margin:0;padding:12px;border-radius:8px;font-size:13px;line-height:1.5}
+.applicant-face-match-progress{background:#f2f7f4;color:var(--muted)}
+.applicant-face-match-error{border:1px solid #e5c498;background:#fff8eb;color:#754b1d}
+.applicant-face-match-details{display:grid;gap:0;margin:0;border:1px solid var(--line);border-radius:10px;overflow:hidden}
+.applicant-face-match-row{display:flex;justify-content:space-between;gap:16px;padding:12px;border-bottom:1px solid var(--line);font-size:13px}
+.applicant-face-match-row:last-child{border-bottom:0}
+.applicant-face-match-row dt{color:var(--muted)}
+.applicant-face-match-row dd{margin:0;text-align:right;font-weight:700}
+.applicant-face-match-row small{display:block;color:var(--muted);font-size:11px;font-weight:400}
+.applicant-face-match-result{margin:0;padding:14px;border-radius:9px;text-align:center;font-size:16px;font-weight:800;letter-spacing:.04em}
+.applicant-face-match-result.is-match{background:#eaf6ed;color:#276b43}
+.applicant-face-match-result.is-no-match{background:#fff0ee;color:#a3413b}
+.applicant-face-match-result.is-unavailable{background:#f2f4f3;color:#52625b}
+.applicant-verification-summary{gap:16px}
+.applicant-verification-overall{display:grid;gap:4px;padding:14px 16px;border:1px solid;border-radius:10px}
+.applicant-verification-overall-label{font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.06em}
+.applicant-verification-overall strong{font:700 17px 'Plus Jakarta Sans',sans-serif}
+.applicant-verification-overall small{font-size:12px;line-height:1.45}
+.applicant-verification-overall.is-success{border-color:#b9d8c6;background:#eaf6ed;color:#276b43}
+.applicant-verification-overall.is-warning{border-color:#e5c498;background:#fff8eb;color:#754b1d}
+.applicant-verification-cards{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}
+.applicant-verification-card{display:grid;align-content:start;gap:12px;min-width:0;padding:14px;border:1px solid var(--line);border-radius:10px;background:#fff}
+.applicant-verification-card:last-child{grid-column:1/-1}
+.applicant-verification-card-heading{display:flex;align-items:flex-start;justify-content:space-between;gap:8px}
+.applicant-verification-card-heading h4{margin:0;font:700 14px 'Plus Jakarta Sans',sans-serif}
+.applicant-verification-tag{display:inline-flex;flex:0 0 auto;align-items:center;min-height:24px;padding:3px 8px;border-radius:999px;font-size:10px;font-weight:800}
+.applicant-verification-tag.is-success{background:#eaf6ed;color:#276b43}
+.applicant-verification-tag.is-warning{background:#fff2d7;color:#754b1d}
+.applicant-verification-tag.is-failure{background:#fff0ee;color:#a3413b}
+.applicant-verification-thumbnail{display:block;width:100%;max-height:180px;object-fit:contain;border:1px solid var(--line);border-radius:8px;background:#f3f5f4}
+.applicant-verification-face-thumbnail{justify-self:start;max-width:220px}
+.applicant-verification-fields{display:grid;gap:0;margin:0}
+.applicant-verification-fields>div{display:grid;grid-template-columns:minmax(100px,.7fr) minmax(0,1.3fr);gap:10px;padding:9px 0;border-bottom:1px solid var(--line)}
+.applicant-verification-fields>div:last-child{border-bottom:0}
+.applicant-verification-fields dt{color:var(--muted);font-size:12px}
+.applicant-verification-fields dd{margin:0;overflow-wrap:anywhere;font-size:12px;font-weight:700}
+.applicant-verification-fields dd small{display:block;margin-top:3px;color:var(--muted);font-size:10px;font-weight:400}
+.applicant-verification-note,.applicant-verification-missing{margin:0;color:var(--muted);font-size:11px;line-height:1.5}
+@media(max-width:600px){.applicant-review-modal{width:calc(100vw - 20px);max-height:94vh}.applicant-review-progress{grid-template-columns:repeat(3,minmax(0,1fr));gap:8px 4px}.applicant-review-progress li{flex-direction:column;justify-content:flex-start;gap:4px;text-align:center;font-size:9px}.applicant-review-step-number{flex-basis:23px;width:23px;height:23px}.applicant-id-selected,.applicant-ocr-fields{grid-template-columns:1fr}.applicant-id-preview-frame{min-height:140px}.applicant-face-camera-frame{min-height:180px}.applicant-face-match-row{flex-direction:column;gap:5px}.applicant-face-match-row dd{text-align:left}.applicant-ocr-progress{grid-template-columns:1fr}.applicant-review-actions button{min-height:42px}}
+@media(max-width:600px){.applicant-verification-cards{grid-template-columns:1fr}.applicant-verification-card:last-child{grid-column:auto}.applicant-verification-fields>div{grid-template-columns:minmax(90px,.8fr) minmax(0,1.2fr)}}
+.applicant-role-verification-context{display:grid;gap:10px;padding:12px;border:1px solid var(--line);border-radius:10px;background:#f8fbf8}
+.applicant-role-verification-context>div:first-child{display:grid;gap:3px}
+.applicant-role-context-eyebrow{color:var(--muted);font-size:10px;font-weight:800;letter-spacing:.06em;text-transform:uppercase}
+.applicant-role-verification-context>div:first-child strong{font:700 14px 'Plus Jakarta Sans',sans-serif}
+.applicant-role-context-checks{display:flex;flex-wrap:wrap;gap:7px}
+.applicant-role-context-status{margin:0;font-size:12px;font-weight:700}
+.applicant-role-context-status.is-success{color:#276b43}
+.applicant-role-context-status.is-warning{color:#754b1d}
+.applicant-role-verification-context>small{color:var(--muted);font-size:11px;line-height:1.45}
+.applicant-role-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;min-width:0;margin:0;padding:0;border:0}
+.applicant-role-grid legend{grid-column:1/-1;margin-bottom:2px;color:var(--ink);font-size:12px;font-weight:800}
+.applicant-role-option{position:relative;min-width:0}
+.applicant-role-option input{position:absolute;width:1px;height:1px;opacity:0}
+.applicant-role-option label{position:relative;display:grid;align-content:start;gap:7px;min-height:96px;padding:14px 42px 14px 14px;border:1px solid var(--line);border-radius:10px;background:#fff;cursor:pointer;transition:border-color .15s,background .15s,box-shadow .15s}
+.applicant-role-option label strong{font-size:13px;line-height:1.35}
+.applicant-role-option label small{color:var(--muted);font-size:11px;line-height:1.45}
+.applicant-role-option label::after{position:absolute;top:13px;right:13px;display:grid;place-items:center;width:20px;height:20px;border:1px solid #aebdb6;border-radius:50%;background:#fff;color:transparent;content:'';font-size:12px;font-weight:800}
+.applicant-role-option input:checked+label{border-color:var(--teal);background:#eff8f4;box-shadow:0 0 0 2px #d5ece2}
+.applicant-role-option input:checked+label::after{border-color:var(--teal);background:var(--teal);color:#fff;content:'✓'}
+.applicant-role-option input:focus-visible+label{outline:2px solid var(--teal);outline-offset:2px}
+.applicant-account-review-banner{display:grid;gap:5px;padding:16px;border:1px solid;border-radius:10px}
+.applicant-account-review-banner strong{font:700 17px 'Plus Jakarta Sans',sans-serif}
+.applicant-account-review-banner small{font-size:12px;line-height:1.45}
+.applicant-account-review-banner.is-ready{border-color:#b9d8c6;background:#eaf6ed;color:#276b43}
+.applicant-account-review-banner.is-review{border-color:#e5c498;background:#fff8eb;color:#754b1d}
+.applicant-account-review-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}
+.applicant-account-review-card{display:grid;align-content:start;gap:11px;min-width:0;padding:14px;border:1px solid var(--line);border-radius:10px;background:#fff}
+.applicant-account-review-card h4{margin:0;font:700 14px 'Plus Jakarta Sans',sans-serif}
+.applicant-account-review{display:grid;gap:0;margin:0;border:1px solid var(--line);border-radius:9px;background:#fff}
+.applicant-account-review>div{display:grid;grid-template-columns:minmax(90px,.8fr) minmax(0,1.2fr);gap:10px;padding:10px;border-bottom:1px solid var(--line);font-size:12px}
+.applicant-account-review>div:last-child{border-bottom:0}
+.applicant-account-review dt{color:var(--muted)}
+.applicant-account-review dd{margin:0;overflow-wrap:anywhere;text-align:right;font-weight:700}
+.applicant-account-review dd small{display:block;margin-top:3px;color:var(--muted);font-size:10px;font-weight:400}
+.applicant-account-review-note{margin:0;color:var(--muted);font-size:11px;line-height:1.5}
+.applicant-account-review-notice{margin:0;padding:11px 12px;border:1px solid #e5c498;border-radius:8px;background:#fff8eb;color:#754b1d;font-size:12px;line-height:1.5}
+.applicant-review-override-reason{display:grid;gap:7px;color:var(--ink);font-size:12px;font-weight:700}
+.applicant-review-override-reason textarea{width:100%;min-height:84px;resize:vertical;border:1px solid #d6bd94;border-radius:8px;background:#fff;padding:10px 12px;color:var(--ink);font:inherit;font-weight:400}
+.applicant-review-override-reason textarea:focus-visible{outline:2px solid var(--teal);outline-offset:2px}
+@media(max-width:480px){.applicant-role-grid{grid-template-columns:1fr}.applicant-role-option label{min-height:0}}
+@media(max-width:600px){.applicant-account-review-grid{grid-template-columns:1fr}.applicant-account-review>div{grid-template-columns:minmax(90px,.7fr) minmax(0,1.3fr)}.applicant-account-review dd{text-align:left}}

@@ -1,11 +1,110 @@
 const assert = require('node:assert/strict');
 const test = require('node:test');
 const logic = require('./business-logic.js');
+const ocr = require('./ivs-ocr.js');
+const faceMatching = require('./face-matching.js');
 
 const kg = { name: 'Kilogram', abbreviation: 'kg', dimension: 'weight', conversionToBase: 1000 };
 const g = { name: 'Gram', abbreviation: 'g', dimension: 'weight', conversionToBase: 1 };
 const liter = { name: 'Liter', abbreviation: 'L', dimension: 'volume', conversionToBase: 1000 };
 const asOfDate = '2026-11-11';
+
+test('face matching uses IVS Euclidean distance and cutoff for 128-value descriptors', () => {
+  const first = Array(128).fill(0);
+  const same = Array(128).fill(0);
+  const withinThreshold = Array(128).fill(0);
+  const outsideThreshold = Array(128).fill(0);
+  withinThreshold[0] = 0.6;
+  outsideThreshold[0] = 0.61;
+
+  assert.equal(faceMatching.compareDescriptors(first, same), 0);
+  assert.equal(faceMatching.compareDescriptors(first, withinThreshold), 0.6);
+  assert.equal(faceMatching.compareDescriptors(first, outsideThreshold), 0.61);
+  assert.equal(faceMatching.faceMatchDistance, 0.6);
+  assert.equal(faceMatching.classifyDistance(0.6), 'match');
+  assert.equal(faceMatching.classifyDistance(0.6001), 'no_match');
+  assert.equal(faceMatching.classifyDistance(Number.NaN), 'no_match');
+  assert.equal(faceMatching.similarityIndicator(0), 100);
+  assert.equal(faceMatching.similarityIndicator(1), 50);
+  assert.throws(() => faceMatching.compareDescriptors([0], [0]), /missing or invalid/);
+});
+
+test('ID OCR parsing extracts labeled fields and identifies a supported PhilSys ID', () => {
+  const text = [
+    'PHILSYS',
+    'FULL NAME: Juan Dela Cruz',
+    'DATE OF BIRTH: January 1, 2000',
+    'ADDRESS: Balayan, Batangas',
+    'ID NUMBER: 1234 5678 9012 3456'
+  ].join('\n');
+  const idType = ocr.detectIdType(text);
+  const parsed = ocr.parseIdText(text, idType);
+
+  assert.equal(idType, 'philid');
+  assert.deepEqual(parsed.fields, {
+    full_name: 'Juan Dela Cruz',
+    dob: '2000-01-01',
+    address: 'Balayan, Batangas',
+    id_number: '1234567890123456'
+  });
+});
+
+test('ID OCR leaves conflicting single-pass values undetected and accepts matching reads', () => {
+  const firstText = 'FULL NAME: Juan Dela Cruz\nDOB: January 1, 2000';
+  const secondText = 'FULL NAME: Jose Dela Cruz\nDOB: January 1, 2000';
+  const candidates = [
+    { text: firstText, confidence: 0.9, parsed: ocr.parseIdText(firstText) },
+    { text: secondText, confidence: 0.9, parsed: ocr.parseIdText(secondText) }
+  ];
+
+  assert.deepEqual(ocr.mergeCandidates(candidates, null), {
+    full_name: '',
+    dob: '2000-01-01',
+    address: '',
+    id_number: ''
+  });
+});
+
+test('ID OCR detects an unsupported document without inventing a supported ID type', () => {
+  assert.equal(ocr.detectIdType('POSTAL ID\nFULL NAME: Juan Dela Cruz'), null);
+  assert.equal(ocr.detectIdType(['PHILSYS', 'PHILSYS', 'PASSPORT']), 'philid');
+});
+
+test('ID OCR composes a name from separate given, middle, and family name fields', () => {
+  const parsed = ocr.parseIdText([
+    'FIRST NAME: Juan',
+    'MIDDLE NAME: Alberto',
+    'LAST NAME: Dela Cruz'
+  ].join('\n'));
+
+  assert.equal(parsed.fields.full_name, 'Juan Alberto Dela Cruz');
+});
+
+test('ID image validation accepts JPG, JPEG, and PNG under the 5 MB limit', () => {
+  const examples = [
+    { name: 'staff-id.JPG', type: 'image/jpeg', size: 128 },
+    { name: 'staff-id.jpeg', type: 'image/jpeg', size: logic.ID_IMAGE_MAX_BYTES },
+    { name: 'staff-id.png', type: 'image/png', size: 128 },
+    { name: 'staff-id.png', type: '', size: 128 }
+  ];
+
+  examples.forEach(file => assert.deepEqual(logic.validateIdImageFile(file), { ok: true, message: '' }));
+});
+
+test('ID image validation rejects unsupported extensions and mismatched MIME types', () => {
+  assert.match(logic.validateIdImageFile({ name: 'staff-id.gif', type: 'image/gif', size: 10 }).message, /Unsupported file type/);
+  assert.match(logic.validateIdImageFile({ name: 'staff-id.jpg', type: 'image/png', size: 10 }).message, /Unsupported file type/);
+});
+
+test('ID image validation rejects files larger than 5 MB', () => {
+  const result = logic.validateIdImageFile({
+    name: 'staff-id.jpg',
+    type: 'image/jpeg',
+    size: logic.ID_IMAGE_MAX_BYTES + 1
+  });
+
+  assert.deepEqual(result, { ok: false, message: 'File exceeds the 5 MB maximum size.' });
+});
 
 test('closed-bill report totals keep voids separate and ignore unrelated legacy values', () => {
   const totals = logic.closedBillRevenueTotals([

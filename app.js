@@ -112,8 +112,15 @@ state.reportPage = 1;
 state.tablePages = {};
 state.tablePageSize = 10;
 state.userInviteHistory = { rows: [], loading: false, loaded: false, error: '' };
+state.verificationRecordHistory = {
+  rows: [], loading: false, loaded: false, error: '', search: '', loadedSearch: ''
+};
 state.userManagementPane = 'home';
 state.userManagementTab = 'staff';
+state.applicantReviewStep = 1;
+state.applicantReviewRole = '';
+state.applicantReviewRoleError = false;
+state.applicantReviewInviteError = '';
 state.userManagementStatus = 'All';
 state.userManagementRole = 'All';
 state.userManagementSearch = '';
@@ -123,6 +130,9 @@ state.userManagementRefreshLoading = false;
 state.userManagementRefreshError = '';
 state.userManagementRefreshSaved = false;
 let userInviteRequestId = 0;
+let verificationRecordRequestId = 0;
+let verificationRecordSearchTimer = 0;
+const userInvitationVerificationDrafts = new WeakMap();
 const reportServerData = {};
 let reportRequestKey = '';
 let reportRequestPending = false;
@@ -3126,6 +3136,46 @@ function approvalsPage() {
   });
 }
 const USER_MANAGEMENT_ROLES = ['Administrator', 'Manager', 'Receptionist', 'Inventory Clerk', 'Chef / Kitchen Staff'];
+const USER_ONBOARDING_ROLE_CARDS = [
+  { label: 'Cashier / Receptionist', value: 'Receptionist', description: 'Handles reservations, payments, and guest transactions.' },
+  { label: 'Inventory Clerk', value: 'Inventory Clerk', description: 'Manages inventory, receiving, and stock counts.' },
+  { label: 'Chef / Kitchen Staff', value: 'Chef / Kitchen Staff', description: 'Manages food preparation and kitchen operations.' },
+  { label: 'Manager', value: 'Manager', description: 'Oversees restaurant operations, staff, and reports.' },
+  { label: 'Administrator', value: 'Administrator', description: 'Manages users, system settings, and access.' }
+];
+let applicantIdFile = null;
+let applicantIdFileForOcr = null;
+let applicantIdPreviewUrl = null;
+let applicantIdPendingPreviewUrl = null;
+let applicantIdPreviewGeneration = 0;
+let applicantIdRotation = 0;
+let applicantIdRotationLoading = false;
+let applicantIdRotationGeneration = 0;
+let applicantIdImageValid = false;
+let applicantIdImageLoading = false;
+let applicantIdImageError = '';
+let applicantOcrFields = { full_name: '', dob: '', address: '', id_number: '' };
+let applicantOcrIdType = '';
+let applicantOcrWarning = '';
+let applicantOcrCompleted = false;
+let applicantOcrLoading = false;
+let applicantOcrProgress = 0;
+let applicantOcrProgressMessage = '';
+let applicantOcrController = null;
+let applicantOcrRunId = 0;
+let applicantFaceStream = null;
+let applicantFaceCaptureBlob = null;
+let applicantFacePreviewUrl = null;
+let applicantFaceCameraState = 'idle';
+let applicantFaceCameraError = '';
+let applicantFaceCameraRequestId = 0;
+let applicantFaceCaptureLoading = false;
+let applicantFaceMatchRunId = 0;
+let applicantFaceMatchState = 'idle';
+let applicantFaceMatchResult = null;
+let applicantFaceMatchError = '';
+let applicantReviewProceedNotice = '';
+let applicantReviewOverrideReason = '';
 const USER_ROLE_ACCESS_NOTES = {
   Administrator: 'Can manage users, system settings, and all operational modules.',
   Manager: 'Can oversee restaurant operations, inventory, and management reports.',
@@ -3209,6 +3259,25 @@ function userManagementStyles() {
     .user-management-table { min-width: 980px; }
     .user-invitations-table { min-width: 1120px; }
     .user-management-table td, .user-invitations-table td { vertical-align: middle; }
+    .verification-record-toolbar { display: flex; align-items: end; gap: 12px; margin: 18px 0 14px; }
+    .verification-record-toolbar .user-management-filter { flex: 1; max-width: 420px; }
+    .verification-record-table { min-width: 920px; }
+    .verification-record-table td { vertical-align: middle; }
+    .verification-record-open { border: 0; background: transparent; padding: 0; color: var(--teal-dark); font: inherit; font-weight: 700; text-align: left; text-decoration: underline; cursor: pointer; }
+    .verification-record-detail { display: grid; gap: 18px; }
+    .verification-record-detail section { border: 1px solid var(--line); border-radius: var(--radius-md); background: #fff; padding: 16px; }
+    .verification-record-detail h3 { margin: 0 0 12px; color: var(--ink); font-size: 15px; }
+    .verification-record-detail dl { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px 18px; margin: 0; }
+    .verification-record-detail dl div { min-width: 0; }
+    .verification-record-detail dt { color: var(--muted); font-size: 11px; font-weight: 700; text-transform: uppercase; }
+    .verification-record-detail dd { margin: 4px 0 0; overflow-wrap: anywhere; color: var(--ink); font-weight: 650; }
+    .verification-record-timeline { display: grid; gap: 12px; margin: 0; padding: 0; list-style: none; }
+    .verification-record-timeline li { position: relative; border-left: 2px solid var(--line); padding: 0 0 2px 16px; }
+    .verification-record-timeline li::before { position: absolute; top: 4px; left: -6px; width: 10px; height: 10px; border-radius: 50%; background: var(--teal); content: ""; }
+    .verification-record-timeline strong, .verification-record-timeline small { display: block; }
+    .verification-record-timeline small { margin-top: 3px; color: var(--muted); }
+    .verification-record-warning { color: #854d0e; font-size: 12px; }
+    .modal.verification-record-modal { width: min(820px, calc(100vw - 32px)); }
     .user-staff-cell { display: flex; min-width: 190px; align-items: center; gap: 11px; }
     .user-staff-cell > span:last-child { min-width: 0; }
     .user-staff-cell strong, .user-staff-cell small { display: block; overflow-wrap: anywhere; }
@@ -3241,24 +3310,99 @@ function userManagementStyles() {
     .user-management-form-modal .duplicate-invite-notice { display: grid; gap: 8px; border: 1px solid var(--warning); border-radius: var(--radius-sm); background: #fff8e9; padding: 12px; color: #75521d; font-size: 12px; line-height: 1.45; }
     .user-management-form-modal .duplicate-invite-notice[hidden] { display: none; }
     .user-management-form-modal .modal-actions > button { min-height: 44px; }
+    .user-onboarding-summary { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
+    .user-onboarding-summary > div { display: grid; gap: 4px; border: 1px solid var(--line); border-radius: var(--radius-md); background: #fff; padding: 15px 17px; }
+    .user-onboarding-summary span { color: var(--muted); font-size: 11px; font-weight: 700; }
+    .user-onboarding-summary strong { font: 800 20px/1.2 'Plus Jakarta Sans', sans-serif; }
+    .user-onboarding-summary small { color: var(--muted); font-size: 10px; }
+    .applicant-review-modal { width: min(920px, calc(100vw - 32px)); }
+    .applicant-review-modal #modalForm { display: grid; gap: 18px; }
+    .applicant-review-progress { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 7px; margin: 0; padding: 0; list-style: none; }
+    .applicant-review-progress li { display: flex; min-height: 42px; align-items: center; gap: 8px; border: 1px solid var(--line); border-radius: 9px; background: #fff; padding: 7px 9px; color: var(--muted); font-size: 12px; font-weight: 700; }
+    .applicant-review-progress li.is-active { border-color: var(--teal); background: var(--mint); color: var(--teal-dark); }
+    .applicant-review-progress li.is-complete { color: #215e4e; }
+    .applicant-review-step-number { display: grid; width: 25px; height: 25px; flex: 0 0 25px; place-items: center; border-radius: 50%; background: #eef2ef; }
+    .applicant-review-progress li.is-active .applicant-review-step-number, .applicant-review-progress li.is-complete .applicant-review-step-number { background: var(--teal); color: #fff; }
+    .applicant-review-panel { display: grid; gap: 14px; }
+    .applicant-review-panel h3 { margin: 0; font: 800 17px 'Plus Jakarta Sans', sans-serif; }
+    .applicant-id-upload { display: grid; gap: 12px; }
+    .applicant-id-empty { display: grid; justify-items: center; gap: 10px; border: 1.5px dashed #9aada5; border-radius: var(--radius-md); background: #f8faf9; padding: 28px 18px; text-align: center; }
+    .applicant-id-empty[hidden], .applicant-id-selected[hidden] { display: none; }
+    .applicant-id-upload-icon { display: grid; width: 44px; height: 44px; place-items: center; border-radius: 50%; background: var(--mint); color: var(--teal-dark); font-size: 24px; font-weight: 700; }
+    .applicant-id-empty strong { color: var(--ink); font-size: 15px; }
+    .applicant-id-empty span, .applicant-id-help { color: var(--muted); font-size: 12px; line-height: 1.5; }
+    .applicant-id-selected { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.2fr); gap: 16px; align-items: center; border: 1px solid var(--line); border-radius: var(--radius-md); background: #fff; padding: 14px; }
+    .applicant-id-preview-frame { display: grid; min-height: 170px; max-height: 260px; place-items: center; overflow: hidden; border-radius: var(--radius-sm); background: #f1f4f2; }
+    .applicant-id-preview-frame img { display: block; max-width: 100%; max-height: 260px; object-fit: contain; }
+    .applicant-id-file-details { display: grid; min-width: 0; gap: 8px; }
+    .applicant-id-file-details strong { overflow-wrap: anywhere; font-size: 14px; }
+    .applicant-id-file-details span { color: var(--muted); font-size: 12px; }
+    .applicant-id-file-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+    .applicant-id-file-actions button { min-height: 40px; }
+    .applicant-id-error { border: 1px solid #c83e37; border-radius: var(--radius-sm); background: #f9e9e7; padding: 10px 12px; color: #8f2f2a; font-size: 13px; font-weight: 700; }
+    .applicant-id-error[hidden] { display: none; }
+    .applicant-id-help { margin: 0; }
+    .applicant-verification-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
+    .applicant-verification-item { display: grid; gap: 8px; border: 1px solid var(--line); border-radius: var(--radius-md); background: #fff; padding: 14px; }
+    .applicant-verification-item strong { font-size: 13px; }
+    .applicant-verification-item span { color: var(--muted); font-size: 12px; }
+    .applicant-readonly-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
+    .applicant-readonly-grid label { display: grid; gap: 6px; color: var(--muted); font-size: 12px; font-weight: 700; }
+    .applicant-readonly-grid input { width: 100%; border: 1px solid var(--line); border-radius: var(--radius-sm); background: #f7f9f8; padding: 10px 12px; color: var(--ink); }
+    .applicant-role-grid { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 8px; }
+    .applicant-role-option { position: relative; }
+    .applicant-role-option input { position: absolute; opacity: 0; pointer-events: none; }
+    .applicant-role-option label { display: grid; min-height: 92px; align-content: center; gap: 5px; border: 1px solid var(--line); border-radius: var(--radius-md); background: #fff; padding: 12px; cursor: pointer; text-align: center; }
+    .applicant-role-option label { transition: transform .15s ease, box-shadow .15s ease, border-color .15s ease, background .15s ease; }
+    .applicant-role-option label:hover { transform: translateY(-2px); border-color: var(--accent); background: #faf4ec; box-shadow: 0 5px 14px rgba(44,30,22,.1); }
+    .applicant-role-option input:checked + label { border: 2px solid var(--accent-pressed); background: #d3e2d8; color: #173c2c; padding: 11px; box-shadow: inset 0 0 0 1px rgba(23,60,44,.08); }
+    .applicant-role-option input:focus-visible + label { outline: 3px solid var(--teal); outline-offset: 2px; }
+    .applicant-role-option strong { font-size: 13px; }
+    .applicant-role-option small { color: var(--muted); font-size: 10px; line-height: 1.35; }
+    .applicant-create-summary { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
+    .applicant-create-summary div { border: 1px solid var(--line); border-radius: var(--radius-md); background: #fff; padding: 13px; }
+    .applicant-create-summary dt { color: var(--muted); font-size: 10px; font-weight: 700; text-transform: uppercase; }
+    .applicant-create-summary dd { margin: 5px 0 0; font-size: 13px; font-weight: 800; }
+    .applicant-review-actions { display: flex; justify-content: space-between; gap: 8px; border-top: 1px solid var(--line); padding-top: 14px; }
+    .applicant-review-actions-right { display: flex; gap: 8px; margin-left: auto; }
+    .applicant-role-error { border: 1px solid #c83e37; border-radius: var(--radius-sm); background: #f9e9e7; padding: 10px 12px; color: #8f2f2a; font-size: 13px; font-weight: 700; }
     @keyframes user-management-shimmer { to { background-position: -200% 0; } }
+    @media (max-width: 1000px) {
+      .applicant-role-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+    }
     @media (max-width: 760px) {
       .user-management-header { align-items: flex-start; flex-direction: column; }
       .user-management-header h1 { font-size: 25px; }
       .user-management-cards { grid-template-columns: 1fr; gap: 12px; }
+      .user-onboarding-summary { grid-template-columns: 1fr; gap: 8px; }
+      .applicant-review-modal { width: calc(100vw - 16px); max-height: calc(100vh - 16px); }
+      .applicant-review-progress { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .applicant-id-selected { grid-template-columns: 1fr; }
+      .applicant-id-preview-frame { min-height: 140px; }
+      .applicant-verification-grid, .applicant-readonly-grid, .applicant-create-summary { grid-template-columns: 1fr; }
+      .applicant-role-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .applicant-review-actions { align-items: stretch; flex-direction: column-reverse; }
+      .applicant-review-actions-right { width: 100%; }
+      .applicant-review-actions-right button { flex: 1; }
+      .applicant-role-option label { min-height: 84px; padding: 10px; }
+      .applicant-role-option input:checked + label { padding: 9px; }
       .user-management-card { min-height: 160px; padding: 20px; }
       .user-management-nav { align-items: flex-start; flex-direction: column; }
       .user-management-toolbar { align-items: stretch; }
       .user-management-filter { min-width: 100%; }
       .user-management-count { margin-left: 0; }
-      .user-management-table, .user-invitations-table { display: block; min-width: 0; }
-      .user-management-table thead, .user-invitations-table thead { display: none; }
-      .user-management-table tbody, .user-invitations-table tbody { display: grid; gap: 11px; }
+      .user-management-table, .user-invitations-table, .verification-record-table { display: block; min-width: 0; }
+      .user-management-table thead, .user-invitations-table thead, .verification-record-table thead { display: none; }
+      .user-management-table tbody, .user-invitations-table tbody, .verification-record-table tbody { display: grid; gap: 11px; }
       .user-management-table tbody tr:not(.user-management-empty-row),
-      .user-invitations-table tbody tr:not(.user-management-empty-row) { display: block; overflow: visible; border: 1px solid var(--line); border-radius: var(--radius-md); background: #fff; }
-      .user-management-table td, .user-invitations-table td { display: flex; min-height: 44px; align-items: flex-start; justify-content: space-between; gap: 12px; padding: 10px 12px; white-space: normal; overflow-wrap: anywhere; }
-      .user-management-table td::before, .user-invitations-table td::before { flex: 0 0 92px; color: var(--muted); content: attr(data-label); font-size: 10px; font-weight: 700; text-transform: uppercase; }
-      .user-management-table .user-management-empty-row td, .user-invitations-table .user-management-empty-row td { display: block; }
+      .user-invitations-table tbody tr:not(.user-management-empty-row),
+      .verification-record-table tbody tr:not(.user-management-empty-row) { display: block; overflow: visible; border: 1px solid var(--line); border-radius: var(--radius-md); background: #fff; }
+      .user-management-table td, .user-invitations-table td, .verification-record-table td { display: flex; min-height: 44px; align-items: flex-start; justify-content: space-between; gap: 12px; padding: 10px 12px; white-space: normal; overflow-wrap: anywhere; }
+      .user-management-table td::before, .user-invitations-table td::before, .verification-record-table td::before { flex: 0 0 92px; color: var(--muted); content: attr(data-label); font-size: 10px; font-weight: 700; text-transform: uppercase; }
+      .user-management-table .user-management-empty-row td, .user-invitations-table .user-management-empty-row td, .verification-record-table .user-management-empty-row td { display: block; }
+      .verification-record-toolbar { align-items: stretch; flex-direction: column; }
+      .verification-record-toolbar .user-management-filter { max-width: none; }
+      .verification-record-detail dl { grid-template-columns: 1fr; }
       .user-management-page .table-scroll { overflow: visible; }
       .user-action-list { position: static; margin-top: 5px; }
       .user-invitation-actions { justify-content: flex-start; }
@@ -3268,6 +3412,128 @@ function userManagementStyles() {
       .user-management-card { transition: none; }
     }
   </style>`;
+}
+
+function formatVerificationTimestamp(value) {
+  const parsed = new Date(value);
+  return value && !Number.isNaN(parsed.getTime()) ? parsed.toLocaleString() : 'Not recorded';
+}
+
+function verificationRecordActorName(userId) {
+  const user = all('users').find(item => String(item.id) === String(userId));
+  return user?.name || user?.email || String(userId || 'Unknown Administrator');
+}
+
+function userManagementTabSelector(tab) {
+  if (tab === 'invitations') return '#userInvitationsTab';
+  if (tab === 'verification-records') return '#userVerificationRecordsTab';
+  return '#userStaffTab';
+}
+
+function verificationRecordListContent() {
+  const history = state.verificationRecordHistory;
+  const recordRows = history.rows.map(record => {
+    const statusClass = record.final_status === 'Approved'
+      ? 'status-good'
+      : record.final_status === 'Rejected' ? 'status-out' : 'status-low';
+    const faceResult = record.face_match_result === 'match'
+      ? 'Match'
+      : record.face_match_result === 'no_match' ? 'No match' : 'Unable to compare';
+    return `<tr>
+      <td data-label="Applicant"><button type="button" class="verification-record-open" data-action="verification-record-open" data-id="${esc(record.id)}">${esc(record.applicant_name)}</button></td>
+      <td data-label="Role"><span class="user-management-role-badge">${esc(record.role_assigned || 'Not assigned')}</span></td>
+      <td data-label="Date">${esc(formatUserManagementDate(record.verified_at))}</td>
+      <td data-label="Result"><span class="status ${statusClass}">${esc(record.final_status)} · ${esc(faceResult)}</span></td>
+      <td data-label="Verified by">${esc(verificationRecordActorName(record.verified_by))}</td>
+    </tr>`;
+  });
+  let content = '';
+  if (history.error) {
+    content = `<div class="user-invite-error" role="alert"><span>${esc(history.error)}</span><button type="button" class="ghost-btn" data-action="retry-verification-records">Retry</button></div>`;
+  } else if (history.loading || !history.loaded) {
+    content = '<div class="user-management-skeleton" role="status" aria-label="Loading verification records"><span></span><span></span><span></span><span></span></div>';
+  } else if (!recordRows.length) {
+    content = `<div class="user-management-empty"><strong>${history.search ? 'No records match that applicant name.' : 'No verification records yet.'}</strong><p>${history.search ? 'Try another name or clear the search.' : 'Completed verified onboarding records will appear here.'}</p></div>`;
+  } else {
+    content = `<div class="table-scroll"><table class="verification-record-table">
+      <thead><tr><th>Applicant</th><th>Role</th><th>Date</th><th>Result</th><th>Verified by</th></tr></thead>
+      <tbody>${recordRows.join('')}</tbody>
+    </table></div>`;
+  }
+  return `<div class="verification-record-toolbar">
+    <label class="user-management-filter">Search by applicant name<input id="verificationRecordSearch" type="search" value="${esc(history.search)}" placeholder="Enter a name" autocomplete="off"></label>
+    <span class="user-management-count" role="status">${history.loaded ? `${history.rows.length} record${history.rows.length === 1 ? '' : 's'}` : 'Read-only audit history'}</span>
+  </div>
+  ${history.rows.length >= 1000 && !history.error ? '<p class="verification-record-warning">Showing up to 1,000 newest matching records. Narrow your search to find older records.</p>' : ''}
+  <div class="panel table-panel">${content}</div>`;
+}
+
+function openVerificationRecordDetail(recordId) {
+  if (state.role !== 'Administrator') return toast('Only Administrators can view verification records.', 'error');
+  const record = state.verificationRecordHistory.rows.find(item => String(item.id) === String(recordId));
+  if (!record) return toast('That verification record is not available in the current results.', 'error');
+  const inviter = state.userInviteHistory.rows.find(item => String(item.id) === String(record.invitation_id));
+  const timeline = [
+    { title: 'Invitation created', date: inviter?.invited_at, detail: record.invitation_id || 'No invitation linked' },
+    { title: 'Identity reviewed', date: record.verified_at, detail: verificationRecordActorName(record.verified_by) },
+    { title: 'Role assigned', date: record.assigned_at, detail: record.role_assigned || 'No role assigned' },
+    { title: 'Account profile created', date: record.created_at, detail: record.profile_id || 'No profile linked' }
+  ].filter(item => item.date);
+  if (record.supersedes_id) {
+    timeline.push({ title: 'Corrects earlier record', date: record.created_at, detail: record.supersedes_id });
+  }
+  timeline.sort((left, right) => new Date(left.date).getTime() - new Date(right.date).getTime());
+  const ocr = record.ocr_summary || {};
+  const faceScore = record.face_match_score !== null
+    && record.face_match_score !== undefined
+    && Number.isFinite(Number(record.face_match_score))
+    ? `${Number(record.face_match_score).toLocaleString(undefined, { maximumFractionDigits: 2 })}%`
+    : 'Unavailable';
+  const statusClass = record.final_status === 'Approved'
+    ? 'status-good'
+    : record.final_status === 'Rejected' ? 'status-out' : 'status-low';
+  const timelineMarkup = timeline.length
+    ? `<ol class="verification-record-timeline">${timeline.map(item => `<li><strong>${esc(item.title)}</strong><small>${esc(formatVerificationTimestamp(item.date))} · ${esc(item.detail)}</small></li>`).join('')}</ol>`
+    : '<p class="field-help">No timeline events are available.</p>';
+  const content = `<div class="verification-record-detail">
+    <section>
+      <h3>Identity</h3>
+      <dl>
+        <div><dt>Applicant</dt><dd>${esc(record.applicant_name)}</dd></div>
+        <div><dt>ID type</dt><dd>${esc(record.id_type)}</dd></div>
+        <div><dt>ID number</dt><dd>${esc(record.id_number_masked || 'Not recorded')}</dd></div>
+        <div><dt>Date of birth</dt><dd>${esc(ocr.dob || 'Not recorded')}</dd></div>
+        <div><dt>Address</dt><dd>${esc(ocr.address || 'Not recorded')}</dd></div>
+        <div><dt>OCR</dt><dd>${ocr.ocr_passed ? 'Completed' : 'Manual review'}</dd></div>
+      </dl>
+    </section>
+    <section>
+      <h3>Verification</h3>
+      <dl>
+        <div><dt>Face match result</dt><dd>${esc(record.face_match_result.replace('_', ' '))}</dd></div>
+        <div><dt>Match score</dt><dd>${esc(faceScore)}<small>Heuristic similarity indicator, not a probability.</small></dd></div>
+        <div><dt>Final status</dt><dd><span class="status ${statusClass}">${esc(record.final_status)}</span></dd></div>
+        <div><dt>Verified by</dt><dd>${esc(verificationRecordActorName(record.verified_by))}</dd></div>
+        <div><dt>ID image</dt><dd>${record.id_image_path ? 'Stored in private evidence bucket' : 'Not recorded'}</dd></div>
+        <div><dt>Selfie</dt><dd>${record.selfie_path ? 'Stored in private evidence bucket' : 'Not recorded'}</dd></div>
+        <div><dt>Consent</dt><dd>${record.consent_given ? `Recorded ${esc(formatVerificationTimestamp(record.consent_at))}` : 'Not recorded'}</dd></div>
+        ${record.override_used ? `<div><dt>Manual override</dt><dd>${esc(record.override_reason || 'Reason not recorded')}</dd></div>` : ''}
+        <div><dt>Retention until</dt><dd>${esc(formatVerificationTimestamp(record.retention_until))}</dd></div>
+      </dl>
+    </section>
+    <section>
+      <h3>Role and account references</h3>
+      <dl>
+        <div><dt>Role</dt><dd>${esc(record.role_assigned || 'Not assigned')}</dd></div>
+        <div><dt>Assigned by</dt><dd>${esc(record.assigned_by ? verificationRecordActorName(record.assigned_by) : 'Not assigned')}</dd></div>
+        <div><dt>Invitation ID</dt><dd>${esc(record.invitation_id || 'Not linked')}</dd></div>
+        <div><dt>Profile ID</dt><dd>${esc(record.profile_id || 'Not linked')}</dd></div>
+        <div><dt>Record ID</dt><dd>${esc(record.id)}</dd></div>
+      </dl>
+    </section>
+    <section><h3>Timeline</h3>${timelineMarkup}</section>
+  </div>`;
+  modal('Verification Record', content, '', 'verification-record-modal', 'read-only');
 }
 
 function usersPage() {
@@ -3284,23 +3550,32 @@ function usersPage() {
       ? 'Invitation count unavailable'
       : `${pendingCount} pending invitation${pendingCount === 1 ? '' : 's'}`;
   const refreshNotice = userManagementRefreshNotice();
-  const header = userManagementHeader('Invite staff and manage access to the CostTrack workspace.');
+  const header = userManagementHeader('Onboard employees, send invitations, and manage existing access.');
   if (state.userManagementPane !== 'workspace') {
     return `<section class="user-management-page">
       ${header}
       ${refreshNotice}
       <div class="user-management-cards" aria-label="User management actions">
-        <button type="button" class="user-management-card" data-action="user-invite-open">
-          <span class="card-topline"><span class="card-icon" aria-hidden="true">＋</span><span class="card-count">${esc(pendingLabel)}</span></span>
-          <span><span class="user-card-title">Add new user</span><span class="user-card-description">Send a secure invitation so a new staff member can set up their account.</span></span>
+        <button type="button" class="user-management-card" data-action="user-onboarding-open">
+          <span class="card-topline"><span class="card-icon" aria-hidden="true">＋</span><span class="card-count">Guided onboarding</span></span>
+          <span><span class="user-card-title">Add User</span><span class="user-card-description">Verify identity, review applicant details, assign a role, and continue to invitation.</span></span>
         </button>
-        <button type="button" class="user-management-card" data-action="user-management-open">
+        <button type="button" class="user-management-card" data-action="user-management-open" data-tab="staff">
           <span class="card-topline"><span class="card-icon" aria-hidden="true">♧</span><span class="card-count">${activeCount} active staff</span></span>
-          <span><span class="user-card-title">View users</span><span class="user-card-description">Review staff access, account status, and invitation history.</span></span>
+          <span><span class="user-card-title">Manage Staff</span><span class="user-card-description">View staff, manage access, account statuses, and roles.</span></span>
+        </button>
+        <button type="button" class="user-management-card" data-action="user-management-open" data-tab="verification-records">
+          <span class="card-topline"><span class="card-icon" aria-hidden="true">✓</span><span class="card-count">Administrator only</span></span>
+          <span><span class="user-card-title">Verification Records</span><span class="user-card-description">Search the read-only identity audit history and review its timeline.</span></span>
         </button>
       </div>
+      <div class="user-onboarding-summary" aria-label="Onboarding status">
+        <div><span>Pending reviews</span><strong>1 sample</strong><small>Mock applicant only · IVS is not connected</small></div>
+        <div><span>Verification queue</span><strong>1 sample applicant</strong><small>Placeholder count · not live data</small></div>
+        <div><span>Pending invitations</span><strong>${state.userInviteHistory.loaded ? pendingCount : state.userInviteHistory.error ? 'Unavailable' : '…'}</strong><small>${esc(state.userInviteHistory.error ? 'Invitation count could not be loaded' : state.userInviteHistory.loaded ? 'From current invitation records' : 'Loading invitation records')}</small></div>
+      </div>
       <div class="user-management-refresh">
-        <span class="field-help">Counts update from the latest staff and invitation records.</span>
+        <span class="field-help">Staff and invitation counts update from current records. Verification counts are sample placeholders.</span>
         <button type="button" class="ghost-btn" data-action="refresh-user-management" ${state.userManagementRefreshLoading ? 'disabled' : ''}>${state.userManagementRefreshLoading ? 'Refreshing…' : 'Refresh counts'}</button>
       </div>
       ${userManagementStyles()}
@@ -3397,18 +3672,27 @@ function usersPage() {
             : '<tr class="user-management-empty-row"><td colspan="9"><div class="user-management-empty"><strong>No pending invitations</strong><p>New staff invitations will appear here with their delivery and acceptance details.</p><button type="button" class="primary-btn" data-action="user-invite-open">Add new user</button></div></td></tr>'
           }</tbody>
         </table></div>`;
-  const selectedTab = state.userManagementTab === 'invitations' ? 'invitations' : 'staff';
-  const workspaceContent = selectedTab === 'staff' ? staffContent : invitationContent;
+  const selectedTab = ['invitations', 'verification-records'].includes(state.userManagementTab)
+    ? state.userManagementTab
+    : 'staff';
+  const workspaceContent = selectedTab === 'staff'
+    ? staffContent
+    : selectedTab === 'invitations' ? invitationContent : verificationRecordListContent();
+  const workspaceDescription = selectedTab === 'verification-records'
+    ? 'Search Administrator-only verification history. Records are read-only and never expose the full ID number.'
+    : 'View staff accounts and manage their invitation status.';
+  const workspaceHeader = userManagementHeader(workspaceDescription);
   const action = `<button type="button" class="ghost-btn user-back-link" data-action="user-management-back">← Back to User Management</button>`;
   return `<section class="user-management-page">
-    ${header}
+    ${workspaceHeader}
     ${refreshNotice}
     <div class="user-management-nav">${action}<span class="field-help">Manage access and invitation status without leaving this page.</span></div>
     <div class="user-management-tabs" role="tablist" aria-label="User management sections">
       <button type="button" id="userStaffTab" role="tab" aria-selected="${selectedTab === 'staff'}" aria-controls="userManagementPanel" tabindex="${selectedTab === 'staff' ? '0' : '-1'}" data-action="user-management-tab" data-tab="staff">Staff</button>
       <button type="button" id="userInvitationsTab" role="tab" aria-selected="${selectedTab === 'invitations'}" aria-controls="userManagementPanel" tabindex="${selectedTab === 'invitations' ? '0' : '-1'}" data-action="user-management-tab" data-tab="invitations">Invitations <span class="tab-count">${state.userInviteHistory.loaded ? pendingCount : '…'}</span></button>
+      <button type="button" id="userVerificationRecordsTab" role="tab" aria-selected="${selectedTab === 'verification-records'}" aria-controls="userManagementPanel" tabindex="${selectedTab === 'verification-records' ? '0' : '-1'}" data-action="user-management-tab" data-tab="verification-records">Verification Records <span class="tab-count">${state.verificationRecordHistory.loaded ? state.verificationRecordHistory.rows.length : '…'}</span></button>
     </div>
-    <div id="userManagementPanel" class="user-management-panel" role="tabpanel" tabindex="0" aria-labelledby="${selectedTab === 'staff' ? 'userStaffTab' : 'userInvitationsTab'}">
+    <div id="userManagementPanel" class="user-management-panel" role="tabpanel" tabindex="0" aria-labelledby="${selectedTab === 'staff' ? 'userStaffTab' : selectedTab === 'invitations' ? 'userInvitationsTab' : 'userVerificationRecordsTab'}">
       ${workspaceContent}
     </div>
     ${userManagementStyles()}
@@ -3417,9 +3701,18 @@ function usersPage() {
 
 function resetUserInviteHistory() {
   userInviteRequestId += 1;
+  verificationRecordRequestId += 1;
+  window.clearTimeout(verificationRecordSearchTimer);
   state.userInviteHistory = { rows: [], loading: false, loaded: false, error: '' };
+  state.verificationRecordHistory = {
+    rows: [], loading: false, loaded: false, error: '', search: '', loadedSearch: ''
+  };
   state.userManagementPane = 'home';
   state.userManagementTab = 'staff';
+  state.applicantReviewStep = 1;
+  state.applicantReviewRole = '';
+  state.applicantReviewRoleError = false;
+  state.applicantReviewInviteError = '';
   state.userManagementStatus = 'All';
   state.userManagementRole = 'All';
   state.userManagementSearch = '';
@@ -3451,28 +3744,1019 @@ function focusUserManagementAction(action, idValue) {
   });
 }
 
-function openUserManagementInviteModal() {
+function openUserOnboardingWizard() {
+  resetApplicantIdImage();
+  resetApplicantFaceCapture();
+  state.applicantReviewStep = 1;
+  state.applicantReviewRole = '';
+  state.applicantReviewRoleError = false;
+  state.applicantReviewInviteError = '';
+  applicantReviewProceedNotice = '';
+  applicantReviewOverrideReason = '';
+  renderApplicantReviewModal();
+}
+
+function applicantReviewProgress(step) {
+  const steps = ['Upload ID', 'OCR Extraction Results', 'Applicant Information', 'Face Capture', 'Face Match', 'Verification Summary', 'Assign Role', 'Account Review'];
+  return `<ol class="applicant-review-progress" aria-label="Applicant review progress">${steps.map((label, index) => {
+    const number = index + 1;
+    return `<li class="${number === step ? 'is-active' : number < step ? 'is-complete' : ''}" ${number === step ? 'aria-current="step"' : ''}><span class="applicant-review-step-number">${number < step ? '✓' : number}</span><span>${label}</span></li>`;
+  }).join('')}</ol>`;
+}
+
+function renderApplicantOcrFields() {
+  const ocrFields = [
+    ['full_name', 'Full Name', 'text'],
+    ['dob', 'Date of Birth', 'date'],
+    ['address', 'Address', 'text'],
+    ['id_number', 'ID Number', 'text']
+  ];
+  return `<div class="applicant-ocr-fields">${ocrFields.map(([key, label, type]) => {
+    const value = applicantOcrFields[key] || '';
+    return `<label class="applicant-ocr-field">${label}
+      <input type="${type}" data-ocr-field="${key}" value="${esc(value)}" ${value ? '' : 'placeholder="Not Detected"'} autocomplete="off">
+      <small data-ocr-field-state="${key}">${value ? 'Value available · confirm for accuracy' : 'Not Detected · enter manually if known'}</small>
+    </label>`;
+  }).join('')}</div>`;
+}
+
+function applicantFaceStatusLabel(face) {
+  if (!face) return 'Not analyzed';
+  if (face.status === 'detected') return 'Face detected';
+  if (face.status === 'multiple') return `Multiple faces detected (${face.count})`;
+  if (face.status === 'blurry') return 'Face detected, but the image looks blurry';
+  if (face.status === 'not_detected') return 'No face detected';
+  return 'Unable to analyze image';
+}
+
+function renderApplicantFaceMatchPanel() {
+  if (applicantFaceMatchState === 'running') {
+    return `<div class="applicant-review-panel applicant-face-match">
+      <h3>Comparing face photos</h3>
+      <p class="field-help">The ID image and captured photo are analyzed locally in this browser. No image or face descriptor is uploaded or saved.</p>
+      <p class="applicant-face-match-progress" role="status" aria-live="polite">Loading face models and comparing the two images…</p>
+    </div>`;
+  }
+
+  const result = applicantFaceMatchResult;
+  const faceRow = (label, face) => {
+    const detectionConfidence = Number.isFinite(face?.confidence)
+      ? ` · detector confidence ${Math.round(face.confidence * 100)}%`
+      : '';
+    return `<div class="applicant-face-match-row"><dt>${label}</dt><dd>${esc(applicantFaceStatusLabel(face))}${detectionConfidence}</dd></div>`;
+  };
+  const matchLabel = result?.result === 'match'
+    ? 'MATCH'
+    : result?.result === 'no_match'
+      ? 'NO MATCH'
+      : 'UNABLE TO COMPARE';
+  const matchClass = result?.result === 'match' ? 'is-match' : result?.result === 'no_match' ? 'is-no-match' : 'is-unavailable';
+  const guidance = result?.idFace?.status === 'not_detected'
+    ? 'No face was detected on the ID. Use a clear, well-lit image with the ID photo visible.'
+    : result?.idFace?.status === 'multiple'
+      ? 'Multiple faces were detected on the ID image. Use an image that shows only the ID holder’s photo.'
+      : result?.idFace?.status === 'blurry'
+        ? 'The face on the ID looks blurry. Upload a sharper image of the ID.'
+        : result?.capturedFace?.status === 'not_detected'
+          ? 'No face was detected in the capture. Go back and retake a centered, well-lit photo.'
+          : result?.capturedFace?.status === 'multiple'
+            ? 'Multiple faces were detected in the capture. Go back and retake with only the applicant in frame.'
+            : result?.capturedFace?.status === 'blurry'
+              ? 'The captured face looks blurry. Go back and retake the photo in good lighting.'
+              : '';
+
+  return `<div class="applicant-review-panel applicant-face-match">
+    <h3>Face Match Result</h3>
+    <p class="field-help">This is an experimental, local comparison only—not identity verification, approval, or rejection. Review the original ID and photo yourself.</p>
+    ${applicantFaceMatchError ? `<p class="applicant-face-match-error" role="alert">${esc(applicantFaceMatchError)}</p>` : ''}
+    ${guidance ? `<p class="applicant-face-match-error" role="alert">${esc(guidance)}</p>` : ''}
+    <dl class="applicant-face-match-details">
+      ${faceRow('Face detected on ID', result?.idFace)}
+      ${faceRow('Face detected in capture', result?.capturedFace)}
+      ${result?.distance !== null && result?.distance !== undefined
+        ? `<div class="applicant-face-match-row"><dt>Face distance</dt><dd>${result.distance.toFixed(3)} (lower is closer; IVS threshold ≤ ${result.threshold.toFixed(2)})</dd></div>
+           <div class="applicant-face-match-row"><dt>Similarity indicator</dt><dd>${result.similarityIndicator}% <small>heuristic, not a probability</small></dd></div>`
+        : '<div class="applicant-face-match-row"><dt>Similarity indicator</dt><dd>Unavailable</dd></div>'}
+      <div class="applicant-face-match-row"><dt>Match confidence</dt><dd>Not calibrated by the reused model</dd></div>
+    </dl>
+    <p class="applicant-face-match-result ${matchClass}" role="status" aria-live="polite">${matchLabel}</p>
+    <p class="applicant-id-help">The comparison uses temporary in-memory face descriptors. Nothing is stored or sent to a server.</p>
+  </div>`;
+}
+
+function renderApplicantVerificationSummary() {
+  const ocrFields = [
+    ['Full Name', applicantOcrFields.full_name],
+    ['Date of Birth', applicantOcrFields.dob],
+    ['Address', applicantOcrFields.address],
+    ['ID Number', applicantOcrFields.id_number]
+  ];
+  const result = applicantFaceMatchResult;
+  const idReady = Boolean(applicantIdImageValid && applicantIdFile);
+  const ocrReady = Boolean(applicantOcrCompleted);
+  const faceIdDetected = result?.idFace?.status === 'detected';
+  const faceCaptureDetected = result?.capturedFace?.status === 'detected';
+  const matchFound = result?.result === 'match';
+  const allFieldsPresent = ocrFields.every(([, value]) => String(value || '').trim());
+  const ocrNeedsReview = Boolean(applicantOcrWarning) || !allFieldsPresent;
+  const reviewReady = idReady && ocrReady && !ocrNeedsReview && faceIdDetected && faceCaptureDetected && matchFound;
+  const overallStatus = reviewReady ? 'Ready for administrator review' : 'Manual Review Required';
+  const overallClass = reviewReady ? 'is-success' : 'is-warning';
+  const matchScore = Number.isFinite(result?.similarityIndicator)
+    ? `${result.similarityIndicator}%`
+    : 'Unavailable';
+  const detectionConfidence = face => Number.isFinite(face?.confidence)
+    ? `${Math.round(face.confidence * 100)}%`
+    : 'Unavailable';
+  const detectionState = face => {
+    const detected = face?.status === 'detected';
+    const multiple = face?.status === 'multiple';
+    return {
+      label: applicantFaceStatusLabel(face),
+      className: detected ? 'is-success' : multiple ? 'is-warning' : 'is-failure'
+    };
+  };
+  const idState = idReady ? 'is-success' : 'is-failure';
+  const ocrState = ocrReady && !ocrNeedsReview ? 'is-success' : 'is-warning';
+  const ocrLabel = ocrReady && !ocrNeedsReview
+    ? 'OCR Completed'
+    : ocrReady
+      ? 'Completed · review fields'
+      : 'OCR incomplete';
+  const matchState = result?.result === 'match'
+    ? 'is-success'
+    : result?.result === 'no_match'
+      ? 'is-failure'
+      : 'is-warning';
+  const idFaceState = detectionState(result?.idFace);
+  const capturedFaceState = detectionState(result?.capturedFace);
+  const statusTag = (label, className) => `<span class="applicant-verification-tag ${className}">${label}</span>`;
+
+  return `<section class="applicant-review-panel applicant-verification-summary" aria-labelledby="applicant-verification-heading">
+    <h3 id="applicant-verification-heading">Identity Verification Summary</h3>
+    <div class="applicant-verification-overall ${overallClass}" role="status" aria-live="polite">
+      <span class="applicant-verification-overall-label">Overall status</span>
+      <strong>${overallStatus}</strong>
+      <small>This is a review checklist only. It does not approve or reject the applicant.</small>
+    </div>
+    <div class="applicant-verification-cards">
+      <section class="applicant-verification-card" aria-labelledby="applicant-verification-id-heading">
+        <div class="applicant-verification-card-heading">
+          <h4 id="applicant-verification-id-heading">ID Upload</h4>
+          ${statusTag(idReady ? 'Uploaded Successfully' : 'ID unavailable', idState)}
+        </div>
+        ${idReady
+          ? `<img class="applicant-verification-thumbnail" src="${esc(applicantIdPreviewUrl || '')}" alt="Uploaded ID image preview">`
+          : '<p class="applicant-verification-missing">No valid ID image is available.</p>'}
+      </section>
+      <section class="applicant-verification-card" aria-labelledby="applicant-verification-ocr-heading">
+        <div class="applicant-verification-card-heading">
+          <h4 id="applicant-verification-ocr-heading">OCR Extraction</h4>
+          ${statusTag(ocrLabel, ocrState)}
+        </div>
+        ${applicantOcrWarning ? `<p class="applicant-verification-note">${esc(applicantOcrWarning)}</p>` : ''}
+        <dl class="applicant-verification-fields">${ocrFields.map(([label, value]) => `<div><dt>${label}</dt><dd>${esc(String(value || '').trim() || 'Not Detected')}</dd></div>`).join('')}</dl>
+      </section>
+      <section class="applicant-verification-card" aria-labelledby="applicant-verification-face-heading">
+        <div class="applicant-verification-card-heading">
+          <h4 id="applicant-verification-face-heading">Face Verification</h4>
+          ${statusTag(result?.result === 'match' ? 'Match' : result?.result === 'no_match' ? 'No Match' : 'Unable to Compare', matchState)}
+        </div>
+        ${applicantFaceMatchError ? `<p class="applicant-verification-note">${esc(applicantFaceMatchError)}</p>` : ''}
+        <dl class="applicant-verification-fields applicant-verification-face-fields">
+          <div><dt>Face detected on ID</dt><dd>${statusTag(esc(idFaceState.label), idFaceState.className)}<small>Detector confidence: ${detectionConfidence(result?.idFace)}</small></dd></div>
+          <div><dt>Face detected in camera capture</dt><dd>${statusTag(esc(capturedFaceState.label), capturedFaceState.className)}<small>Detector confidence: ${detectionConfidence(result?.capturedFace)}</small></dd></div>
+          <div><dt>Match score</dt><dd>${matchScore} <small>similarity indicator; not a probability</small></dd></div>
+          <div><dt>Confidence score</dt><dd>Not calibrated</dd></div>
+        </dl>
+        ${applicantFacePreviewUrl
+          ? `<img class="applicant-verification-thumbnail applicant-verification-face-thumbnail" src="${esc(applicantFacePreviewUrl)}" alt="Captured face photo preview">`
+          : '<p class="applicant-verification-missing">No captured face photo is available.</p>'}
+        <p class="applicant-verification-note">A match result is only a local comparison signal and is not an identity decision.</p>
+      </section>
+    </div>
+  </section>`;
+}
+
+function applicantRoleVerificationContext() {
+  const ocrFieldsPresent = ['full_name', 'dob', 'address', 'id_number']
+    .every(field => String(applicantOcrFields[field] || '').trim());
+  const ocrPassed = Boolean(
+    applicantIdImageValid
+    && applicantOcrCompleted
+    && !applicantOcrWarning
+    && ocrFieldsPresent
+  );
+  const faceMatchPassed = applicantFaceMatchResult?.result === 'match';
+  const verificationPassed = ocrPassed && faceMatchPassed;
+  const applicantName = String(applicantOcrFields.full_name || '').trim() || 'Name not detected';
+  const statusTag = (label, className) => `<span class="applicant-verification-tag ${className}">${label}</span>`;
+
+  return {
+    applicantName,
+    ocrPassed,
+    faceMatchPassed,
+    verificationPassed,
+    markup: `<section class="applicant-role-verification-context" aria-label="Verification context">
+      <div>
+        <span class="applicant-role-context-eyebrow">${verificationPassed ? 'Verified Applicant' : 'Applicant Under Review'}</span>
+        <strong>${esc(applicantName)}</strong>
+      </div>
+      <div class="applicant-role-context-checks">
+        ${statusTag(ocrPassed ? 'OCR Passed' : 'OCR Needs Review', ocrPassed ? 'is-success' : 'is-warning')}
+        ${statusTag(faceMatchPassed ? 'Face Match Passed' : 'Face Match Needs Review', faceMatchPassed ? 'is-success' : 'is-warning')}
+      </div>
+      <p class="applicant-role-context-status ${verificationPassed ? 'is-success' : 'is-warning'}"><strong>Verification Status:</strong> ${verificationPassed ? 'Passed' : 'Manual Review Required'}</p>
+      <small>This summarizes prior check results only; role selection does not approve, create, or invite an account.</small>
+    </section>`
+  };
+}
+
+function renderApplicantReviewModal() {
+  const step = state.applicantReviewStep || 1;
+  let panel = '';
+  if (step === 1) {
+    panel = `<div class="applicant-review-panel">
+      <h3>Upload a valid ID</h3>
+      <p class="field-help">Choose an image of the employee’s ID. After upload, text extraction runs locally in this browser.</p>
+      <div class="applicant-id-upload">
+        <input id="applicantIdFile" name="idImage" type="file" accept=".jpg,.jpeg,.png,image/jpeg,image/png" hidden aria-describedby="applicantIdFileHelp applicantIdFileError">
+        <div class="applicant-id-empty" ${applicantIdFile ? 'hidden' : ''}>
+          <span class="applicant-id-upload-icon" aria-hidden="true">↑</span>
+          <strong>Choose an ID image</strong>
+          <span data-applicant-id-empty-state>${applicantIdImageLoading ? 'Checking selected image…' : 'JPG, JPEG, or PNG · up to 5 MB'}</span>
+          <button type="button" class="secondary-btn" data-action="select-applicant-id-image">Upload image</button>
+        </div>
+        <div class="applicant-id-selected" ${applicantIdFile ? '' : 'hidden'}>
+          <div class="applicant-id-preview-frame"><img src="${esc(applicantIdPreviewUrl || '')}" alt="Preview of the selected ID image"></div>
+          <div class="applicant-id-file-details">
+            <strong>${esc(applicantIdFile?.name || '')}</strong>
+            <span data-applicant-id-ready>${applicantIdImageLoading ? 'Checking image preview…' : 'Image ready to extract details'}</span>
+            <span data-applicant-id-rotation-state role="status" aria-live="polite">Original orientation</span>
+            <div class="applicant-id-file-actions">
+              <button type="button" class="ghost-btn" data-action="rotate-applicant-id-left" aria-label="Rotate image left 90 degrees">↶ Rotate left</button>
+              <button type="button" class="ghost-btn" data-action="rotate-applicant-id-right" aria-label="Rotate image right 90 degrees">↷ Rotate right</button>
+              <button type="button" class="ghost-btn" data-action="reset-applicant-id-orientation">Reset orientation</button>
+              <button type="button" class="ghost-btn" data-action="change-applicant-id-image">Change image</button>
+              <button type="button" class="ghost-btn" data-action="remove-applicant-id-image">Remove image</button>
+            </div>
+          </div>
+        </div>
+        <p id="applicantIdFileError" class="applicant-id-error" role="alert" aria-live="assertive" ${applicantIdImageError ? '' : 'hidden'}>${esc(applicantIdImageError)}</p>
+        <div class="applicant-ocr-progress" data-applicant-ocr-progress role="status" aria-live="polite" ${applicantOcrLoading ? '' : 'hidden'}>
+          <progress max="1" value="${applicantOcrProgress}"></progress>
+          <span data-applicant-ocr-progress-message>${esc(applicantOcrProgressMessage || 'Preparing text extraction…')}</span>
+        </div>
+        <p id="applicantIdFileHelp" class="applicant-id-help">The ID image and extracted details stay in this browser. They are not uploaded or saved.</p>
+      </div>
+    </div>`;
+  } else if (step === 2) {
+    panel = `<div class="applicant-review-panel">
+      <h3>OCR Extraction Results</h3>
+      <p class="field-help">Review every field against the ID. Text extraction can make mistakes and does not verify identity.</p>
+      ${applicantOcrWarning ? `<div class="applicant-ocr-warning" role="alert">${esc(applicantOcrWarning)}</div>` : ''}
+      ${renderApplicantOcrFields()}
+      <p class="applicant-id-help">No image or extracted information is saved in this phase.</p>
+    </div>`;
+  } else if (step === 3) {
+    panel = `<div class="applicant-review-panel">
+      <h3>Applicant Information</h3>
+      <p class="field-help">Review and correct the information extracted from the uploaded ID. Changes stay in this browser.</p>
+      ${applicantOcrWarning ? `<div class="applicant-ocr-warning" role="alert">${esc(applicantOcrWarning)}</div>` : ''}
+      ${renderApplicantOcrFields()}
+    </div>`;
+  } else if (step === 4) {
+    panel = `<div class="applicant-review-panel applicant-face-capture">
+      <h3>Capture face photo</h3>
+      <p class="field-help">Position the employee in the camera frame, then capture a clear photo. It will be compared locally with the ID photo in the next step and will not be uploaded or saved.</p>
+      <div class="applicant-face-camera-frame">
+        <video class="applicant-face-camera-preview" autoplay playsinline muted aria-label="Live camera preview" ${applicantFaceCaptureBlob ? 'hidden' : ''}></video>
+        <img class="applicant-face-photo-preview" alt="Captured face photo preview" ${applicantFaceCaptureBlob ? '' : 'hidden'}>
+        <p class="applicant-face-camera-placeholder" data-applicant-face-camera-placeholder>Camera preview will appear here after access is granted.</p>
+      </div>
+      <p class="applicant-face-camera-status" data-applicant-face-camera-status role="status" aria-live="polite"></p>
+      <p class="applicant-face-camera-error" data-applicant-face-camera-error role="alert" aria-live="assertive" hidden></p>
+      <div class="applicant-face-camera-controls">
+        <button type="button" class="secondary-btn" data-action="applicant-face-capture" disabled>Capture photo</button>
+        <button type="button" class="ghost-btn" data-action="applicant-face-retake" hidden>Retake photo</button>
+        <button type="button" class="ghost-btn" data-action="applicant-face-camera-retry" hidden>Try camera again</button>
+      </div>
+    </div>`;
+  } else if (step === 5) {
+    panel = renderApplicantFaceMatchPanel();
+  } else if (step === 6) {
+    panel = renderApplicantVerificationSummary();
+  } else if (step === 7) {
+    const verificationContext = applicantRoleVerificationContext();
+    panel = `<div class="applicant-review-panel">
+      <h3>Assign Role</h3>
+      <p class="field-help">Choose one CostTrack access level for this applicant. The selection remains in this browser and is not saved.</p>
+      ${verificationContext.markup}
+      ${state.applicantReviewRoleError ? '<div class="applicant-role-error" role="alert" aria-live="assertive" tabindex="-1" data-applicant-role-error>Select a role before continuing.</div>' : ''}
+      <fieldset class="applicant-role-grid">
+        <legend>Choose one employee role</legend>
+        ${USER_ONBOARDING_ROLE_CARDS.map((role, index) => `<div class="applicant-role-option"><input id="applicantRole-${index}" type="radio" name="applicantRole" value="${esc(role.value)}" ${state.applicantReviewRole === role.value ? 'checked' : ''}><label for="applicantRole-${index}"><strong>${esc(role.label)}</strong><small>${esc(role.description)}</small></label></div>`).join('')}
+      </fieldset>
+    </div>`;
+  } else {
+    const verificationContext = applicantRoleVerificationContext();
+    const role = USER_ONBOARDING_ROLE_CARDS.find(item => item.value === state.applicantReviewRole);
+    const roleLabel = role?.label || 'No role selected';
+    const faceMatchResult = applicantFaceMatchResult;
+    const matchScore = Number.isFinite(faceMatchResult?.similarityIndicator)
+      ? `${faceMatchResult.similarityIndicator}%`
+      : 'Unavailable';
+    const faceCaptured = Boolean(applicantFaceCaptureBlob);
+    const readyForAccountCreation = verificationContext.verificationPassed && Boolean(role);
+    panel = `<div class="applicant-review-panel">
+      <h3>Account Review</h3>
+      <p class="field-help">Review the employee, verification results, and role. Continuing opens the invitation form; the pending profile and verification record are written together.</p>
+      <div class="applicant-account-review-banner ${readyForAccountCreation ? 'is-ready' : 'is-review'}" role="status" aria-live="polite">
+        <strong>${readyForAccountCreation ? 'Ready for Account Creation' : 'Manual Review Required'}</strong>
+        <small>${readyForAccountCreation ? 'The review details are present. No account or invitation has been created.' : 'Review the verification details before account creation. No account or invitation has been created.'}</small>
+      </div>
+      <div class="applicant-account-review-grid">
+        <section class="applicant-account-review-card" aria-labelledby="account-review-identity-heading">
+          <h4 id="account-review-identity-heading">Identity Information</h4>
+          <dl class="applicant-account-review">
+            <div><dt>Full Name</dt><dd>${esc(String(applicantOcrFields.full_name || '').trim() || 'Not Detected')}</dd></div>
+            <div><dt>Date of Birth</dt><dd>${esc(String(applicantOcrFields.dob || '').trim() || 'Not Detected')}</dd></div>
+            <div><dt>Address</dt><dd>${esc(String(applicantOcrFields.address || '').trim() || 'Not Detected')}</dd></div>
+            <div><dt>ID Number</dt><dd>${esc(String(applicantOcrFields.id_number || '').trim() || 'Not Detected')}</dd></div>
+            <div><dt>ID Type</dt><dd>${esc(String(applicantOcrIdType || '').trim() || 'Not Detected')}</dd></div>
+          </dl>
+        </section>
+        <section class="applicant-account-review-card" aria-labelledby="account-review-verification-heading">
+          <h4 id="account-review-verification-heading">Verification Information</h4>
+          <dl class="applicant-account-review">
+            <div><dt>OCR Completed</dt><dd>${verificationContext.ocrPassed ? 'Yes' : applicantOcrCompleted ? 'Completed · review required' : 'No'}</dd></div>
+            <div><dt>Face Captured</dt><dd>${faceCaptured ? 'Yes' : 'No'}</dd></div>
+            <div><dt>Face Match Passed</dt><dd>${verificationContext.faceMatchPassed ? 'Yes' : 'No'}</dd></div>
+            <div><dt>Match Score</dt><dd>${matchScore}<small>Similarity indicator; not a probability</small></dd></div>
+            <div><dt>Verification Status</dt><dd>${verificationContext.verificationPassed ? 'Passed' : 'Manual Review Required'}</dd></div>
+          </dl>
+          <p class="applicant-account-review-note">The face comparison is a local review signal, not an automated approval or rejection.</p>
+        </section>
+        <section class="applicant-account-review-card" aria-labelledby="account-review-role-heading">
+          <h4 id="account-review-role-heading">Role Information</h4>
+          <dl class="applicant-account-review">
+            <div><dt>Selected Role</dt><dd>${esc(roleLabel)}</dd></div>
+          </dl>
+          ${role ? `<p class="applicant-account-review-note">${esc(role.description)}</p>` : ''}
+        </section>
+        <section class="applicant-account-review-card" aria-labelledby="account-review-account-heading">
+          <h4 id="account-review-account-heading">Account Information</h4>
+          <dl class="applicant-account-review">
+            <div><dt>Email Address</dt><dd>Collected during account setup</dd></div>
+            <div><dt>Account Status</dt><dd>Pending Creation</dd></div>
+          </dl>
+        </section>
+      </div>
+      ${!verificationContext.verificationPassed ? `<label class="applicant-review-override-reason">Administrator override reason<textarea data-applicant-override-reason maxlength="500" rows="3" placeholder="Explain why this applicant is approved despite the verification warning">${esc(applicantReviewOverrideReason)}</textarea><small class="field-help">Required for manual review. This reason is stored in the append-only verification record.</small></label>` : ''}
+      ${applicantReviewProceedNotice ? `<p class="applicant-account-review-notice" role="alert" aria-live="assertive">${esc(applicantReviewProceedNotice)}</p>` : ''}
+    </div>`;
+  }
+  const continueDisabled = (step === 1 && (!applicantIdImageValid || applicantIdImageLoading || applicantIdRotationLoading || applicantOcrLoading))
+    || (step === 4 && !applicantFaceCaptureBlob)
+    || (step === 5 && applicantFaceMatchState === 'running')
+    || (step === 7 && !state.applicantReviewRole);
+  const actions = `<div class="applicant-review-actions">
+    ${step > 1 ? `<button type="button" class="ghost-btn" data-action="applicant-review-back">${step === 8 ? 'Back to Role Assignment' : '← Back'}</button>` : '<span></span>'}
+    <div class="applicant-review-actions-right">
+      <button type="button" class="ghost-btn" data-action="close-modal">Cancel</button>
+      ${step < 8
+        ? `<button type="button" class="primary-btn" data-action="applicant-review-next" ${continueDisabled ? 'disabled' : ''}>${step === 1 ? applicantOcrLoading ? 'Extracting…' : applicantIdRotationLoading ? 'Rotating…' : applicantOcrCompleted ? 'Run OCR again' : 'Extract information' : step === 5 && applicantFaceMatchState === 'running' ? 'Comparing faces…' : step === 6 ? 'Continue to Role Assignment' : step === 7 ? 'Continue to Account Review' : 'Continue'}</button>`
+        : '<button type="button" class="primary-btn" data-action="applicant-review-proceed-create-account">Proceed to Create Account</button>'}
+    </div>
+  </div>`;
+  modal('Employee Onboarding', `${applicantReviewProgress(step)}${panel}${actions}`, '', 'applicant-review-modal');
+  const form = document.querySelector('#modalForm');
+  if (form) form.dataset.type = 'applicant-review';
+  if (step === 4) updateApplicantFaceCaptureUi();
+  form?.addEventListener('change', event => {
+    if (event.target.matches('input[name="applicantRole"]')) {
+      state.applicantReviewRole = event.target.value;
+      state.applicantReviewRoleError = false;
+      state.applicantReviewInviteError = '';
+      form.querySelector('[data-applicant-role-error]')?.remove();
+      const continueButton = form.querySelector('[data-action="applicant-review-next"]');
+      if (continueButton) continueButton.disabled = !state.applicantReviewRole;
+    }
+  });
+  form?.addEventListener('input', event => {
+    if (event.target.matches('[data-applicant-override-reason]')) {
+      applicantReviewOverrideReason = event.target.value;
+      applicantReviewProceedNotice = '';
+      return;
+    }
+    const field = event.target.closest('[data-ocr-field]');
+    if (!field) return;
+    applicantOcrFields[field.dataset.ocrField] = field.value;
+    const fieldState = [...form.querySelectorAll('[data-ocr-field-state]')]
+      .find(element => element.dataset.ocrFieldState === field.dataset.ocrField);
+    if (fieldState) fieldState.textContent = field.value ? 'Value available · confirm for accuracy' : 'Not Detected · enter manually if known';
+  });
+  requestAnimationFrame(() => {
+    const roleError = document.querySelector('.applicant-review-modal [data-applicant-role-error]');
+    const inviteError = document.querySelector('.applicant-review-modal [data-applicant-invite-error]');
+    if (roleError || inviteError) (roleError || inviteError).focus();
+    else document.querySelector('.applicant-review-modal [aria-current="step"]')?.scrollIntoView({ block: 'nearest' });
+  });
+}
+
+function updateApplicantFaceCaptureUi() {
+  const form = document.querySelector('#modalForm[data-type="applicant-review"]');
+  if (!form || state.applicantReviewStep !== 4) return;
+  const video = form.querySelector('.applicant-face-camera-preview');
+  const photo = form.querySelector('.applicant-face-photo-preview');
+  const placeholder = form.querySelector('[data-applicant-face-camera-placeholder]');
+  const status = form.querySelector('[data-applicant-face-camera-status]');
+  const error = form.querySelector('[data-applicant-face-camera-error]');
+  const captureButton = form.querySelector('[data-action="applicant-face-capture"]');
+  const retakeButton = form.querySelector('[data-action="applicant-face-retake"]');
+  const retryButton = form.querySelector('[data-action="applicant-face-camera-retry"]');
+  const continueButton = form.querySelector('[data-action="applicant-review-next"]');
+  const captured = Boolean(applicantFaceCaptureBlob && applicantFacePreviewUrl);
+
+  if (video) {
+    video.hidden = captured || !applicantFaceStream;
+    if (applicantFaceStream && video.srcObject !== applicantFaceStream) video.srcObject = applicantFaceStream;
+  }
+  if (photo) {
+    photo.hidden = !captured;
+    if (captured && photo.src !== applicantFacePreviewUrl) photo.src = applicantFacePreviewUrl;
+  }
+  if (placeholder) {
+    placeholder.hidden = captured || Boolean(applicantFaceStream);
+    placeholder.textContent = applicantFaceCameraState === 'requesting'
+      ? 'Waiting for camera permission…'
+      : 'Camera preview will appear here after access is granted.';
+  }
+  if (status) {
+    status.textContent = captured
+      ? 'Photo captured. Review it or retake before continuing.'
+      : applicantFaceCameraState === 'requesting'
+        ? 'Requesting camera access…'
+        : applicantFaceCameraState === 'starting'
+          ? 'Starting camera preview…'
+        : applicantFaceCameraState === 'ready'
+          ? 'Camera is ready. Position the employee in the frame.'
+          : applicantFaceCameraState === 'error'
+            ? 'Camera is unavailable.'
+            : 'Camera access has not started.';
+  }
+  if (error) {
+    error.textContent = applicantFaceCameraError;
+    error.hidden = !applicantFaceCameraError;
+  }
+  if (captureButton) {
+    captureButton.disabled = applicantFaceCaptureLoading
+      || !applicantFaceStream
+      || applicantFaceCameraState !== 'ready'
+      || !video?.videoWidth
+      || !video?.videoHeight;
+    captureButton.textContent = applicantFaceCaptureLoading ? 'Capturing…' : 'Capture photo';
+    captureButton.hidden = captured;
+  }
+  if (retakeButton) retakeButton.hidden = !captured;
+  if (retryButton) retryButton.hidden = captured || applicantFaceCameraState === 'requesting' || applicantFaceCameraState === 'ready';
+  if (continueButton) continueButton.disabled = !captured || applicantFaceCaptureLoading;
+}
+
+function stopApplicantFaceCamera() {
+  applicantFaceCameraRequestId += 1;
+  const stream = applicantFaceStream;
+  applicantFaceStream = null;
+  stream?.getTracks().forEach(track => track.stop());
+  const video = document.querySelector('.applicant-face-camera-preview');
+  if (video) {
+    video.pause();
+    video.srcObject = null;
+  }
+}
+
+function resetApplicantFaceCapture() {
+  stopApplicantFaceCamera();
+  if (applicantFacePreviewUrl) URL.revokeObjectURL(applicantFacePreviewUrl);
+  applicantFaceCaptureBlob = null;
+  applicantFacePreviewUrl = null;
+  applicantFaceCameraState = 'idle';
+  applicantFaceCameraError = '';
+  applicantFaceCaptureLoading = false;
+  resetApplicantFaceMatch();
+}
+
+function resetApplicantFaceMatch() {
+  applicantFaceMatchRunId += 1;
+  applicantFaceMatchState = 'idle';
+  applicantFaceMatchResult = null;
+  applicantFaceMatchError = '';
+}
+
+async function runApplicantFaceMatch() {
+  stopApplicantFaceCamera();
+  const runId = ++applicantFaceMatchRunId;
+  applicantFaceMatchState = 'running';
+  applicantFaceMatchResult = null;
+  applicantFaceMatchError = '';
+  state.applicantReviewStep = 5;
+  renderApplicantReviewModal();
+
+  try {
+    if (!applicantIdImageValid || !(applicantIdFileForOcr || applicantIdFile) || !applicantFaceCaptureBlob) {
+      throw new Error('Both a valid ID image and a captured face photo are required for comparison.');
+    }
+    const result = await window.CostTrackFaceMatching.compareImages(
+      applicantIdFileForOcr || applicantIdFile,
+      applicantFaceCaptureBlob
+    );
+    if (runId !== applicantFaceMatchRunId || state.applicantReviewStep !== 5) return;
+    applicantFaceMatchResult = result;
+  } catch (error) {
+    if (runId !== applicantFaceMatchRunId || state.applicantReviewStep !== 5) return;
+    console.error('Local face comparison failed.', error);
+    applicantFaceMatchError = 'Face comparison could not be completed. Check the images and connection, then try again.';
+  } finally {
+    if (runId === applicantFaceMatchRunId && state.applicantReviewStep === 5) {
+      applicantFaceMatchState = 'complete';
+      renderApplicantReviewModal();
+    }
+  }
+}
+
+function applicantFaceCameraErrorMessage(error) {
+  if (!window.isSecureContext) return 'Camera access requires HTTPS or localhost. Open CostTrack from a secure address and try again.';
+  if (['NotAllowedError', 'PermissionDeniedError', 'SecurityError'].includes(error?.name)) {
+    return 'Camera permission was denied. Allow camera access in your browser settings, then try again.';
+  }
+  if (['NotFoundError', 'DevicesNotFoundError'].includes(error?.name)) {
+    return 'No camera was found. Connect a camera and try again.';
+  }
+  if (['NotReadableError', 'TrackStartError'].includes(error?.name)) {
+    return 'The camera is unavailable or being used by another app. Close other apps and try again.';
+  }
+  if (error?.name === 'OverconstrainedError') {
+    return 'The camera could not provide a supported video stream. Try another camera or browser.';
+  }
+  return 'Unable to open the camera. Check your browser permissions and try again.';
+}
+
+function waitForApplicantCameraFrame(video, playPromise) {
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    let timeout;
+    const cleanup = () => {
+      if (timeout) window.clearTimeout(timeout);
+      video.removeEventListener('loadedmetadata', check);
+      video.removeEventListener('resize', check);
+      video.removeEventListener('error', fail);
+    };
+    const finish = (callback, value) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      callback(value);
+    };
+    const check = () => {
+      if (!video.videoWidth || !video.videoHeight) return;
+      finish(resolve);
+    };
+    const fail = () => {
+      finish(reject, new Error('The camera preview could not be started.'));
+    };
+    timeout = window.setTimeout(() => {
+      finish(reject, new Error('The camera did not provide a video frame in time.'));
+    }, 8000);
+    video.addEventListener('loadedmetadata', check);
+    video.addEventListener('resize', check);
+    video.addEventListener('error', fail);
+    Promise.resolve(playPromise).catch(error => finish(reject, error));
+    check();
+  });
+}
+
+async function startApplicantFaceCamera() {
+  if (state.applicantReviewStep !== 4 || applicantFaceCaptureBlob) return;
+  stopApplicantFaceCamera();
+  const requestId = applicantFaceCameraRequestId;
+  applicantFaceCameraState = 'requesting';
+  applicantFaceCameraError = '';
+  updateApplicantFaceCaptureUi();
+
+  if (!navigator.mediaDevices?.getUserMedia) {
+    applicantFaceCameraState = 'error';
+    applicantFaceCameraError = !window.isSecureContext
+      ? applicantFaceCameraErrorMessage(new Error('Camera access is not available.'))
+      : 'Camera access is unavailable in this browser. Connect a camera or try a supported browser.';
+    updateApplicantFaceCaptureUi();
+    return;
+  }
+
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({
+      audio: false,
+      video: { facingMode: { ideal: 'user' } }
+    });
+    if (requestId !== applicantFaceCameraRequestId || state.applicantReviewStep !== 4) {
+      stream.getTracks().forEach(track => track.stop());
+      return;
+    }
+
+    const video = document.querySelector('#modalForm[data-type="applicant-review"] .applicant-face-camera-preview');
+    if (!video) {
+      stream.getTracks().forEach(track => track.stop());
+      return;
+    }
+    applicantFaceStream = stream;
+    applicantFaceCameraState = 'starting';
+    updateApplicantFaceCaptureUi();
+    video.hidden = false;
+    video.srcObject = stream;
+    await waitForApplicantCameraFrame(video, video.play());
+    if (requestId !== applicantFaceCameraRequestId || state.applicantReviewStep !== 4) {
+      stream.getTracks().forEach(track => track.stop());
+      return;
+    }
+    applicantFaceCameraState = 'ready';
+    stream.getVideoTracks().forEach(track => {
+      track.addEventListener('ended', () => {
+        if (applicantFaceStream !== stream || applicantFaceCaptureBlob) return;
+        stopApplicantFaceCamera();
+        applicantFaceCameraState = 'error';
+        applicantFaceCameraError = 'The camera stopped. Check the connection or permissions, then try again.';
+        updateApplicantFaceCaptureUi();
+      }, { once: true });
+    });
+  } catch (error) {
+    if (requestId !== applicantFaceCameraRequestId) return;
+    console.error('Applicant face camera could not be opened.', error);
+    if (applicantFaceStream) stopApplicantFaceCamera();
+    applicantFaceCameraState = 'error';
+    applicantFaceCameraError = applicantFaceCameraErrorMessage(error);
+  }
+  updateApplicantFaceCaptureUi();
+}
+
+async function captureApplicantFace() {
+  const video = document.querySelector('#modalForm[data-type="applicant-review"] .applicant-face-camera-preview');
+  if (!applicantFaceStream || applicantFaceCameraState !== 'ready' || !video?.videoWidth || !video.videoHeight || applicantFaceCaptureLoading) return;
+  applicantFaceCaptureLoading = true;
+  updateApplicantFaceCaptureUi();
+  try {
+    const canvas = document.createElement('canvas');
+    canvas.width = video.videoWidth;
+    canvas.height = video.videoHeight;
+    const context = canvas.getContext('2d');
+    if (!context) throw new Error('The captured image could not be prepared.');
+    context.drawImage(video, 0, 0, canvas.width, canvas.height);
+    const blob = await new Promise((resolve, reject) => {
+      canvas.toBlob(result => result ? resolve(result) : reject(new Error('The captured image could not be created.')), 'image/jpeg', 0.95);
+    });
+    applicantFacePreviewUrl = URL.createObjectURL(blob);
+    applicantFaceCaptureBlob = blob;
+    applicantFaceCameraState = 'captured';
+    applicantFaceCameraError = '';
+    resetApplicantFaceMatch();
+    stopApplicantFaceCamera();
+  } catch (error) {
+    console.error('Applicant face photo capture failed.', error);
+    applicantFaceCameraError = 'Unable to capture a photo. Make sure the camera preview is active and try again.';
+  } finally {
+    applicantFaceCaptureLoading = false;
+    updateApplicantFaceCaptureUi();
+  }
+}
+
+function retakeApplicantFacePhoto() {
+  if (!applicantFaceCaptureBlob || applicantFaceCaptureLoading) return;
+  if (applicantFacePreviewUrl) URL.revokeObjectURL(applicantFacePreviewUrl);
+  applicantFaceCaptureBlob = null;
+  applicantFacePreviewUrl = null;
+  applicantFaceCameraState = 'idle';
+  applicantFaceCameraError = '';
+  resetApplicantFaceMatch();
+  updateApplicantFaceCaptureUi();
+  void startApplicantFaceCamera();
+}
+
+function updateApplicantIdUploadUi() {
+  const form = document.querySelector('#modalForm[data-type="applicant-review"]');
+  if (!form) return;
+  const empty = form.querySelector('.applicant-id-empty');
+  const selected = form.querySelector('.applicant-id-selected');
+  const preview = form.querySelector('.applicant-id-preview-frame img');
+  const fileName = form.querySelector('.applicant-id-file-details strong');
+  const ready = form.querySelector('[data-applicant-id-ready]');
+  const emptyState = form.querySelector('[data-applicant-id-empty-state]');
+  const error = form.querySelector('#applicantIdFileError');
+  const continueButton = form.querySelector('[data-action="applicant-review-next"]');
+  const progress = form.querySelector('[data-applicant-ocr-progress]');
+  const progressMessage = form.querySelector('[data-applicant-ocr-progress-message]');
+  const changeButton = form.querySelector('[data-action="change-applicant-id-image"]');
+  const removeButton = form.querySelector('[data-action="remove-applicant-id-image"]');
+  const selectButton = form.querySelector('[data-action="select-applicant-id-image"]');
+  const rotateLeftButton = form.querySelector('[data-action="rotate-applicant-id-left"]');
+  const rotateRightButton = form.querySelector('[data-action="rotate-applicant-id-right"]');
+  const resetOrientationButton = form.querySelector('[data-action="reset-applicant-id-orientation"]');
+  const rotationState = form.querySelector('[data-applicant-id-rotation-state]');
+  const imageBusy = applicantIdImageLoading || applicantIdRotationLoading || applicantOcrLoading;
+  if (empty) empty.hidden = Boolean(applicantIdFile);
+  if (selected) selected.hidden = !applicantIdFile;
+  if (preview && applicantIdPreviewUrl) preview.src = applicantIdPreviewUrl;
+  if (fileName) fileName.textContent = applicantIdFile?.name || '';
+  if (ready) ready.textContent = applicantIdImageLoading
+    ? 'Checking image preview…'
+    : applicantIdRotationLoading ? 'Rotating preview…'
+      : applicantOcrLoading ? 'Extracting text…' : 'Image ready to extract details';
+  if (rotationState) {
+    rotationState.textContent = applicantIdRotation === 0
+      ? 'Original orientation'
+      : applicantIdRotation === 180
+        ? 'Rotated 180°'
+        : applicantIdRotation === 90
+          ? 'Rotated 90° clockwise'
+          : 'Rotated 90° counterclockwise';
+  }
+  if (emptyState) emptyState.textContent = applicantIdImageLoading
+    ? 'Checking selected image…'
+    : 'JPG, JPEG, or PNG · up to 5 MB';
+  if (error) {
+    error.textContent = applicantIdImageError;
+    error.hidden = !applicantIdImageError;
+  }
+  if (progress) {
+    progress.hidden = !applicantOcrLoading;
+    const bar = progress.querySelector('progress');
+    if (bar) bar.value = applicantOcrProgress;
+  }
+  if (progressMessage) progressMessage.textContent = applicantOcrProgressMessage || 'Preparing text extraction…';
+  if (changeButton) changeButton.disabled = imageBusy;
+  if (removeButton) removeButton.disabled = imageBusy;
+  if (selectButton) selectButton.disabled = imageBusy;
+  if (rotateLeftButton) rotateLeftButton.disabled = imageBusy || !applicantIdImageValid;
+  if (rotateRightButton) rotateRightButton.disabled = imageBusy || !applicantIdImageValid;
+  if (resetOrientationButton) resetOrientationButton.disabled = imageBusy || !applicantIdImageValid || applicantIdRotation === 0;
+  if (continueButton) {
+    continueButton.disabled = !applicantIdImageValid || imageBusy;
+    continueButton.textContent = applicantOcrLoading
+      ? 'Extracting…'
+      : applicantIdRotationLoading ? 'Rotating…'
+        : applicantOcrCompleted ? 'Run OCR again' : 'Extract information';
+  }
+}
+
+function resetApplicantOcrState() {
+  applicantOcrRunId += 1;
+  applicantOcrController?.abort();
+  applicantOcrController = null;
+  applicantOcrFields = { full_name: '', dob: '', address: '', id_number: '' };
+  applicantOcrIdType = '';
+  applicantOcrWarning = '';
+  applicantOcrCompleted = false;
+  applicantOcrLoading = false;
+  applicantOcrProgress = 0;
+  applicantOcrProgressMessage = '';
+}
+
+function resetApplicantIdImage() {
+  resetApplicantOcrState();
+  applicantIdRotationGeneration += 1;
+  applicantIdPreviewGeneration += 1;
+  if (applicantIdPendingPreviewUrl) URL.revokeObjectURL(applicantIdPendingPreviewUrl);
+  if (applicantIdPreviewUrl) URL.revokeObjectURL(applicantIdPreviewUrl);
+  applicantIdFile = null;
+  applicantIdFileForOcr = null;
+  applicantIdPreviewUrl = null;
+  applicantIdPendingPreviewUrl = null;
+  applicantIdRotation = 0;
+  applicantIdRotationLoading = false;
+  applicantIdImageValid = false;
+  applicantIdImageLoading = false;
+  applicantIdImageError = '';
+}
+
+function chooseApplicantIdImage() {
+  document.querySelector('#applicantIdFile')?.click();
+}
+
+function createRotatedApplicantIdFile(file, rotation) {
+  return new Promise((resolve, reject) => {
+    const image = new Image();
+    const sourceUrl = URL.createObjectURL(file);
+    image.onload = () => {
+      URL.revokeObjectURL(sourceUrl);
+      const { naturalWidth, naturalHeight } = image;
+      const sideways = rotation % 180 !== 0;
+      const canvas = document.createElement('canvas');
+      canvas.width = sideways ? naturalHeight : naturalWidth;
+      canvas.height = sideways ? naturalWidth : naturalHeight;
+      const context = canvas.getContext('2d');
+      if (!context || !naturalWidth || !naturalHeight) {
+        reject(new Error('The image could not be prepared for rotation.'));
+        return;
+      }
+      context.translate(canvas.width / 2, canvas.height / 2);
+      context.rotate(rotation * Math.PI / 180);
+      context.drawImage(image, -naturalWidth / 2, -naturalHeight / 2);
+      const outputType = file.type === 'image/jpeg' || /\.jpe?g$/i.test(file.name)
+        ? 'image/jpeg'
+        : 'image/png';
+      canvas.toBlob(blob => {
+        if (!blob) {
+          reject(new Error('The rotated image could not be created.'));
+          return;
+        }
+        resolve(new File([blob], file.name, { type: outputType, lastModified: file.lastModified }));
+      }, outputType, outputType === 'image/jpeg' ? 0.98 : undefined);
+    };
+    image.onerror = () => {
+      URL.revokeObjectURL(sourceUrl);
+      reject(new Error('The selected image could not be opened for rotation.'));
+    };
+    image.src = sourceUrl;
+  });
+}
+
+async function rotateApplicantIdImage(degrees) {
+  if (!applicantIdFile || !applicantIdImageValid || applicantIdRotationLoading || applicantOcrLoading) return;
+  const generation = ++applicantIdRotationGeneration;
+  const rotation = (applicantIdRotation + degrees + 360) % 360;
+  applicantIdRotationLoading = true;
+  applicantIdImageError = '';
+  updateApplicantIdUploadUi();
+
+  try {
+    const rotatedFile = await createRotatedApplicantIdFile(applicantIdFile, rotation);
+    if (generation !== applicantIdRotationGeneration) return;
+    const previewUrl = URL.createObjectURL(rotatedFile);
+    if (applicantIdPreviewUrl) URL.revokeObjectURL(applicantIdPreviewUrl);
+    applicantIdPreviewUrl = previewUrl;
+    applicantIdFileForOcr = rotatedFile;
+    applicantIdRotation = rotation;
+    resetApplicantOcrState();
+  } catch (error) {
+    if (generation !== applicantIdRotationGeneration) return;
+    console.error('ID image rotation failed.', error);
+    applicantIdImageError = 'Unable to rotate this image. You can continue with the current orientation or choose another image.';
+  } finally {
+    if (generation === applicantIdRotationGeneration) {
+      applicantIdRotationLoading = false;
+      updateApplicantIdUploadUi();
+    }
+  }
+}
+
+function resetApplicantIdOrientation() {
+  if (!applicantIdFile || !applicantIdImageValid || applicantIdRotationLoading || applicantOcrLoading || applicantIdRotation === 0) return;
+  try {
+    const previewUrl = URL.createObjectURL(applicantIdFile);
+    if (applicantIdPreviewUrl) URL.revokeObjectURL(applicantIdPreviewUrl);
+    applicantIdPreviewUrl = previewUrl;
+    applicantIdFileForOcr = applicantIdFile;
+    applicantIdRotation = 0;
+    applicantIdImageError = '';
+    resetApplicantOcrState();
+  } catch (error) {
+    console.error('ID image orientation reset failed.', error);
+    applicantIdImageError = 'Unable to reset the image orientation. You can continue with the current orientation or choose another image.';
+  }
+  updateApplicantIdUploadUi();
+}
+
+function handleApplicantIdFileChange(input) {
+  const file = input.files?.[0];
+  input.value = '';
+  if (!file) return;
+
+  applicantIdPreviewGeneration += 1;
+  if (applicantIdPendingPreviewUrl) URL.revokeObjectURL(applicantIdPendingPreviewUrl);
+  applicantIdPendingPreviewUrl = null;
+  applicantIdImageLoading = false;
+  const validation = window.CostTrackLogic.validateIdImageFile(file);
+  if (!validation.ok) {
+    applicantIdImageError = applicantIdFile
+      ? `${validation.message} Your previous image is unchanged.`
+      : validation.message;
+    updateApplicantIdUploadUi();
+    return;
+  }
+
+  applicantIdImageError = '';
+  applicantIdImageLoading = true;
+  let previewUrl;
+  try {
+    previewUrl = URL.createObjectURL(file);
+  } catch (error) {
+    applicantIdImageLoading = false;
+    applicantIdImageError = 'Unable to preview image. Choose a valid JPG, JPEG, or PNG image.'
+      + (applicantIdFile ? ' Your previous image is unchanged.' : '');
+    updateApplicantIdUploadUi();
+    return;
+  }
+  const generation = applicantIdPreviewGeneration;
+  applicantIdPendingPreviewUrl = previewUrl;
+  updateApplicantIdUploadUi();
+  const image = new Image();
+  image.onload = () => {
+    if (generation !== applicantIdPreviewGeneration) return;
+    if (applicantIdPreviewUrl) URL.revokeObjectURL(applicantIdPreviewUrl);
+    resetApplicantFaceCapture();
+    applicantIdFile = file;
+    applicantIdFileForOcr = file;
+    applicantIdPreviewUrl = previewUrl;
+    applicantIdPendingPreviewUrl = null;
+    applicantIdImageValid = true;
+    applicantIdImageLoading = false;
+    applicantIdRotation = 0;
+    resetApplicantOcrState();
+    updateApplicantIdUploadUi();
+  };
+  image.onerror = () => {
+    if (generation !== applicantIdPreviewGeneration) return;
+    URL.revokeObjectURL(previewUrl);
+    applicantIdPendingPreviewUrl = null;
+    applicantIdImageLoading = false;
+    applicantIdImageError = 'Unable to preview image. Choose a valid JPG, JPEG, or PNG image.'
+      + (applicantIdFile ? ' Your previous image is unchanged.' : '');
+    updateApplicantIdUploadUi();
+  };
+  image.src = previewUrl;
+}
+
+async function runApplicantIdOcr() {
+  if (!applicantIdFile || !applicantIdImageValid || applicantOcrLoading) return;
+  const runId = ++applicantOcrRunId;
+  const controller = new AbortController();
+  applicantOcrController = controller;
+  applicantOcrLoading = true;
+  applicantOcrCompleted = false;
+  applicantOcrProgress = 0;
+  applicantOcrProgressMessage = 'Preparing text extraction…';
+  applicantOcrIdType = '';
+  applicantOcrWarning = '';
+  updateApplicantIdUploadUi();
+
+  try {
+    const result = await window.CostTrackOcr.extractId(applicantIdFileForOcr || applicantIdFile, {
+      signal: controller.signal,
+      onProgress: ({ message, progress }) => {
+        if (runId !== applicantOcrRunId) return;
+        applicantOcrProgressMessage = message;
+        applicantOcrProgress = Math.max(0, Math.min(1, Number(progress) || 0));
+        updateApplicantIdUploadUi();
+      }
+    });
+    if (runId !== applicantOcrRunId) return;
+    applicantOcrFields = { ...applicantOcrFields, ...result.fields };
+    applicantOcrIdType = result.idTypeName || '';
+    applicantOcrWarning = result.warning || '';
+  } catch (error) {
+    if (runId !== applicantOcrRunId || error.name === 'AbortError') return;
+    console.error('ID OCR extraction failed.', error);
+    applicantOcrFields = { full_name: '', dob: '', address: '', id_number: '' };
+    applicantOcrIdType = '';
+    applicantOcrWarning = 'Unable to confidently extract information. Please review the fields manually or upload a clearer image.';
+  } finally {
+    if (runId === applicantOcrRunId) {
+      applicantOcrController = null;
+      applicantOcrLoading = false;
+      applicantOcrCompleted = true;
+      state.applicantReviewStep = 2;
+      renderApplicantReviewModal();
+    }
+  }
+}
+
+function openUserManagementInviteModal(preselectedRole = '', verificationDraft = null) {
   if (state.role !== 'Administrator') return toast('Only Administrators can invite staff users.', 'error');
   const inviteRoles = window.costTrackInviteRoles || [];
   const roleOptions = inviteRoles.map(role =>
     `<option value="${esc(role)}">${esc(role)}</option>`
   ).join('');
   const backdrop = modal('Add new user', `<div class="user-form-fields">
-    <p class="field-help">Send a secure invitation. The staff member will set their own password using the email link.</p>
-    <label>Full name<input name="fullName" type="text" required maxlength="160" autocomplete="name" placeholder="Staff member’s full name"></label>
+    <p class="field-help">${verificationDraft
+      ? 'This reviewed applicant will be invited using the selected role. The ID image and selfie will be uploaded to a private Administrator-only bucket; the profile and verification record are written together. The full ID number is not stored.'
+      : 'Send a secure invitation. The staff member will set their own password using the email link.'}</p>
+    <label>Full name<input name="fullName" type="text" required maxlength="160" autocomplete="name" placeholder="Staff member’s full name" value="${esc(verificationDraft?.applicantName || '')}"></label>
     <label>Email address<input name="email" type="email" required maxlength="254" autocomplete="email" placeholder="name@example.com" aria-describedby="userInviteEmailHelp duplicateInviteNotice"><small id="userInviteEmailHelp" class="field-help">Use the address where this person can receive the invitation.</small></label>
     <div class="duplicate-invite-notice" id="duplicateInviteNotice" role="status" aria-live="polite" hidden></div>
-    <label>Role<select name="role" required><option value="">Select a staff role</option>${roleOptions}</select></label>
+    <label>Role<select name="role" required ${verificationDraft ? 'disabled' : ''}><option value="">Select a staff role</option>${roleOptions}</select></label>
     <p class="role-access-note" data-role-access-note>Select a role to see what the person can access.</p>
+    ${verificationDraft ? '<p class="field-help">Role is locked to the selection made in onboarding. Return to Role Assignment to change it.</p>' : ''}
   </div>`, 'Send invitation', 'user-management-form-modal');
   const form = backdrop.querySelector('#modalForm');
   form.dataset.type = 'user-invite';
+  if (verificationDraft) userInvitationVerificationDrafts.set(form, verificationDraft);
   form.addEventListener('input', () => { state.modalDirty = true; });
   form.addEventListener('change', () => { state.modalDirty = true; });
   form.elements.role.addEventListener('change', () => {
     const note = form.querySelector('[data-role-access-note]');
     note.textContent = USER_ROLE_ACCESS_NOTES[form.elements.role.value] || 'Select a role to see what the person can access.';
   });
+  if (inviteRoles.includes(preselectedRole)) {
+    form.elements.role.value = preselectedRole;
+    form.querySelector('[data-role-access-note]').textContent = USER_ROLE_ACCESS_NOTES[preselectedRole] || 'Select a role to see what the person can access.';
+  }
   form.elements.email.addEventListener('input', () => updateInviteDuplicateNotice(form));
   if (!state.userInviteHistory.loaded && !state.userInviteHistory.loading) void loadUserInvitations(true);
 }
@@ -3680,13 +4964,57 @@ async function submitUserInvitation(form) {
   }
 
   setUserManagementFormBusy(form, true, 'Sending…');
+  const verificationDraft = userInvitationVerificationDrafts.get(form) || null;
+  let uploadedEvidence = null;
   try {
-    await window.supabaseRecord.inviteUser({ fullName, email, role });
+    let verificationRecord = null;
+    if (verificationDraft) {
+      uploadedEvidence = await window.supabaseRecord.uploadVerificationEvidence({
+        idImage: verificationDraft.idImage,
+        selfie: verificationDraft.selfie
+      });
+      verificationRecord = {
+        applicant_name: fullName,
+        id_type: verificationDraft.idType,
+        id_number_masked: verificationDraft.idNumberMasked,
+        ocr_summary: verificationDraft.ocrSummary,
+        face_match_score: verificationDraft.faceMatchScore,
+        face_match_result: verificationDraft.faceMatchResult,
+        override_used: verificationDraft.overrideUsed,
+        override_reason: verificationDraft.overrideReason,
+        id_image_path: uploadedEvidence.id_image_path,
+        selfie_path: uploadedEvidence.selfie_path
+      };
+    }
+    await window.supabaseRecord.inviteUser({
+      fullName,
+      email,
+      role,
+      verificationRecord
+    });
     state.modalDirty = false;
+    userInvitationVerificationDrafts.delete(form);
     closeModal(true);
-    await finishUserManagementSave(`Invitation sent to ${email}.`, 'user-invite-open');
+    await finishUserManagementSave(
+      verificationDraft
+        ? `Verification record saved and invitation sent to ${email}.`
+        : `Invitation sent to ${email}.`,
+      'user-invite-open'
+    );
   } catch (error) {
     console.error('Staff invitation failed.', error);
+    let errorMessage = error.message || 'The invitation could not be sent. Please try again.';
+    if (uploadedEvidence) {
+      try {
+        await window.supabaseRecord.removeVerificationEvidence([
+          uploadedEvidence.id_image_path,
+          uploadedEvidence.selfie_path
+        ]);
+      } catch (cleanupError) {
+        console.error('Verification evidence cleanup failed after invitation failure.', cleanupError);
+        errorMessage += ' Uploaded evidence cleanup failed; an Administrator should review the private bucket.';
+      }
+    }
     if (error?.code === 'pending_invitation_exists') {
       state.userInviteHistory.loaded = false;
       try {
@@ -3696,7 +5024,7 @@ async function submitUserInvitation(form) {
       }
       updateInviteDuplicateNotice(form);
     }
-    toast(error.message || 'The invitation could not be sent. Please try again.', 'error');
+    toast(errorMessage, 'error');
   } finally {
     if (form.isConnected) setUserManagementFormBusy(form, false);
   }
@@ -3873,6 +5201,84 @@ async function loadUserInvitations(force = false) {
       if (state.view === 'users') render();
     }
   }
+}
+
+async function loadVerificationRecords(force = false, searchValue = state.verificationRecordHistory.search) {
+  const history = state.verificationRecordHistory;
+  if (state.role !== 'Administrator' || !state.user) {
+    return toast('Only Administrators can view verification records.', 'error');
+  }
+  const search = String(searchValue || '').trim();
+  if (!force && history.loaded && history.loadedSearch === search) return;
+
+  const requestId = ++verificationRecordRequestId;
+  const userId = state.user.id;
+  const activeSearch = document.activeElement?.id === 'verificationRecordSearch';
+  const selectionStart = activeSearch
+    ? document.activeElement.selectionStart
+    : null;
+  const selectionEnd = activeSearch
+    ? document.activeElement.selectionEnd
+    : null;
+  history.search = String(searchValue || '');
+  history.loading = true;
+  history.error = '';
+  if (state.view === 'users') render();
+  if (activeSearch) {
+    const searchInput = document.querySelector('#verificationRecordSearch');
+    searchInput?.focus({ preventScroll: true });
+    if (selectionStart !== null && selectionEnd !== null) {
+      searchInput?.setSelectionRange(selectionStart, selectionEnd);
+    }
+  }
+
+  try {
+    const records = await window.supabaseRecord.loadVerificationRecords(search);
+    if (
+      requestId !== verificationRecordRequestId
+      || state.user?.id !== userId
+      || state.role !== 'Administrator'
+    ) return;
+    history.rows = records;
+    history.loaded = true;
+    history.loadedSearch = search;
+  } catch (error) {
+    if (
+      requestId !== verificationRecordRequestId
+      || state.user?.id !== userId
+      || state.role !== 'Administrator'
+    ) return;
+    history.error = error.message || 'Verification records could not be loaded.';
+    history.loaded = true;
+    console.error('Verification records could not be loaded.', error);
+    toast(history.error, 'error');
+  } finally {
+    if (
+      requestId === verificationRecordRequestId
+      && state.user?.id === userId
+      && state.role === 'Administrator'
+    ) {
+      history.loading = false;
+      if (state.view === 'users') render();
+      if (activeSearch) {
+        const searchInput = document.querySelector('#verificationRecordSearch');
+        searchInput?.focus({ preventScroll: true });
+        if (selectionStart !== null && selectionEnd !== null) {
+          searchInput?.setSelectionRange(selectionStart, selectionEnd);
+        }
+      }
+    }
+  }
+}
+
+async function retryVerificationRecordLoad() {
+  if (state.role !== 'Administrator') {
+    return toast('Only Administrators can view verification records.', 'error');
+  }
+  state.verificationRecordHistory.loaded = false;
+  state.verificationRecordHistory.error = '';
+  await loadVerificationRecords(true);
+  if (!state.verificationRecordHistory.error) toast('Verification records refreshed.');
 }
 
 async function retryUserInvitationLoad() {
@@ -8411,22 +9817,175 @@ document.addEventListener('click', event => {
   const action = event.target.closest('[data-action]');
   if (!action) return;
   const name = action.dataset.action;
-  if (name === 'user-invite-open') openUserManagementInviteModal();
+  if (name === 'user-onboarding-open') openUserOnboardingWizard();
+  else if (name === 'select-applicant-id-image' || name === 'change-applicant-id-image') chooseApplicantIdImage();
+  else if (name === 'rotate-applicant-id-left') void rotateApplicantIdImage(-90);
+  else if (name === 'rotate-applicant-id-right') void rotateApplicantIdImage(90);
+  else if (name === 'reset-applicant-id-orientation') resetApplicantIdOrientation();
+  else if (name === 'applicant-face-capture') void captureApplicantFace();
+  else if (name === 'applicant-face-retake') retakeApplicantFacePhoto();
+  else if (name === 'applicant-face-camera-retry') void startApplicantFaceCamera();
+  else if (name === 'remove-applicant-id-image') {
+    resetApplicantIdImage();
+    updateApplicantIdUploadUi();
+  }
+  else if (name === 'applicant-review-next') {
+    if (state.applicantReviewStep === 1) {
+      if (!applicantIdImageValid || applicantIdImageLoading || applicantIdRotationLoading || applicantOcrLoading) return;
+      void runApplicantIdOcr();
+      return;
+    }
+    if (state.applicantReviewStep === 4) {
+      if (!applicantFaceCaptureBlob) return;
+      void runApplicantFaceMatch();
+      return;
+    }
+    if (state.applicantReviewStep === 5 && applicantFaceMatchState === 'running') return;
+    if (state.applicantReviewStep === 7 && !state.applicantReviewRole) {
+      state.applicantReviewRoleError = true;
+      renderApplicantReviewModal();
+      return;
+    }
+    state.applicantReviewStep = Math.min(8, (state.applicantReviewStep || 1) + 1);
+    renderApplicantReviewModal();
+    if (state.applicantReviewStep === 4 && !applicantFaceCaptureBlob) void startApplicantFaceCamera();
+  } else if (name === 'applicant-review-back') {
+    if (state.applicantReviewStep === 4) stopApplicantFaceCamera();
+    if (state.applicantReviewStep === 5) resetApplicantFaceMatch();
+    state.applicantReviewStep = Math.max(1, (state.applicantReviewStep || 1) - 1);
+    renderApplicantReviewModal();
+    if (state.applicantReviewStep === 4 && !applicantFaceCaptureBlob) void startApplicantFaceCamera();
+  } else if (name === 'applicant-review-proceed-create-account') {
+    const role = state.applicantReviewRole;
+    const roleCard = USER_ONBOARDING_ROLE_CARDS.find(item => item.value === role);
+    if (!role) {
+      state.applicantReviewStep = 7;
+      state.applicantReviewRoleError = true;
+      renderApplicantReviewModal();
+      return;
+    }
+    if (!(window.costTrackInviteRoles || []).includes(role)) {
+      applicantReviewProceedNotice = `${roleCard?.label || role} cannot be invited by the current account workflow. No account or verification record was created.`;
+      renderApplicantReviewModal();
+      return;
+    }
+    const verification = applicantRoleVerificationContext();
+    const overrideReason = applicantReviewOverrideReason.trim();
+    if (!verification.verificationPassed && !overrideReason) {
+      applicantReviewProceedNotice = 'Manual review is required. Enter an Administrator override reason before proceeding.';
+      renderApplicantReviewModal();
+      return;
+    }
+    const idImage = applicantIdFileForOcr || applicantIdFile;
+    if (!idImage || !applicantFaceCaptureBlob) {
+      applicantReviewProceedNotice = 'The ID image or selfie is missing. Return to the verification steps and capture both images again.';
+      renderApplicantReviewModal();
+      return;
+    }
+    const faceResult = applicantFaceMatchResult;
+    const idNumber = String(applicantOcrFields.id_number || '')
+      .replace(/[^a-z0-9]/gi, '')
+      .slice(-4);
+    const verificationDraft = {
+      applicantName: String(applicantOcrFields.full_name || '').trim(),
+      idType: String(applicantOcrIdType || '').trim() || 'Unknown',
+      idNumberMasked: idNumber ? `****${idNumber}` : null,
+      ocrSummary: {
+        full_name: String(applicantOcrFields.full_name || '').trim(),
+        dob: String(applicantOcrFields.dob || '').trim(),
+        address: String(applicantOcrFields.address || '').trim(),
+        ocr_passed: verification.ocrPassed
+      },
+      faceMatchScore: Number.isFinite(faceResult?.similarityIndicator)
+        ? faceResult.similarityIndicator
+        : null,
+      faceMatchResult: ['match', 'no_match'].includes(faceResult?.result)
+        ? faceResult.result
+        : 'unable',
+      overrideUsed: !verification.verificationPassed,
+      overrideReason: verification.verificationPassed ? null : overrideReason,
+      idImage,
+      selfie: applicantFaceCaptureBlob
+    };
+    closeModal(true);
+    openUserManagementInviteModal(role, verificationDraft);
+  } else if (name === 'applicant-review-invite') {
+    const role = state.applicantReviewRole;
+    const roleCard = USER_ONBOARDING_ROLE_CARDS.find(item => item.value === role);
+    if (!role) {
+      state.applicantReviewStep = 7;
+      state.applicantReviewRoleError = true;
+      renderApplicantReviewModal();
+      return;
+    }
+    if (!(window.costTrackInviteRoles || []).includes(role)) {
+      state.applicantReviewInviteError = `${roleCard?.label || role} is shown for onboarding preview, but the current invitation workflow does not support inviting this role. No invitation was sent.`;
+      renderApplicantReviewModal();
+      return;
+    }
+    const verification = applicantRoleVerificationContext();
+    if (!verification.verificationPassed && !applicantReviewOverrideReason.trim()) {
+      state.applicantReviewInviteError = 'Manual review requires an Administrator override reason.';
+      renderApplicantReviewModal();
+      return;
+    }
+    const idImage = applicantIdFileForOcr || applicantIdFile;
+    if (!idImage || !applicantFaceCaptureBlob) {
+      state.applicantReviewInviteError = 'The ID image or selfie is missing. Return to the verification steps and capture both images again.';
+      renderApplicantReviewModal();
+      return;
+    }
+    const faceResult = applicantFaceMatchResult;
+    const idNumber = String(applicantOcrFields.id_number || '')
+      .replace(/[^a-z0-9]/gi, '')
+      .slice(-4);
+    const verificationDraft = {
+      applicantName: String(applicantOcrFields.full_name || '').trim(),
+      idType: String(applicantOcrIdType || '').trim() || 'Unknown',
+      idNumberMasked: idNumber ? `****${idNumber}` : null,
+      ocrSummary: {
+        full_name: String(applicantOcrFields.full_name || '').trim(),
+        dob: String(applicantOcrFields.dob || '').trim(),
+        address: String(applicantOcrFields.address || '').trim(),
+        ocr_passed: verification.ocrPassed
+      },
+      faceMatchScore: Number.isFinite(faceResult?.similarityIndicator)
+        ? faceResult.similarityIndicator
+        : null,
+      faceMatchResult: ['match', 'no_match'].includes(faceResult?.result)
+        ? faceResult.result
+        : 'unable',
+      overrideUsed: !verification.verificationPassed,
+      overrideReason: verification.verificationPassed ? null : applicantReviewOverrideReason.trim(),
+      idImage,
+      selfie: applicantFaceCaptureBlob
+    };
+    closeModal(true);
+    openUserManagementInviteModal(role, verificationDraft);
+  } else if (name === 'user-invite-open') openUserManagementInviteModal();
   else if (name === 'user-management-open') {
     if (state.role !== 'Administrator') return toast('Only Administrators can access User Management.', 'error');
     state.userManagementPane = 'workspace';
-    state.userManagementTab = 'staff';
+    state.userManagementTab = ['invitations', 'verification-records'].includes(action.dataset.tab)
+      ? action.dataset.tab
+      : 'staff';
     render();
-    requestAnimationFrame(() => document.querySelector('#userStaffTab')?.focus());
+    requestAnimationFrame(() => document.querySelector(userManagementTabSelector(state.userManagementTab))?.focus());
+    if (state.userManagementTab === 'verification-records') void loadVerificationRecords();
   } else if (name === 'user-management-back') {
     state.userManagementPane = 'home';
     render();
     requestAnimationFrame(() => document.querySelector('[data-action="user-management-open"]')?.focus());
   } else if (name === 'user-management-tab') {
-    state.userManagementTab = action.dataset.tab === 'invitations' ? 'invitations' : 'staff';
+    state.userManagementTab = ['invitations', 'verification-records'].includes(action.dataset.tab)
+      ? action.dataset.tab
+      : 'staff';
     render();
-    requestAnimationFrame(() => document.querySelector(`#user${state.userManagementTab === 'staff' ? 'Staff' : 'Invitations'}Tab`)?.focus());
-  } else if (name === 'open-user-role') {
+    requestAnimationFrame(() => document.querySelector(userManagementTabSelector(state.userManagementTab))?.focus());
+    if (state.userManagementTab === 'verification-records') void loadVerificationRecords();
+  } else if (name === 'verification-record-open') openVerificationRecordDetail(action.dataset.id);
+  else if (name === 'retry-verification-records') void retryVerificationRecordLoad();
+  else if (name === 'open-user-role') {
     action.closest('details')?.removeAttribute('open');
     openUserRoleModal(action.dataset.id);
   } else if (name === 'open-user-status') {
@@ -8598,6 +10157,15 @@ document.addEventListener('input', event => {
     if (emptyState) emptyState.hidden = visibleRows > 0;
     return;
   }
+  if (searchInput.id === 'verificationRecordSearch') {
+    state.verificationRecordHistory.search = searchInput.value;
+    window.clearTimeout(verificationRecordSearchTimer);
+    verificationRecordSearchTimer = window.setTimeout(
+      () => void loadVerificationRecords(true, state.verificationRecordHistory.search),
+      300
+    );
+    return;
+  }
   if (searchInput.id !== 'tableSearch') return;
   state.query = searchInput.value;
   Object.keys(state.tablePages).forEach(key => { state.tablePages[key] = 1; });
@@ -8612,12 +10180,17 @@ document.addEventListener('keydown', event => {
   const tab = event.target.closest('.user-management-tabs [role="tab"]');
   if (!tab || !['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
   event.preventDefault();
-  const targetTab = event.key === 'Home' || event.key === 'ArrowLeft'
-    ? 'staff'
-    : 'invitations';
-  state.userManagementTab = event.key === 'End' ? 'invitations' : targetTab;
+  const tabs = ['staff', 'invitations', 'verification-records'];
+  const currentIndex = tabs.indexOf(state.userManagementTab);
+  let nextIndex = currentIndex;
+  if (event.key === 'Home') nextIndex = 0;
+  else if (event.key === 'End') nextIndex = tabs.length - 1;
+  else if (event.key === 'ArrowLeft') nextIndex = (currentIndex - 1 + tabs.length) % tabs.length;
+  else if (event.key === 'ArrowRight') nextIndex = (currentIndex + 1) % tabs.length;
+  state.userManagementTab = tabs[nextIndex];
   render();
-  requestAnimationFrame(() => document.querySelector(`#user${state.userManagementTab === 'staff' ? 'Staff' : 'Invitations'}Tab`)?.focus());
+  requestAnimationFrame(() => document.querySelector(userManagementTabSelector(state.userManagementTab))?.focus());
+  if (state.userManagementTab === 'verification-records') void loadVerificationRecords();
 });
 document.addEventListener('input', event => {
   if (event.target.id !== 'tableManagementSearch') return;
@@ -9300,7 +10873,9 @@ function modal(title, content, submit = 'Save record', modalClass = '', modalTyp
   const closeAriaLabel = closeLabel === '×' ? 'Close dialog' : closeLabel;
   const actions = isConfirmation
     ? `<div class="modal-actions"><button type="button" class="ghost-btn" data-action="close-modal" aria-label="${closeAriaLabel}">${closeLabel}</button><button type="button" class="primary-btn" data-action="confirm-modal">${submit || 'Continue'}</button></div>`
-    : `<div class="modal-actions${modalClass === 'pos-wizard-modal' ? ' pos-wizard-footer' : ''}"><div class="pos-wizard-footer-left">${modalClass === 'pos-wizard-modal' && submit && state.billWizard.screen > 1 ? '<button type="button" class="ghost-btn" data-action="bill-wizard-back">← Back</button>' : ''}</div><div class="pos-wizard-footer-right"><button type="button" class="ghost-btn" data-action="close-modal" aria-label="${closeAriaLabel}">${closeLabel}</button>${submit ? `<button class="primary-btn modal-submit" type="submit">${submit}</button>` : ''}</div></div>`;
+    : modalClass === 'applicant-review-modal'
+      ? ''
+      : `<div class="modal-actions${modalClass === 'pos-wizard-modal' ? ' pos-wizard-footer' : ''}"><div class="pos-wizard-footer-left">${modalClass === 'pos-wizard-modal' && submit && state.billWizard.screen > 1 ? '<button type="button" class="ghost-btn" data-action="bill-wizard-back">← Back</button>' : ''}</div><div class="pos-wizard-footer-right"><button type="button" class="ghost-btn" data-action="close-modal" aria-label="${closeAriaLabel}">${closeLabel}</button>${submit ? `<button class="primary-btn modal-submit" type="submit">${submit}</button>` : ''}</div></div>`;
   const markup = `<div class="modal-backdrop" role="presentation"><div class="modal${modalClass ? ` ${esc(modalClass)}` : ''}" role="dialog" aria-modal="true" aria-labelledby="${titleId}" tabindex="-1" data-modal-type="${esc(modalType)}"><div class="modal-header"><div><div class="eyebrow">ROMS workspace</div><h2 id="${titleId}">${title}</h2></div><button type="button" class="modal-close" data-action="close-modal" aria-label="Close dialog">×</button></div><form id="${formId}" novalidate data-modal-type="${esc(modalType)}">${content}${actions}</form></div></div>`;
   if (isConfirmation) root.insertAdjacentHTML('beforeend', markup);
   else root.innerHTML = markup;
@@ -9381,6 +10956,10 @@ function closeModal(force = false) {
       closeModal(true);
     });
     return false;
+  }
+  if (backdrop.querySelector('.applicant-review-modal')) {
+    resetApplicantFaceCapture();
+    resetApplicantIdImage();
   }
   backdrop.remove();
   if (!root.firstElementChild) {
@@ -10061,6 +11640,10 @@ document.addEventListener('click', async event => {
   if (dateFilter) { state.reservationFilter = 'All'; state.reservationDateFilter = dateFilter.dataset.reservationDateFilter; state.reservationFilterHighlightGroup = 'date'; state.calendarDate = today(); persistReservationFilters(); render(); return; }
 });
 document.addEventListener('change', event => {
+  if (event.target.matches('#applicantIdFile')) {
+    handleApplicantIdFileChange(event.target);
+    return;
+  }
   if (event.target.closest('#modalForm[data-type="receiving"]')) {
     const receivingForm = event.target.closest('#modalForm');
     updateReceivingTotals(receivingForm);

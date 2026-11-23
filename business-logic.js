@@ -1,4 +1,10 @@
 (function exposeCostTrackLogic(root) {
+  const ID_IMAGE_MAX_BYTES = 5 * 1024 * 1024;
+  const ID_IMAGE_MIME_TYPES = {
+    jpg: ['image/jpeg', 'image/jpg'],
+    jpeg: ['image/jpeg', 'image/jpg'],
+    png: ['image/png']
+  };
   const INVENTORY_ACTION_ROLES = {
     'product.read': ['Administrator', 'Manager', 'Inventory Clerk', 'Chef / Kitchen Staff'],
     'product.manage': ['Administrator'],
@@ -56,6 +62,26 @@
   const PAST_UNRESOLVED_RESERVATION_STATUSES = new Set([
     'Pending', 'Confirmed', 'Seated', 'Checked-in'
   ]);
+
+  function validateIdImageFile(file) {
+    if (!file || typeof file.name !== 'string') {
+      return { ok: false, message: 'Choose an ID image to continue.' };
+    }
+
+    const extension = file.name.split('.').pop().toLowerCase();
+    const acceptedMimeTypes = ID_IMAGE_MIME_TYPES[extension];
+    if (!acceptedMimeTypes || (file.type && !acceptedMimeTypes.includes(file.type.toLowerCase()))) {
+      return { ok: false, message: 'Unsupported file type. Choose a JPG, JPEG, or PNG image.' };
+    }
+    if (!Number.isFinite(file.size) || file.size < 0) {
+      return { ok: false, message: 'Unable to preview image. Choose a valid JPG, JPEG, or PNG image.' };
+    }
+    if (file.size > ID_IMAGE_MAX_BYTES) {
+      return { ok: false, message: 'File exceeds the 5 MB maximum size.' };
+    }
+
+    return { ok: true, message: '' };
+  }
 
   function number(value, label) {
     const parsed = Number(value);
@@ -889,6 +915,7 @@
 
   const logic = {
     assertInventoryRole,
+    ID_IMAGE_MAX_BYTES,
     availableStock,
     batchStatus,
     buildReservationRecord,
@@ -936,6 +963,7 @@
     tableAvailability,
     tableHasReservationConflict,
     tableReservationConflict,
+    validateIdImageFile,
     weightedAverageUnitCost
   };
   root.CostTrackLogic = logic;

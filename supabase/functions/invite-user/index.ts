@@ -3,6 +3,7 @@ import {
   InviteValidationError,
   normalizeAndValidateEmail,
   parseInvitePayload,
+  parseVerificationRecordPayload,
 } from "./validation.ts";
 
 const CORS_HEADERS = {
@@ -152,7 +153,13 @@ async function createInvitation(
     throw new HttpError(400, "A supported invitation action is required.");
   }
 
-  const allowedFields = new Set(["action", "email", "full_name", "role"]);
+  const allowedFields = new Set([
+    "action",
+    "email",
+    "full_name",
+    "role",
+    "verification_record",
+  ]);
   if (Object.keys(body).some((key) => !allowedFields.has(key))) {
     throw new HttpError(400, "The invitation contains unsupported fields.");
   }
@@ -173,6 +180,29 @@ async function createInvitation(
       );
     }
     throw error;
+  }
+
+  let verificationRecord: ReturnType<typeof parseVerificationRecordPayload> | null =
+    null;
+  if (body.verification_record !== undefined) {
+    try {
+      verificationRecord = parseVerificationRecordPayload(
+        body.verification_record,
+        userId,
+      );
+    } catch (error) {
+      if (error instanceof InviteValidationError) {
+        throw new HttpError(400, error.message, "invalid_verification_record");
+      }
+      throw error;
+    }
+    if (verificationRecord.applicant_name !== invite.full_name) {
+      throw new HttpError(
+        400,
+        "The verified applicant name must match the invitation name.",
+        "invalid_verification_record",
+      );
+    }
   }
 
   const { data: existingInvitation, error: invitationLookupError } =
@@ -326,45 +356,124 @@ async function createInvitation(
     );
   }
 
-  const { error: profileInsertError } = await serviceClient
-    .from("profiles")
-    .insert({
-      id: authInvitation.user.id,
-      email: invite.email,
-      full_name: invite.full_name,
-      role: invite.role,
-      account_status: "Pending",
-    });
-  if (profileInsertError) {
-    logFailure(requestId, "profile_insert", profileInsertError);
-    const { error: deleteUserError } = await serviceClient.auth.admin
-      .deleteUser(authInvitation.user.id);
-    if (deleteUserError) {
-      logFailure(requestId, "auth_user_compensation", deleteUserError);
+  let verificationRecordId: string | null = null;
+  if (verificationRecord) {
+    const { data: recordId, error: recordError } = await serviceClient.rpc(
+      "costtrack_create_verification_record",
+      {
+        p_actor_id: userId,
+        p_profile_id: authInvitation.user.id,
+        p_profile_email: invite.email,
+        p_profile_name: invite.full_name,
+        p_role_assigned: invite.role,
+        p_invitation_id: invitation.id,
+        p_applicant_name: verificationRecord.applicant_name,
+        p_id_type: verificationRecord.id_type,
+        p_id_number_masked: verificationRecord.id_number_masked,
+        p_ocr_summary: verificationRecord.ocr_summary,
+        p_face_match_score: verificationRecord.face_match_score,
+        p_face_match_result: verificationRecord.face_match_result,
+        p_override_used: verificationRecord.override_used,
+        p_override_reason: verificationRecord.override_reason,
+        p_id_image_path: verificationRecord.id_image_path,
+        p_selfie_path: verificationRecord.selfie_path,
+        p_consent_given: false,
+        p_consent_at: null,
+        p_final_status: "Approved",
+        p_supersedes_id: null,
+      },
+    );
+    if (recordError || typeof recordId !== "string") {
+      logFailure(
+        requestId,
+        "verification_record_and_profile_insert",
+        recordError ?? new Error("No verification record ID returned."),
+      );
+      const { error: deleteUserError } = await serviceClient.auth.admin
+        .deleteUser(authInvitation.user.id);
+      if (deleteUserError) {
+        logFailure(requestId, "verification_auth_compensation", deleteUserError);
+      }
+      const invitationCleanup = await cancelPendingInvitation(
+        serviceClient,
+        invitation.id,
+        userId,
+      );
+      if (!invitationCleanup.succeeded) {
+        logFailure(
+          requestId,
+          "verification_invitation_compensation",
+          invitationCleanup.error,
+        );
+      }
+      const { error: evidenceCleanupError } = await serviceClient.storage
+        .from("verification-evidence")
+        .remove([
+          verificationRecord.id_image_path,
+          verificationRecord.selfie_path,
+        ]);
+      if (evidenceCleanupError) {
+        logFailure(
+          requestId,
+          "verification_evidence_compensation",
+          evidenceCleanupError,
+        );
+      }
+      if (deleteUserError || !invitationCleanup.succeeded || evidenceCleanupError) {
+        throw new HttpError(
+          500,
+          "Verification record creation failed and account cleanup needs Administrator review.",
+          "verification_record_cleanup_failed",
+        );
+      }
       throw new HttpError(
         500,
-        "Account setup failed after sending the email; administrator reconciliation is required.",
+        "The verification record could not be saved, so profile creation was rolled back and the invitation was cancelled. Please retry.",
+        "verification_record_failed",
       );
     }
+    verificationRecordId = recordId;
+  } else {
+    const { error: profileInsertError } = await serviceClient
+      .from("profiles")
+      .insert({
+        id: authInvitation.user.id,
+        email: invite.email,
+        full_name: invite.full_name,
+        role: invite.role,
+        account_status: "Pending",
+      });
+    if (profileInsertError) {
+      logFailure(requestId, "profile_insert", profileInsertError);
+      const { error: deleteUserError } = await serviceClient.auth.admin
+        .deleteUser(authInvitation.user.id);
+      if (deleteUserError) {
+        logFailure(requestId, "auth_user_compensation", deleteUserError);
+        throw new HttpError(
+          500,
+          "Account setup failed after sending the email; administrator reconciliation is required.",
+        );
+      }
 
-    const cleanup = await cancelPendingInvitation(
-      serviceClient,
-      invitation.id,
-      userId,
-    );
-    if (!cleanup.succeeded) {
-      logFailure(requestId, "cancel_failed_profile_insert", cleanup.error);
+      const cleanup = await cancelPendingInvitation(
+        serviceClient,
+        invitation.id,
+        userId,
+      );
+      if (!cleanup.succeeded) {
+        logFailure(requestId, "cancel_failed_profile_insert", cleanup.error);
+        throw new HttpError(
+          500,
+          "Account setup failed and invitation cleanup needs administrator review.",
+        );
+      }
       throw new HttpError(
-        500,
-        "Account setup failed and invitation cleanup needs administrator review.",
+        profileInsertError.code === "23505" ? 409 : 500,
+        profileInsertError.code === "23505"
+          ? "An account already exists for this email address."
+          : "The invitation email was sent, but profile setup failed. The invite was rolled back; please retry.",
       );
     }
-    throw new HttpError(
-      profileInsertError.code === "23505" ? 409 : 500,
-      profileInsertError.code === "23505"
-        ? "An account already exists for this email address."
-        : "The invitation email was sent, but profile setup failed. The invite was rolled back; please retry.",
-    );
   }
 
   return jsonResponse(201, {
@@ -372,6 +481,7 @@ async function createInvitation(
     email: invite.email,
     status: "Pending",
     expires_at: invitation.expires_at,
+    ...(verificationRecordId ? { verification_record_id: verificationRecordId } : {}),
     request_id: requestId,
   });
 }

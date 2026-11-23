@@ -26,7 +26,12 @@ function loadSupabaseRecord(rpc, clientOverrides = {}, hash = '') {
       }
     }
   };
-  vm.runInNewContext(configSource, { window: mockWindow, AbortController, URLSearchParams });
+  vm.runInNewContext(configSource, {
+    window: mockWindow,
+    AbortController,
+    URLSearchParams,
+    crypto: { randomUUID: () => '8a7fbe8e-ec7e-41f2-9fb5-b7d77fca347c' }
+  });
   return {
     record: mockWindow.supabaseRecord,
     timers,
@@ -958,6 +963,158 @@ test('inviteUser calls the Edge Function with normalized invitation fields', asy
   assert.equal(invocation.options.body.role, 'Receptionist');
   assert.equal(result.invitation_id, 'invite-1');
   assert.deepEqual(Array.from(inviteRoles), ['Manager', 'Receptionist', 'Inventory Clerk', 'Chef / Kitchen Staff']);
+});
+
+test('inviteUser forwards an optional verification record and requires its returned ID', async () => {
+  let invocation;
+  const verificationRecord = {
+    applicant_name: 'Sam Staff',
+    id_type: 'National ID',
+    id_number_masked: '****5678',
+    ocr_summary: { full_name: 'Sam Staff', dob: '1990-01-02', address: 'Test', ocr_passed: true },
+    face_match_score: 97,
+    face_match_result: 'match',
+    override_used: false,
+    override_reason: null,
+    id_image_path: 'admin/folder/id.jpg',
+    selfie_path: 'admin/folder/selfie.jpg'
+  };
+  const { record } = loadSupabaseRecord(() => ({}), {
+    functions: {
+      async invoke(name, options) {
+        invocation = { name, options };
+        return {
+          data: { invitation_id: 'invite-1', verification_record_id: 'record-1', status: 'Pending' },
+          error: null
+        };
+      }
+    }
+  });
+
+  const result = await record.inviteUser({
+    email: 'staff@example.com',
+    fullName: 'Sam Staff',
+    role: 'Manager',
+    verificationRecord
+  });
+
+  assert.equal(invocation.name, 'invite-user');
+  assert.deepEqual(JSON.parse(JSON.stringify(invocation.options.body.verification_record)), verificationRecord);
+  assert.equal(result.verification_record_id, 'record-1');
+});
+
+test('verification record loading is searchable and selects only masked ID data', async () => {
+  const query = {};
+  const row = {
+    id: 'record-1',
+    applicant_name: 'Sam Staff',
+    id_type: 'National ID',
+    id_number_masked: '****5678',
+    ocr_summary: { full_name: 'Sam Staff', dob: '', address: '', ocr_passed: true },
+    face_match_score: 97,
+    face_match_result: 'match',
+    override_used: false,
+    override_reason: null,
+    verified_by: 'admin-1',
+    verified_at: '2026-01-01T00:00:00Z',
+    role_assigned: 'Manager',
+    assigned_by: 'admin-1',
+    assigned_at: '2026-01-01T00:00:00Z',
+    invitation_id: 'invite-1',
+    profile_id: 'profile-1',
+    id_image_path: 'admin/folder/id.jpg',
+    selfie_path: 'admin/folder/selfie.jpg',
+    consent_given: false,
+    consent_at: null,
+    final_status: 'Approved',
+    created_at: '2026-01-01T00:00:00Z',
+    retention_until: '2026-04-01T00:00:00Z',
+    supersedes_id: null
+  };
+  const queryBuilder = {
+    select(columns) {
+      query.columns = columns;
+      return this;
+    },
+    order(column, options) {
+      query.order = { column, options };
+      return this;
+    },
+    limit(limit) {
+      query.limit = limit;
+      return this;
+    },
+    ilike(column, value) {
+      query.filter = { column, value };
+      return this;
+    },
+    abortSignal() {
+      return this;
+    },
+    then(resolve, reject) {
+      return Promise.resolve({ data: [row], error: null }).then(resolve, reject);
+    }
+  };
+  const { record } = loadSupabaseRecord(() => ({}), {
+    from(table) {
+      query.table = table;
+      return queryBuilder;
+    }
+  });
+
+  const records = await record.loadVerificationRecords('Sam');
+
+  assert.equal(query.table, 'verification_records');
+  assert.equal(query.filter.column, 'applicant_name');
+  assert.equal(query.filter.value, '%Sam%');
+  assert.equal(query.order.column, 'verified_at');
+  assert.equal(query.limit, 1000);
+  assert.equal(query.columns.split(',').includes('id_number'), false);
+  assert.equal(records[0].id_number_masked, '****5678');
+});
+
+test('verification evidence uploads to the private bucket and removes only actor-owned paths', async () => {
+  const uploads = [];
+  let removedPaths;
+  const actorId = '9a7fbe8e-ec7e-41f2-9fb5-b7d77fca347c';
+  const { record } = loadSupabaseRecord(() => ({}), {
+    auth: {
+      async getUser() {
+        return { data: { user: { id: actorId } }, error: null };
+      }
+    },
+    storage: {
+      from(bucket) {
+        assert.equal(bucket, 'verification-evidence');
+        return {
+          async upload(path, file, options) {
+            uploads.push({ path, file, options });
+            return { data: { path }, error: null };
+          },
+          async remove(paths) {
+            removedPaths = paths;
+            return { data: paths.map(path => ({ name: path })), error: null };
+          }
+        };
+      }
+    }
+  });
+
+  const paths = await record.uploadVerificationEvidence({
+    idImage: { size: 12, type: 'image/png' },
+    selfie: { size: 10, type: 'image/jpeg' }
+  });
+  await record.removeVerificationEvidence([paths.id_image_path, paths.selfie_path]);
+
+  assert.equal(uploads.length, 2);
+  assert.equal(uploads[0].path, `${actorId}/8a7fbe8e-ec7e-41f2-9fb5-b7d77fca347c/id.png`);
+  assert.equal(uploads[1].path, `${actorId}/8a7fbe8e-ec7e-41f2-9fb5-b7d77fca347c/selfie.jpg`);
+  assert.equal(uploads[0].options.upsert, false);
+  assert.deepEqual(removedPaths, [paths.id_image_path, paths.selfie_path]);
+  await assert.rejects(
+    record.removeVerificationEvidence(['another-admin/folder/id.jpg']),
+    /Only this Administrator/
+  );
 });
 
 test('user-management Edge Function requests abort after 15 seconds', async () => {

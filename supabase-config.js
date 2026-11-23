@@ -531,7 +531,7 @@ function invokeUserManagementFunction(body, label) {
 }
 
 window.supabaseRecord = {
-  async inviteUser({ email, fullName, role }) {
+  async inviteUser({ email, fullName, role, verificationRecord = null }) {
     if (typeof fullName !== 'string' || !fullName.trim() || fullName.trim().length > 160) {
       throw new TypeError('Full name must be between 1 and 160 characters.');
     }
@@ -541,20 +541,113 @@ window.supabaseRecord = {
     if (!INVITABLE_USER_ROLES.includes(role)) {
       throw new TypeError('A valid staff role is required.');
     }
+    const body = {
+      action: 'invite',
+      email: email.trim().toLowerCase(),
+      full_name: fullName.trim(),
+      role
+    };
+    if (verificationRecord !== null) body.verification_record = verificationRecord;
     const { data, error } = await invokeUserManagementFunction(
-      {
-        action: 'invite',
-        email: email.trim().toLowerCase(),
-        full_name: fullName.trim(),
-        role
-      },
+      body,
       'Invitation request'
     );
     if (error) await throwInvitationError(error);
-    if (!data || typeof data.invitation_id !== 'string' || data.status !== 'Pending') {
+    if (
+      !data
+      || typeof data.invitation_id !== 'string'
+      || data.status !== 'Pending'
+      || (verificationRecord !== null && typeof data.verification_record_id !== 'string')
+    ) {
       throw new Error('The invitation service returned an invalid response.');
     }
     return data;
+  },
+  async uploadVerificationEvidence({ idImage, selfie }) {
+    const allowedTypes = ['image/jpeg', 'image/png'];
+    const isValidImage = image => image
+      && typeof image.size === 'number'
+      && image.size > 0
+      && image.size <= 5 * 1024 * 1024
+      && allowedTypes.includes(image.type);
+    if (!isValidImage(idImage) || !isValidImage(selfie)) {
+      throw new TypeError('Choose valid JPG or PNG ID and selfie images under 5 MB each.');
+    }
+
+    const { data: userData, error: userError } = await window.supabaseClient.auth.getUser();
+    if (userError) throw userError;
+    const actorId = userData.user?.id;
+    const folderId = globalThis.crypto?.randomUUID?.();
+    if (!actorId || !folderId) {
+      throw new Error('A secure Administrator session is required to upload verification evidence.');
+    }
+
+    const idExtension = idImage.type === 'image/png' ? 'png' : 'jpg';
+    const paths = [
+      `${actorId}/${folderId}/id.${idExtension}`,
+      `${actorId}/${folderId}/selfie.jpg`
+    ];
+    const files = [idImage, selfie];
+    const storage = window.supabaseClient.storage.from('verification-evidence');
+    const uploaded = [];
+    try {
+      for (let index = 0; index < files.length; index += 1) {
+        const { error } = await withSaveTimeout(
+          signal => abortableRequest(
+            storage.upload(paths[index], files[index], {
+              cacheControl: '3600',
+              contentType: files[index].type,
+              upsert: false
+            }),
+            signal
+          ),
+          'Verification image upload',
+          USER_MANAGEMENT_TIMEOUT_MS
+        );
+        if (error) throw error;
+        uploaded.push(paths[index]);
+      }
+    } catch (error) {
+      if (uploaded.length) {
+        const { error: cleanupError } = await withSaveTimeout(
+          signal => abortableRequest(storage.remove(uploaded), signal),
+          'Verification image cleanup',
+          USER_MANAGEMENT_TIMEOUT_MS
+        );
+        if (cleanupError) {
+          console.error('A partial verification image upload could not be removed.', cleanupError);
+          throw new Error('A verification image upload failed and partial evidence cleanup needs Administrator review.');
+        }
+      }
+      throw new Error(`Verification images could not be uploaded securely: ${error.message || 'storage request failed'}`);
+    }
+
+    return {
+      id_image_path: paths[0],
+      selfie_path: paths[1]
+    };
+  },
+  async removeVerificationEvidence(paths) {
+    if (!Array.isArray(paths) || paths.length === 0) return;
+    const { data: userData, error: userError } = await window.supabaseClient.auth.getUser();
+    if (userError) throw userError;
+    const actorId = userData.user?.id;
+    if (!actorId || paths.some(path =>
+      typeof path !== 'string'
+      || !path.startsWith(`${actorId}/`)
+      || path.split('/').includes('..')
+    )) {
+      throw new TypeError('Only this Administrator’s verification evidence can be removed.');
+    }
+    const { error } = await withSaveTimeout(
+      signal => abortableRequest(
+        window.supabaseClient.storage.from('verification-evidence').remove(paths),
+        signal
+      ),
+      'Verification image cleanup',
+      USER_MANAGEMENT_TIMEOUT_MS
+    );
+    throwIfError(error);
   },
   async setUserAccountStatus(userId, accountStatus, reason = '') {
     if (typeof userId !== 'string' || !userId.trim()) {
@@ -645,6 +738,68 @@ window.supabaseRecord = {
       || (invite.accepted_at !== null && typeof invite.accepted_at !== 'string')
     )) {
       throw new Error('The database returned invalid invitation history.');
+    }
+    return data;
+  },
+  async loadVerificationRecords(search = '') {
+    const normalizedSearch = String(search || '').trim();
+    let query = window.supabaseClient
+      .from('verification_records')
+      .select([
+        'id',
+        'applicant_name',
+        'id_type',
+        'id_number_masked',
+        'ocr_summary',
+        'face_match_score',
+        'face_match_result',
+        'override_used',
+        'override_reason',
+        'verified_by',
+        'verified_at',
+        'role_assigned',
+        'assigned_by',
+        'assigned_at',
+        'invitation_id',
+        'profile_id',
+        'id_image_path',
+        'selfie_path',
+        'consent_given',
+        'consent_at',
+        'final_status',
+        'created_at',
+        'retention_until',
+        'supersedes_id'
+      ].join(','))
+      .order('verified_at', { ascending: false })
+      .limit(1000);
+    if (normalizedSearch) {
+      query = query.ilike('applicant_name', `%${normalizedSearch}%`);
+    }
+    const { data, error } = await withSaveTimeout(
+      signal => abortableRequest(query, signal),
+      'Verification records load',
+      USER_MANAGEMENT_TIMEOUT_MS
+    );
+    throwIfError(error);
+    if (!Array.isArray(data) || data.some(record =>
+      !record
+      || typeof record.id !== 'string'
+      || typeof record.applicant_name !== 'string'
+      || typeof record.id_type !== 'string'
+      || (record.id_number_masked !== null
+        && (typeof record.id_number_masked !== 'string'
+          || !/^\*{4}[A-Za-z0-9]{1,4}$/.test(record.id_number_masked)))
+      || !record.ocr_summary
+      || typeof record.ocr_summary !== 'object'
+      || Object.prototype.hasOwnProperty.call(record.ocr_summary, 'id_number')
+      || !['match', 'no_match', 'unable'].includes(record.face_match_result)
+      || !['Approved', 'Rejected', 'Cancelled'].includes(record.final_status)
+      || typeof record.verified_by !== 'string'
+      || typeof record.verified_at !== 'string'
+      || (record.role_assigned !== null && typeof record.role_assigned !== 'string')
+    )) {
+      throw new Error('The database returned invalid verification records.');
     }
     return data;
   },
