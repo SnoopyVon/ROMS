@@ -583,6 +583,21 @@ test('enforces role actions and validates signed ledger movements', () => {
   }).cost, 20);
 });
 
+test('allows closing an overnight shift by its receptionist or any manager/admin', () => {
+  const overnightShift = {
+    status: 'Open',
+    openedBy: 'cashier-1',
+    openedAt: '2026-11-22T01:17:00.000Z'
+  };
+
+  assert.equal(logic.canCloseShift(overnightShift, 'Receptionist', 'cashier-1'), true);
+  assert.equal(logic.canCloseShift(overnightShift, 'Receptionist', 'cashier-2'), false);
+  assert.equal(logic.canCloseShift(overnightShift, 'Manager', 'manager-1'), true);
+  assert.equal(logic.canCloseShift(overnightShift, 'Administrator', 'admin-1'), true);
+  assert.equal(logic.canCloseShift({ ...overnightShift, status: 'Closed' }, 'Manager', 'manager-1'), false);
+  assert.equal(logic.canCloseShift(overnightShift, 'Inventory Clerk', 'staff-1'), false);
+});
+
 test('limits two-hour reservation windows to restaurant hours and generates half-hour slots', () => {
   assert.equal(logic.isReservationTimeWithinOpenHours('10:00 AM'), true);
   assert.equal(logic.isReservationTimeWithinOpenHours('7:00 PM'), true);

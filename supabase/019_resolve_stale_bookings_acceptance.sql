@@ -1,5 +1,5 @@
 -- Acceptance checks for Phase D1 stale-booking resolution.
--- Run as the database owner after migrations 013 through 019.
+-- Run as the database owner after migrations 013 through 019 and 044.
 -- Test data and cash movements are rolled back; the Manila business-day rule stays enabled.
 
 begin;
@@ -475,6 +475,9 @@ begin
     raise exception 'FAIL: No-show did not settle the deposit and free the table.';
   end if;
 
+  update public.restaurant_tables
+  set status = 'Needs cleaning'
+  where id = cancel_table_id;
   result := public.pos_resolve_stale_booking(
     cancel_id, 'cancel', 'Manager confirmed the past booking was cancelled.',
     false, null, null, gen_random_uuid()::text
@@ -483,8 +486,9 @@ begin
   select t.status into table_status from public.restaurant_tables t where t.id = cancel_table_id;
   if result->>'status' <> 'Cancelled'
      or reservation_status <> 'Cancelled'
-     or table_status <> 'Available' then
-    raise exception 'FAIL: Cancelled booking did not free its table.';
+     or result->>'table_status' <> 'Needs cleaning'
+     or table_status <> 'Needs cleaning' then
+    raise exception 'FAIL: Cancelled booking did not resolve while preserving the table cleaning state.';
   end if;
 
   begin
