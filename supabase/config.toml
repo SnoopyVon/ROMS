@@ -1,2 +1,5 @@
 [functions.send-reservation-email]
 verify_jwt = false
+
+[functions.face-login]
+verify_jwt = false

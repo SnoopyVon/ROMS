@@ -9,6 +9,11 @@ const INVITABLE_USER_ROLES = Object.freeze([
   'Chef / Kitchen Staff'
 ]);
 window.costTrackInviteRoles = INVITABLE_USER_ROLES;
+const VERIFIED_ACCOUNT_ROLES = Object.freeze([
+  'Administrator',
+  ...INVITABLE_USER_ROLES
+]);
+window.costTrackCreateAccountRoles = VERIFIED_ACCOUNT_ROLES;
 
 window.costTrackInviteLink = Boolean(
   window.location
@@ -483,8 +488,8 @@ function throwIfError(error) {
   if (error) throw new Error(error.message || 'The database operation failed.');
 }
 
-async function throwInvitationError(error) {
-  let message = error.message || 'The invitation could not be sent.';
+async function throwInvitationError(error, fallbackMessage = 'The invitation could not be sent.') {
+  let message = error.message || fallbackMessage;
   let code = '';
   if (error.context && typeof error.context.clone === 'function') {
     try {
@@ -493,7 +498,7 @@ async function throwInvitationError(error) {
       else if (typeof responseBody?.error === 'string') message = responseBody.error;
       if (typeof responseBody?.code === 'string') code = responseBody.code;
     } catch {
-      message = error.message || 'The invitation could not be sent.';
+      message = error.message || fallbackMessage;
     }
   }
   const surfacedError = new Error(message);
@@ -531,6 +536,31 @@ function invokeUserManagementFunction(body, label) {
 }
 
 window.supabaseRecord = {
+  async faceLogin(descriptor) {
+    if (
+      !Array.isArray(descriptor)
+      || descriptor.length !== 128
+      || descriptor.some(value => typeof value !== 'number' || !Number.isFinite(value) || value < -1 || value > 1)
+    ) {
+      throw new TypeError('A valid face scan is required.');
+    }
+    const { data, error } = await withSaveTimeout(
+      signal => window.supabaseClient.functions.invoke('face-login', {
+        body: { descriptor },
+        signal
+      }),
+      'Face sign-in',
+      USER_MANAGEMENT_TIMEOUT_MS
+    );
+    if (error?.name === 'FunctionsFetchError') {
+      throw new Error('Could not reach the face sign-in service. Check your connection and confirm the face-login Edge Function is deployed with JWT verification disabled.');
+    }
+    if (error) await throwInvitationError(error, 'Face sign-in failed. Use your password instead.');
+    if (!data || typeof data.token_hash !== 'string' || data.token_hash.length < 20 || data.token_hash.length > 256) {
+      throw new Error('The face sign-in service returned an invalid response.');
+    }
+    return { tokenHash: data.token_hash };
+  },
   async inviteUser({ email, fullName, role, verificationRecord = null }) {
     if (typeof fullName !== 'string' || !fullName.trim() || fullName.trim().length > 160) {
       throw new TypeError('Full name must be between 1 and 160 characters.');
@@ -560,6 +590,41 @@ window.supabaseRecord = {
       || (verificationRecord !== null && typeof data.verification_record_id !== 'string')
     ) {
       throw new Error('The invitation service returned an invalid response.');
+    }
+    return data;
+  },
+  async createUserAccount({ email, fullName, role, password, verificationRecord }) {
+    if (typeof fullName !== 'string' || !fullName.trim() || fullName.trim().length > 160) {
+      throw new TypeError('Full name must be between 1 and 160 characters.');
+    }
+    if (typeof email !== 'string' || !email.trim()) {
+      throw new TypeError('A valid email address is required.');
+    }
+    if (!VERIFIED_ACCOUNT_ROLES.includes(role)) {
+      throw new TypeError('A valid staff role is required.');
+    }
+    if (typeof password !== 'string' || password.length < 8 || password.length > 72) {
+      throw new TypeError('Password must be between 8 and 72 characters.');
+    }
+    if (!verificationRecord || typeof verificationRecord !== 'object') {
+      throw new TypeError('Successful ID and face verification is required.');
+    }
+    const { data, error } = await invokeUserManagementFunction({
+      action: 'create_account',
+      email: email.trim().toLowerCase(),
+      full_name: fullName.trim(),
+      role,
+      password,
+      verification_record: verificationRecord
+    }, 'Account creation');
+    if (error) await throwInvitationError(error);
+    if (
+      !data
+      || typeof data.profile_id !== 'string'
+      || typeof data.verification_record_id !== 'string'
+      || data.status !== 'Active'
+    ) {
+      throw new Error('The account service returned an invalid response.');
     }
     return data;
   },
@@ -673,6 +738,20 @@ window.supabaseRecord = {
     }
     return data;
   },
+  async removeUserAccount(userId) {
+    if (typeof userId !== 'string' || !userId.trim()) {
+      throw new TypeError('A user account is required.');
+    }
+    const { data, error } = await invokeUserManagementFunction(
+      { action: 'remove_user', user_id: userId },
+      'Account removal'
+    );
+    if (error) await throwInvitationError(error);
+    if (!data || data.user_id !== userId || data.status !== 'Removed' || data.auth_removed !== true) {
+      throw new Error('The account management service returned an invalid removal response.');
+    }
+    return data;
+  },
   async resendUserInvitation(invitationId) {
     if (typeof invitationId !== 'string' || !invitationId.trim()) {
       throw new TypeError('An invitation is required.');
@@ -751,6 +830,7 @@ window.supabaseRecord = {
         'id_type',
         'id_number_masked',
         'ocr_summary',
+        'face_scan_passed',
         'face_match_score',
         'face_match_result',
         'override_used',
@@ -793,7 +873,8 @@ window.supabaseRecord = {
       || !record.ocr_summary
       || typeof record.ocr_summary !== 'object'
       || Object.prototype.hasOwnProperty.call(record.ocr_summary, 'id_number')
-      || !['match', 'no_match', 'unable'].includes(record.face_match_result)
+      || (record.face_scan_passed !== null && typeof record.face_scan_passed !== 'boolean')
+      || !['match', 'manual_review', 'no_match', 'unable'].includes(record.face_match_result)
       || !['Approved', 'Rejected', 'Cancelled'].includes(record.final_status)
       || typeof record.verified_by !== 'string'
       || typeof record.verified_at !== 'string'

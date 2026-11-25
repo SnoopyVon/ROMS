@@ -13,6 +13,34 @@ export const INVITABLE_ROLES = STAFF_ROLES.filter(
 );
 export type InvitableRole = typeof INVITABLE_ROLES[number];
 
+const SUPPORTED_USER_ACTIONS = new Set([
+  "invite",
+  "create_account",
+  "resend",
+  "accept",
+  "cancel",
+  "deactivate",
+  "reactivate",
+  "remove_user",
+]);
+const ADMIN_USER_ACTIONS = new Set([
+  "invite",
+  "create_account",
+  "resend",
+  "cancel",
+  "deactivate",
+  "reactivate",
+  "remove_user",
+]);
+
+export function isSupportedUserAction(action: unknown): boolean {
+  return typeof action === "string" && SUPPORTED_USER_ACTIONS.has(action);
+}
+
+export function requiresAdministratorForUserAction(action: unknown): boolean {
+  return typeof action === "string" && ADMIN_USER_ACTIONS.has(action);
+}
+
 export class InviteValidationError extends Error {}
 
 const EMAIL_PATTERN =
@@ -27,10 +55,13 @@ const VERIFICATION_RECORD_FIELDS = new Set([
   "ocr_summary",
   "face_match_score",
   "face_match_result",
+  "face_scan_passed",
   "override_used",
   "override_reason",
   "id_image_path",
   "selfie_path",
+  "consent_given",
+  "face_descriptor",
 ]);
 const OCR_SUMMARY_FIELDS = new Set([
   "full_name",
@@ -47,6 +78,12 @@ export interface InvitePayload {
   role: InvitableRole;
 }
 
+export interface CreateAccountPayload {
+  email: string;
+  full_name: string;
+  role: StaffRole;
+}
+
 export interface VerificationRecordPayload {
   applicant_name: string;
   id_type: string;
@@ -57,21 +94,19 @@ export interface VerificationRecordPayload {
     address: string;
     ocr_passed: boolean;
   };
+  face_scan_passed?: boolean;
   face_match_score: number | null;
-  face_match_result: "match" | "no_match" | "unable";
+  face_match_result: "match" | "manual_review" | "no_match" | "unable";
   override_used: boolean;
   override_reason: string | null;
   id_image_path: string;
   selfie_path: string;
+  consent_given: true;
+  face_descriptor?: number[] | null;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function isInvitableRole(value: unknown): value is InvitableRole {
-  return typeof value === "string" &&
-    INVITABLE_ROLES.some((role) => role === value);
 }
 
 export function normalizeAndValidateEmail(value: unknown): string {
@@ -94,14 +129,18 @@ export function normalizeAndValidateEmail(value: unknown): string {
   return email;
 }
 
-export function parseInvitePayload(value: unknown): InvitePayload {
+function parseAccountPayload<T extends StaffRole>(
+  value: unknown,
+  allowedRoles: readonly T[],
+  subject: "invitation" | "account",
+): { email: string; full_name: string; role: T } {
   if (!isRecord(value)) {
-    throw new InviteValidationError("A JSON invitation object is required.");
+    throw new InviteValidationError(`A JSON ${subject} object is required.`);
   }
 
   if (Object.keys(value).some((key) => !INVITE_FIELDS.has(key))) {
     throw new InviteValidationError(
-      "The invitation contains unsupported fields.",
+      `The ${subject} contains unsupported fields.`,
     );
   }
 
@@ -118,11 +157,20 @@ export function parseInvitePayload(value: unknown): InvitePayload {
     );
   }
 
-  if (!isInvitableRole(value.role)) {
+  const role = allowedRoles.find((allowedRole) => allowedRole === value.role);
+  if (!role) {
     throw new InviteValidationError("A valid staff role is required.");
   }
 
-  return { email, full_name: fullName, role: value.role };
+  return { email, full_name: fullName, role };
+}
+
+export function parseInvitePayload(value: unknown): InvitePayload {
+  return parseAccountPayload(value, INVITABLE_ROLES, "invitation");
+}
+
+export function parseCreateAccountPayload(value: unknown): CreateAccountPayload {
+  return parseAccountPayload(value, STAFF_ROLES, "account");
 }
 
 export function parseVerificationRecordPayload(
@@ -149,6 +197,33 @@ export function parseVerificationRecordPayload(
   }
   if (idType.length < 1 || idType.length > 100) {
     throw new InviteValidationError("A valid ID type is required.");
+  }
+  if (value.consent_given !== true) {
+    throw new InviteValidationError(
+      "The applicant's consent is required for ID verification.",
+    );
+  }
+
+  let faceDescriptor: number[] | null | undefined;
+  if (value.face_descriptor === undefined) {
+    faceDescriptor = undefined;
+  } else if (value.face_descriptor === null) {
+    faceDescriptor = null;
+  } else if (
+    Array.isArray(value.face_descriptor) &&
+    value.face_descriptor.length === 128 &&
+    value.face_descriptor.every((item) =>
+      typeof item === "number" &&
+      Number.isFinite(item) &&
+      item >= -1 &&
+      item <= 1
+    )
+  ) {
+    faceDescriptor = value.face_descriptor;
+  } else {
+    throw new InviteValidationError(
+      "A face login template must contain 128 valid descriptor values.",
+    );
   }
 
   let maskedId: string | null;
@@ -179,6 +254,13 @@ export function parseVerificationRecordPayload(
   if (typeof ocrSummary.ocr_passed !== "boolean") {
     throw new InviteValidationError("OCR completion status is required.");
   }
+  if (
+    value.face_scan_passed !== undefined &&
+    typeof value.face_scan_passed !== "boolean"
+  ) {
+    throw new InviteValidationError("Face-scan completion status is invalid.");
+  }
+  const faceScanPassed = value.face_scan_passed === true;
   const ocrText = (key: "full_name" | "dob" | "address", maxLength: number) => {
     const text = ocrSummary[key] === undefined ? "" : ocrSummary[key];
     if (
@@ -194,6 +276,7 @@ export function parseVerificationRecordPayload(
   const faceMatchResult = value.face_match_result;
   if (
     faceMatchResult !== "match" &&
+    faceMatchResult !== "manual_review" &&
     faceMatchResult !== "no_match" &&
     faceMatchResult !== "unable"
   ) {
@@ -212,9 +295,26 @@ export function parseVerificationRecordPayload(
   } else {
     throw new InviteValidationError("The face-match score is invalid.");
   }
-  if (faceMatchResult === "match" && faceMatchScore === null) {
-    throw new InviteValidationError("A match result requires its score.");
+  if (
+    (faceMatchResult === "match" &&
+      (faceMatchScore === null || faceMatchScore < 85)) ||
+    (faceMatchResult === "manual_review" &&
+      (faceMatchScore === null || faceMatchScore < 70 || faceMatchScore >= 85)) ||
+    (faceMatchResult === "no_match" &&
+      (faceMatchScore === null || faceMatchScore >= 70)) ||
+    (faceMatchResult === "unable" && faceMatchScore !== null)
+  ) {
+    throw new InviteValidationError(
+      "The face result does not match its similarity score.",
+    );
   }
+  if (faceMatchResult === "no_match") {
+    throw new InviteValidationError(
+      "The face similarity is below the required verification range.",
+    );
+  }
+  const faceCheckPassed = faceMatchResult === "match" ||
+    (faceMatchResult === "unable" && faceScanPassed);
 
   if (typeof value.override_used !== "boolean") {
     throw new InviteValidationError("Manual override status is required.");
@@ -239,11 +339,19 @@ export function parseVerificationRecordPayload(
     normalizedOverrideReason = null;
   }
   if (
-    (!ocrSummary.ocr_passed || faceMatchResult !== "match") &&
+    (!ocrSummary.ocr_passed || !faceCheckPassed) &&
     !value.override_used
   ) {
     throw new InviteValidationError(
       "Manual review requires an Administrator override reason.",
+    );
+  }
+  if (
+    faceDescriptor &&
+    (!ocrSummary.ocr_passed || !faceCheckPassed || value.override_used)
+  ) {
+    throw new InviteValidationError(
+      "A face login template requires successful identity checks without an override.",
     );
   }
 
@@ -282,11 +390,57 @@ export function parseVerificationRecordPayload(
       address: ocrText("address", 1000),
       ocr_passed: ocrSummary.ocr_passed,
     },
+    ...(value.face_scan_passed === undefined
+      ? {}
+      : { face_scan_passed: faceScanPassed }),
     face_match_score: faceMatchScore,
     face_match_result: faceMatchResult,
     override_used: value.override_used,
     override_reason: normalizedOverrideReason,
     id_image_path: idImagePath,
     selfie_path: selfiePath,
+    consent_given: true,
+    ...(faceDescriptor === undefined ? {} : { face_descriptor: faceDescriptor }),
   };
+}
+
+export function parseAccountPassword(value: unknown): string {
+  if (typeof value !== "string" || value.length < 8 || value.length > 72) {
+    throw new InviteValidationError(
+      "Password must be between 8 and 72 characters.",
+    );
+  }
+  return value;
+}
+
+export function parseVerifiedAccountRecord(
+  value: unknown,
+  actorId: string,
+): VerificationRecordPayload {
+  const record = parseVerificationRecordPayload(value, actorId);
+  const facePassed = record.face_match_result === "match" &&
+    record.face_match_score !== null &&
+    record.face_match_score >= 85;
+  const faceNeedsReview = record.face_match_result === "manual_review" &&
+    record.face_match_score !== null &&
+    record.face_match_score >= 70 &&
+    record.face_match_score < 85 &&
+    record.override_used;
+  if (record.face_scan_passed !== true || (!facePassed && !faceNeedsReview)) {
+    throw new InviteValidationError(
+      "The face scan must pass or be approved for manual review before creating this account.",
+    );
+  }
+  if (
+    record.override_used
+      ? (record.ocr_summary.ocr_passed &&
+        record.face_match_result !== "manual_review") ||
+        record.face_descriptor != null
+      : !record.ocr_summary.ocr_passed || !record.face_descriptor
+  ) {
+    throw new InviteValidationError(
+      "Manual review requires a reason and cannot approve a failed face comparison.",
+    );
+  }
+  return record;
 }

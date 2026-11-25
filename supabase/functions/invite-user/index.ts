@@ -2,8 +2,13 @@ import { createClient } from "npm:@supabase/supabase-js@2";
 import {
   InviteValidationError,
   normalizeAndValidateEmail,
+  parseAccountPassword,
+  parseCreateAccountPayload,
   parseInvitePayload,
+  parseVerifiedAccountRecord,
   parseVerificationRecordPayload,
+  isSupportedUserAction,
+  requiresAdministratorForUserAction,
 } from "./validation.ts";
 
 const CORS_HEADERS = {
@@ -356,6 +361,60 @@ async function createInvitation(
     );
   }
 
+  if (verificationRecord?.face_descriptor) {
+    const { error: faceTemplateError } = await serviceClient
+      .from("user_face_templates")
+      .insert({
+        user_id: authInvitation.user.id,
+        descriptor: verificationRecord.face_descriptor,
+      });
+    if (faceTemplateError) {
+      logFailure(requestId, "face_template_insert", faceTemplateError);
+      const { error: deleteUserError } = await serviceClient.auth.admin
+        .deleteUser(authInvitation.user.id);
+      if (deleteUserError) {
+        logFailure(requestId, "face_template_auth_compensation", deleteUserError);
+      }
+      const invitationCleanup = await cancelPendingInvitation(
+        serviceClient,
+        invitation.id,
+        userId,
+      );
+      if (!invitationCleanup.succeeded) {
+        logFailure(
+          requestId,
+          "face_template_invitation_compensation",
+          invitationCleanup.error,
+        );
+      }
+      const { error: evidenceCleanupError } = await serviceClient.storage
+        .from("verification-evidence")
+        .remove([
+          verificationRecord.id_image_path,
+          verificationRecord.selfie_path,
+        ]);
+      if (evidenceCleanupError) {
+        logFailure(
+          requestId,
+          "face_template_evidence_compensation",
+          evidenceCleanupError,
+        );
+      }
+      if (deleteUserError || !invitationCleanup.succeeded || evidenceCleanupError) {
+        throw new HttpError(
+          500,
+          "Face enrollment failed and user cleanup needs Administrator review.",
+          "face_template_cleanup_failed",
+        );
+      }
+      throw new HttpError(
+        500,
+        "Face enrollment failed, so profile creation was rolled back and the invitation was cancelled. Please retry.",
+        "face_template_failed",
+      );
+    }
+  }
+
   let verificationRecordId: string | null = null;
   if (verificationRecord) {
     const { data: recordId, error: recordError } = await serviceClient.rpc(
@@ -370,15 +429,20 @@ async function createInvitation(
         p_applicant_name: verificationRecord.applicant_name,
         p_id_type: verificationRecord.id_type,
         p_id_number_masked: verificationRecord.id_number_masked,
-        p_ocr_summary: verificationRecord.ocr_summary,
+        p_ocr_summary: verificationRecord.face_scan_passed === undefined
+          ? verificationRecord.ocr_summary
+          : {
+            ...verificationRecord.ocr_summary,
+            face_scan_passed: verificationRecord.face_scan_passed,
+          },
         p_face_match_score: verificationRecord.face_match_score,
         p_face_match_result: verificationRecord.face_match_result,
         p_override_used: verificationRecord.override_used,
         p_override_reason: verificationRecord.override_reason,
         p_id_image_path: verificationRecord.id_image_path,
         p_selfie_path: verificationRecord.selfie_path,
-        p_consent_given: false,
-        p_consent_at: null,
+        p_consent_given: verificationRecord.consent_given,
+        p_consent_at: new Date().toISOString(),
         p_final_status: "Approved",
         p_supersedes_id: null,
       },
@@ -482,6 +546,158 @@ async function createInvitation(
     status: "Pending",
     expires_at: invitation.expires_at,
     ...(verificationRecordId ? { verification_record_id: verificationRecordId } : {}),
+    request_id: requestId,
+  });
+}
+
+async function createUserAccount(
+  requestId: string,
+  body: JsonRecord,
+  actorId: string,
+  serviceClient: ReturnType<typeof createServiceClient>,
+): Promise<Response> {
+  const allowedFields = new Set([
+    "action",
+    "email",
+    "full_name",
+    "role",
+    "password",
+    "verification_record",
+  ]);
+  if (Object.keys(body).some((key) => !allowedFields.has(key))) {
+    throw new HttpError(400, "The account request contains unsupported fields.");
+  }
+
+  let account: ReturnType<typeof parseCreateAccountPayload>;
+  try {
+    account = parseCreateAccountPayload({
+      email: body.email,
+      full_name: body.full_name,
+      role: body.role,
+    });
+  } catch (error) {
+    if (error instanceof InviteValidationError) {
+      throw new HttpError(400, error.message, "invalid_account");
+    }
+    throw error;
+  }
+
+  let password: string;
+  try {
+    password = parseAccountPassword(body.password);
+  } catch (error) {
+    if (error instanceof InviteValidationError) {
+      throw new HttpError(400, error.message, "invalid_account");
+    }
+    throw error;
+  }
+
+  let verificationRecord: ReturnType<typeof parseVerificationRecordPayload>;
+  try {
+    verificationRecord = parseVerifiedAccountRecord(
+      body.verification_record,
+      actorId,
+    );
+  } catch (error) {
+    if (error instanceof InviteValidationError) {
+      throw new HttpError(400, error.message, "invalid_verification_record");
+    }
+    throw error;
+  }
+  if (verificationRecord.applicant_name !== account.full_name ||
+    verificationRecord.ocr_summary.full_name !== account.full_name) {
+    throw new HttpError(
+      400,
+      "ID details and the face match must pass before creating this account.",
+      "verification_required",
+    );
+  }
+
+  const escapedEmail = account.email.replace(/[%_\\]/g, "\\$&");
+  const { data: existingProfile, error: profileLookupError } = await serviceClient
+    .from("profiles")
+    .select("id")
+    .ilike("email", escapedEmail)
+    .limit(1)
+    .maybeSingle();
+  if (profileLookupError) {
+    logFailure(requestId, "account_profile_lookup", profileLookupError);
+    throw new HttpError(500, "Could not check whether this email already has an account.");
+  }
+  if (existingProfile) {
+    throw new HttpError(409, "An account already exists for this email address.", "already_registered");
+  }
+
+  const { data: authData, error: authError } = await serviceClient.auth.admin
+    .createUser({
+      email: account.email,
+      password,
+      email_confirm: true,
+      user_metadata: { full_name: account.full_name },
+    });
+  if (authError || !authData.user) {
+    logFailure(requestId, "account_auth_create", authError ?? new Error("No Auth user returned."));
+    if (authError?.status === 422) {
+      throw new HttpError(409, "An account already exists for this email address.", "already_registered");
+    }
+    if (authError?.status === 429) {
+      throw new HttpError(429, "Too many account requests. Try again later.", "rate_limited");
+    }
+    throw new HttpError(502, "The sign-in account could not be created.");
+  }
+
+  const authUserId = authData.user.id;
+  const removeAuthUser = async (operation: string): Promise<boolean> => {
+    const { error } = await serviceClient.auth.admin.deleteUser(authUserId);
+    if (!error) return true;
+    logFailure(requestId, operation, error);
+    return false;
+  };
+
+  if (verificationRecord.face_descriptor) {
+    const { error: templateError } = await serviceClient
+      .from("user_face_templates")
+      .insert({
+        user_id: authUserId,
+        descriptor: verificationRecord.face_descriptor,
+      });
+    if (templateError) {
+      logFailure(requestId, "account_face_template", templateError);
+      if (!await removeAuthUser("account_face_template_auth_compensation")) {
+        throw new HttpError(500, "Face sign-in setup failed and the new account needs Administrator review.");
+      }
+      throw new HttpError(500, "Face sign-in setup failed. The account was not created.");
+    }
+  }
+
+  const { data: verificationRecordId, error: accountRpcError } =
+    await serviceClient.rpc("costtrack_create_verified_user_account", {
+      p_actor_id: actorId,
+      p_profile_id: authUserId,
+      p_email: account.email,
+      p_full_name: account.full_name,
+      p_role: account.role,
+      p_verification_record: verificationRecord,
+    });
+  if (accountRpcError || typeof verificationRecordId !== "string") {
+    logFailure(requestId, "account_profile_verification_create", accountRpcError ?? new Error("No verification record returned."));
+    if (!await removeAuthUser("account_create_auth_compensation")) {
+      throw new HttpError(500, "Account setup failed and the new sign-in account needs Administrator review.");
+    }
+    throw new HttpError(
+      accountRpcError?.code === "23505" ? 409 : 500,
+      accountRpcError?.code === "23505"
+        ? "An account already exists for this email address."
+        : "The account and verification record could not be saved.",
+      accountRpcError?.code === "23505" ? "already_registered" : "account_setup_failed",
+    );
+  }
+
+  return jsonResponse(201, {
+    profile_id: authUserId,
+    verification_record_id: verificationRecordId,
+    email: account.email,
+    status: "Active",
     request_id: requestId,
   });
 }
@@ -860,6 +1076,152 @@ async function setUserAccountStatus(
   });
 }
 
+async function removeUserAccount(
+  requestId: string,
+  body: JsonRecord,
+  actorId: string,
+  serviceClient: ReturnType<typeof createServiceClient>,
+): Promise<Response> {
+  const allowedFields = new Set(["action", "user_id"]);
+  if (Object.keys(body).some((key) => !allowedFields.has(key))) {
+    throw new HttpError(400, "The account removal request contains unsupported fields.");
+  }
+  const userId = requireUuid(body.user_id, "User ID");
+  if (userId === actorId) {
+    throw new HttpError(403, "Administrators cannot remove their own account.");
+  }
+
+  const { data: profile, error: profileError } = await serviceClient
+    .from("profiles")
+    .select("id,role,account_status")
+    .eq("id", userId)
+    .maybeSingle();
+  if (profileError) {
+    logFailure(requestId, "remove_profile_lookup", profileError);
+    throw new HttpError(500, "Could not load the target staff account.");
+  }
+  if (
+    profile &&
+    !["Active", "Deactivated"].includes(profile.account_status)
+  ) {
+    throw new HttpError(409, "Only active or deactivated staff accounts can be removed.");
+  }
+
+  const { data: authResult, error: authLookupError } = await serviceClient
+    .auth.admin.getUserById(userId);
+  const authUserMissing = authLookupError?.status === 404;
+  if (authLookupError && !authUserMissing) {
+    logFailure(requestId, "remove_auth_lookup", authLookupError);
+    throw new HttpError(502, "Supabase Auth could not verify this account.");
+  }
+  if (profile && (authUserMissing || !authResult.user)) {
+    logFailure(requestId, "remove_auth_lookup", authLookupError ?? "Auth user missing for existing profile");
+    throw new HttpError(502, "The profile exists but its Supabase Auth account could not be verified.");
+  }
+
+  if (!profile && (authUserMissing || !authResult.user)) {
+    return jsonResponse(200, {
+      user_id: userId,
+      status: "Removed",
+      auth_removed: true,
+      request_id: requestId,
+    });
+  }
+
+  const { error: banError } = await serviceClient.auth.admin.updateUserById(
+    userId,
+    { ban_duration: "876000h" },
+  );
+  if (banError) {
+    logFailure(requestId, "remove_auth_block", banError);
+    throw new HttpError(502, "Supabase Auth could not block this account before removal.");
+  }
+
+  if (profile) {
+    const { error: authorizationError } = await serviceClient.rpc(
+      "costtrack_prepare_user_removal",
+      { p_user_id: userId, p_actor_id: actorId },
+    );
+    if (authorizationError) {
+      logFailure(requestId, "authorize_profile_removal", authorizationError);
+      if (profile.account_status === "Active") {
+        const { error: restoreError } = await serviceClient.auth.admin
+          .updateUserById(userId, { ban_duration: "none" });
+        if (restoreError) {
+          logFailure(requestId, "remove_auth_compensation", restoreError);
+          throw new HttpError(
+            500,
+            "Account removal failed and the active account could not be restored. An Administrator must review it immediately.",
+          );
+        }
+      }
+      throw new HttpError(
+        authorizationError.code === "23514" || authorizationError.code === "55000"
+          ? 409
+          : authorizationError.code === "42501"
+          ? 403
+          : authorizationError.code === "22023"
+          ? 400
+          : 500,
+        authorizationError.code === "23514" || authorizationError.code === "55000"
+          ? "The last active Administrator cannot be removed."
+          : authorizationError.code === "42501"
+          ? authorizationError.message
+          : authorizationError.code === "22023"
+          ? authorizationError.message
+          : "The staff account could not be prepared for removal.",
+        authorizationError.code === "42501"
+          ? "not_authorized"
+          : authorizationError.code === "23514" || authorizationError.code === "55000"
+          ? "protected_account"
+          : "server_error",
+      );
+    }
+  }
+
+  const { error: authRemovalError } = await serviceClient.auth.admin.deleteUser(userId);
+  if (authRemovalError) {
+    const { data: remainingAuth, error: verifyError } = await serviceClient.auth.admin
+      .getUserById(userId);
+    if (verifyError?.status === 404 || (!verifyError && !remainingAuth.user)) {
+      return jsonResponse(200, {
+        user_id: userId,
+        status: "Removed",
+        auth_removed: true,
+        request_id: requestId,
+      });
+    }
+    let accountRemainsBlocked = true;
+    if (!verifyError && remainingAuth.user && profile?.account_status === "Active") {
+      const { error: restoreError } = await serviceClient.auth.admin
+        .updateUserById(userId, { ban_duration: "none" });
+      if (restoreError) {
+        logFailure(requestId, "remove_auth_compensation", restoreError);
+        throw new HttpError(
+          500,
+          "Account removal failed and the active account could not be restored. An Administrator must review it immediately.",
+        );
+      }
+      accountRemainsBlocked = false;
+    }
+    logFailure(requestId, "remove_auth_user", authRemovalError);
+    if (verifyError) logFailure(requestId, "verify_auth_removal", verifyError);
+    throw new HttpError(
+      502,
+      accountRemainsBlocked
+        ? "Supabase Auth could not complete account removal. The account remains blocked; retry Remove or contact an Administrator."
+        : "Supabase Auth could not complete account removal. The account remains in the staff list and sign-in was restored; retry Remove.",
+    );
+  }
+
+  return jsonResponse(200, {
+    user_id: userId,
+    status: "Removed",
+    auth_removed: true,
+    request_id: requestId,
+  });
+}
+
 async function cancelInvitation(
   requestId: string,
   body: JsonRecord,
@@ -1081,15 +1443,8 @@ async function handleRequest(request: Request): Promise<Response> {
     }
     const body = getObject(parsedBody);
 
-    const adminActions = new Set([
-      "invite",
-      "resend",
-      "cancel",
-      "deactivate",
-      "reactivate",
-    ]);
     if (
-      adminActions.has(String(body.action)) &&
+      requiresAdministratorForUserAction(body.action) &&
       (
         callerProfile?.role !== "Administrator" ||
         callerProfile.account_status !== "Active"
@@ -1101,16 +1456,7 @@ async function handleRequest(request: Request): Promise<Response> {
         "not_administrator",
       );
     }
-    if (
-      ![
-        "invite",
-        "resend",
-        "accept",
-        "cancel",
-        "deactivate",
-        "reactivate",
-      ].includes(String(body.action))
-    ) {
+    if (!isSupportedUserAction(body.action)) {
       throw new HttpError(400, "A supported invitation or account action is required.");
     }
 
@@ -1126,6 +1472,15 @@ async function handleRequest(request: Request): Promise<Response> {
         userData.user.id,
         serviceClient,
         getRedirectUrl(),
+      );
+    }
+
+    if (body.action === "create_account") {
+      return await createUserAccount(
+        requestId,
+        body,
+        userData.user.id,
+        serviceClient,
       );
     }
 
@@ -1160,6 +1515,14 @@ async function handleRequest(request: Request): Promise<Response> {
         requestId,
         body,
         body.action,
+        userData.user.id,
+        serviceClient,
+      );
+    }
+    if (body.action === "remove_user") {
+      return await removeUserAccount(
+        requestId,
+        body,
         userData.user.id,
         serviceClient,
       );

@@ -3,7 +3,8 @@
   const ID_IMAGE_MIME_TYPES = {
     jpg: ['image/jpeg', 'image/jpg'],
     jpeg: ['image/jpeg', 'image/jpg'],
-    png: ['image/png']
+    png: ['image/png'],
+    webp: ['image/webp']
   };
   const INVENTORY_ACTION_ROLES = {
     'product.read': ['Administrator', 'Manager', 'Inventory Clerk', 'Chef / Kitchen Staff'],
@@ -71,10 +72,10 @@
     const extension = file.name.split('.').pop().toLowerCase();
     const acceptedMimeTypes = ID_IMAGE_MIME_TYPES[extension];
     if (!acceptedMimeTypes || (file.type && !acceptedMimeTypes.includes(file.type.toLowerCase()))) {
-      return { ok: false, message: 'Unsupported file type. Choose a JPG, JPEG, or PNG image.' };
+      return { ok: false, message: 'Unsupported file type. Choose a JPG, JPEG, PNG, or WEBP image.' };
     }
     if (!Number.isFinite(file.size) || file.size < 0) {
-      return { ok: false, message: 'Unable to preview image. Choose a valid JPG, JPEG, or PNG image.' };
+      return { ok: false, message: 'Unable to preview image. Choose a valid JPG, JPEG, PNG, or WEBP image.' };
     }
     if (file.size > ID_IMAGE_MAX_BYTES) {
       return { ok: false, message: 'File exceeds the 5 MB maximum size.' };

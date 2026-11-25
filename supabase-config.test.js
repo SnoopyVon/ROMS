@@ -36,7 +36,8 @@ function loadSupabaseRecord(rpc, clientOverrides = {}, hash = '') {
     record: mockWindow.supabaseRecord,
     timers,
     inviteLink: mockWindow.costTrackInviteLink,
-    inviteRoles: mockWindow.costTrackInviteRoles
+    inviteRoles: mockWindow.costTrackInviteRoles,
+    accountRoles: mockWindow.costTrackCreateAccountRoles
   };
 }
 
@@ -48,6 +49,47 @@ test('captures an Auth invitation link before the Supabase client consumes its U
   );
   assert.equal(inviteLink, true);
   assert.equal(loadSupabaseRecord(() => ({}), {}, '#type=recovery').inviteLink, false);
+});
+
+test('creates an active account only through the verified account service', async () => {
+  let request;
+  const { record, accountRoles } = loadSupabaseRecord(() => ({}), {
+    functions: {
+      async invoke(name, options) {
+        request = { name, body: options.body };
+        return {
+          data: {
+            profile_id: 'profile-1',
+            verification_record_id: 'verification-1',
+            status: 'Active'
+          },
+          error: null
+        };
+      }
+    }
+  });
+
+  const result = await record.createUserAccount({
+    email: 'staff@example.com',
+    fullName: 'Staff Member',
+    role: 'Administrator',
+    password: 'a secure password',
+    verificationRecord: { face_match_result: 'match' }
+  });
+
+  assert.equal(result.status, 'Active');
+  assert.equal(request.name, 'invite-user');
+  assert.equal(request.body.action, 'create_account');
+  assert.equal(request.body.role, 'Administrator');
+  assert.equal(request.body.password, 'a secure password');
+  assert.equal(request.body.verification_record.face_match_result, 'match');
+  assert.deepEqual(Array.from(accountRoles), [
+    'Administrator',
+    'Manager',
+    'Receptionist',
+    'Inventory Clerk',
+    'Chef / Kitchen Staff'
+  ]);
 });
 
 test('active user loading excludes pending and cancelled profiles while retaining deactivated accounts', async () => {
@@ -168,6 +210,12 @@ test('account lifecycle adapters invoke the protected Edge Function actions', as
             error: null
           };
         }
+        if (options.body.action === 'remove_user') {
+          return {
+            data: { user_id: 'user-1', status: 'Removed', auth_removed: true },
+            error: null
+          };
+        }
         return { data: { user_id: 'user-1', status: 'Deactivated' }, error: null };
       }
     }
@@ -175,6 +223,7 @@ test('account lifecycle adapters invoke the protected Edge Function actions', as
 
   assert.equal((await record.setUserAccountStatus('user-1', 'Deactivated', 'Staff left')).status, 'Deactivated');
   assert.equal((await record.cancelUserInvitation('invite-1')).account_removed, true);
+  assert.equal((await record.removeUserAccount('user-1')).status, 'Removed');
   assert.deepEqual(JSON.parse(JSON.stringify(calls)), [
     {
       name: 'invite-user',
@@ -183,6 +232,10 @@ test('account lifecycle adapters invoke the protected Edge Function actions', as
     {
       name: 'invite-user',
       body: { action: 'cancel', invitation_id: 'invite-1' }
+    },
+    {
+      name: 'invite-user',
+      body: { action: 'remove_user', user_id: 'user-1' }
     }
   ]);
   await assert.rejects(record.setUserAccountStatus('user-1', 'Pending'), /valid user account status/);
@@ -190,6 +243,18 @@ test('account lifecycle adapters invoke the protected Edge Function actions', as
     record.setUserAccountStatus('user-1', 'Deactivated'),
     /reason is required/
   );
+});
+
+test('removeUserAccount validates its request and rejects incomplete service responses', async () => {
+  const { record: invalidResponse } = loadSupabaseRecord(() => ({}), {
+    functions: {
+      async invoke() {
+        return { data: { user_id: 'user-1', status: 'Removed' }, error: null };
+      }
+    }
+  });
+  await assert.rejects(invalidResponse.removeUserAccount('user-1'), /invalid removal response/);
+  await assert.rejects(invalidResponse.removeUserAccount('  '), /A user account is required/);
 });
 
 test('cancellation adapter rejects incomplete account-cleanup responses', async () => {
@@ -965,6 +1030,93 @@ test('inviteUser calls the Edge Function with normalized invitation fields', asy
   assert.deepEqual(Array.from(inviteRoles), ['Manager', 'Receptionist', 'Inventory Clerk', 'Chef / Kitchen Staff']);
 });
 
+test('faceLogin invokes the face-login function and validates its one-time token response', async () => {
+  let invocation;
+  const descriptor = Array.from({ length: 128 }, (_, index) => index / 128);
+  const { record, timers } = loadSupabaseRecord(() => ({}), {
+    functions: {
+      async invoke(name, options) {
+        invocation = { name, options };
+        return { data: { token_hash: 'a'.repeat(64) }, error: null };
+      }
+    }
+  });
+
+  const result = await record.faceLogin(descriptor);
+
+  assert.equal(invocation.name, 'face-login');
+  assert.deepEqual(Array.from(invocation.options.body.descriptor), descriptor);
+  assert.deepEqual(JSON.parse(JSON.stringify(result)), { tokenHash: 'a'.repeat(64) });
+  assert.equal(timers.size, 0);
+  await assert.rejects(record.faceLogin([0.1]), /valid face scan/);
+});
+
+test('faceLogin distinguishes an unrecognized face from an unreachable function', async () => {
+  const descriptor = Array(128).fill(0);
+  const noMatchRecord = loadSupabaseRecord(() => ({}), {
+    functions: {
+      async invoke() {
+        return {
+          data: null,
+          error: {
+            name: 'FunctionsHttpError',
+            message: 'Edge Function returned a non-2xx status code',
+            context: new Response(JSON.stringify({
+              message: 'Face does not match the registered user.',
+              code: 'face_not_recognized'
+            }), { status: 401, headers: { 'Content-Type': 'application/json' } })
+          }
+        };
+      }
+    }
+  }).record;
+  await assert.rejects(
+    noMatchRecord.faceLogin(descriptor),
+    /Face does not match the registered user/
+  );
+
+  const partialMatchRecord = loadSupabaseRecord(() => ({}), {
+    functions: {
+      async invoke() {
+        return {
+          data: null,
+          error: {
+            name: 'FunctionsHttpError',
+            message: 'Edge Function returned a non-2xx status code',
+            context: new Response(JSON.stringify({
+              message: 'Face partially matches. Please retake the scan.',
+              code: 'face_partial_match'
+            }), { status: 401, headers: { 'Content-Type': 'application/json' } })
+          }
+        };
+      }
+    }
+  }).record;
+  await assert.rejects(
+    partialMatchRecord.faceLogin(descriptor),
+    /Face partially matches\. Please retake the scan\./
+  );
+
+  const unreachableRecord = loadSupabaseRecord(() => ({}), {
+    functions: {
+      async invoke() {
+        return {
+          data: null,
+          error: {
+            name: 'FunctionsFetchError',
+            message: 'Failed to send a request to the Edge Function',
+            context: new Error('Failed to fetch')
+          }
+        };
+      }
+    }
+  }).record;
+  await assert.rejects(
+    unreachableRecord.faceLogin(descriptor),
+    /confirm the face-login Edge Function is deployed with JWT verification disabled/
+  );
+});
+
 test('inviteUser forwards an optional verification record and requires its returned ID', async () => {
   let invocation;
   const verificationRecord = {
@@ -977,7 +1129,8 @@ test('inviteUser forwards an optional verification record and requires its retur
     override_used: false,
     override_reason: null,
     id_image_path: 'admin/folder/id.jpg',
-    selfie_path: 'admin/folder/selfie.jpg'
+    selfie_path: 'admin/folder/selfie.jpg',
+    consent_given: true
   };
   const { record } = loadSupabaseRecord(() => ({}), {
     functions: {
@@ -1011,8 +1164,9 @@ test('verification record loading is searchable and selects only masked ID data'
     id_type: 'National ID',
     id_number_masked: '****5678',
     ocr_summary: { full_name: 'Sam Staff', dob: '', address: '', ocr_passed: true },
-    face_match_score: 97,
-    face_match_result: 'match',
+    face_scan_passed: null,
+    face_match_score: 84,
+    face_match_result: 'manual_review',
     override_used: false,
     override_reason: null,
     verified_by: 'admin-1',
@@ -1070,7 +1224,9 @@ test('verification record loading is searchable and selects only masked ID data'
   assert.equal(query.order.column, 'verified_at');
   assert.equal(query.limit, 1000);
   assert.equal(query.columns.split(',').includes('id_number'), false);
+  assert.equal(query.columns.split(',').includes('face_scan_passed'), true);
   assert.equal(records[0].id_number_masked, '****5678');
+  assert.equal(records[0].face_match_result, 'manual_review');
 });
 
 test('verification evidence uploads to the private bucket and removes only actor-owned paths', async () => {
