@@ -19,7 +19,8 @@ const state = {
   focusPageAfterNavigation: false,
   notificationReadKeys: [],
   notificationViewAll: false,
-  notificationMarkingRead: false
+  notificationMarkingRead: false,
+  productOnboarding: null
 };
 let modalOpener = null;
 let invitationAcceptanceMode = window.costTrackInviteLink === true;
@@ -39,6 +40,7 @@ const recentLocalChanges = new Set();
 const collectionState = Object.fromEntries(KEYS.map(key => [key, []]));
 state.ingredientStatus = 'All';
 state.ingredientExpiryFilter = false;
+state.productCategoryOptions = [];
 state.ingredientCategory = 'All';
 state.ingredientUnit = 'All';
 state.recipeCategory = 'All';
@@ -470,6 +472,9 @@ function activeBuffetRate(item, date = item?.date || today()) {
   return window.CostTrackLogic.activeBuffetRate(all('buffetRates'), mealPeriod, date, dayType);
 }
 function friendlyRpcError(error) {
+  if (/a product with this name already exists in the selected category/i.test(message)) {
+    return 'A product with this name already exists in the selected category. Please choose another name or category.';
+  }
   const message = String(error?.message || error || '');
   if (/users cannot change their own role/i.test(message)) return 'You cannot change your own role. Ask another Administrator.';
   if (/cannot remove or demote the last administrator/i.test(message)) return 'At least one Administrator must remain in the system.';
@@ -2230,7 +2235,10 @@ function ingredientCardsPage() {
     && expiry.daysUntilExpiry >= 0
     && expiry.daysUntilExpiry <= 7
   )) || false;
-  const categories = [...new Set(ingredients.map(item => item.category))];
+  const categories = state.productCategoryOptions;
+  const categoryIngredients = state.ingredientCategory === 'All'
+    ? ingredients
+    : ingredients.filter(item => item.category === state.ingredientCategory);
   const units = [...new Set(ingredients.map(item => item.unit))];
   const filtered = ingredients.filter(item => {
     const queryMatch = `${item.name} ${item.category}`.toLowerCase().includes(state.query.toLowerCase());
@@ -2275,17 +2283,17 @@ function ingredientCardsPage() {
       : `<div class="product-stock-progress" role="progressbar" aria-label="${esc(item.name)} stock relative to minimum" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${coverage}" aria-valuetext="${esc(coverageText)}"><span class="product-stock-progress-fill ${progressClass}" style="width:${coverage}%"></span></div><div class="product-stock-progress-note">${coverageText}</div>`;
     const batchSnapshot = batchSnapshots.get(String(item.id));
     return `<article class="catalog-card ingredient-product-card"><div class="catalog-card-top"><span class="ingredient-dot large-dot">${esc(item.name[0] || '?')}</span><div class="product-status-group"><span class="status ${statusClass}">${status}</span>${item.isActive === false ? '<span class="product-active-status is-inactive">Inactive</span>' : ''}</div></div><h3>${esc(item.name)}</h3><span class="tag">${esc(item.category)}</span><div class="product-stock-section"><div class="product-stock-readouts"><div><small>Current stock</small><strong>${formatStockQuantity(item.stock)} <em>${esc(item.unit)}</em></strong></div><div><small>Minimum stock</small><strong>${formatStockQuantity(item.minimum)} <em>${esc(item.unit)}</em></strong></div></div>${progress}</div>${inventoryCardBatchIntelligence(batchSnapshot)}<div class="catalog-card-footer product-card-footer"><span class="product-cost-summary">${canSeeCost ? `<small>Cost / unit</small><strong>${money(item.cost)}</strong>` : ''}</span><div class="product-card-actions"><button type="button" class="product-view-details" data-action="view-ingredient" data-id="${esc(item.id)}" aria-label="View details for ${esc(item.name)}">View details</button>${actions('ingredient', item.id, item, { includeView: false })}</div></div></article>`;
-  }).join('') : `<div class="panel empty-state">No ingredients match these filters.${canManageProducts ? '<button class="primary-btn" data-action="open-ingredient">Add product</button>' : ''}</div>`;
+  }).join('') : `<div class="panel empty-state">No ingredients match these filters.${canManageProducts ? '<button class="primary-btn" data-action="open-ingredient">+ New Product</button>' : ''}</div>`;
   const tableMarkup = `<div class="panel table-panel"><div class="table-scroll"><table data-table="inventory"><thead><tr>${[['name','Ingredient'],['stock','Stock'],...(canSeeCost ? [['cost','Cost / unit']] : []),['status','Status'],['','']].map(([key, label]) => key ? `<th${key === 'cost' ? ' class="mobile-hidden-cell"' : ''}><button class="sort-header" data-sort-ingredient="${key}">${label} ↕</button></th>` : '<th></th>').join('')}</tr></thead><tbody>${sorted.length ? sorted.map(item => {
     const status = stockStatus(item);
     return `<tr><td data-label="Ingredient"><strong>${esc(item.name)}</strong><small class="sub-cell">${esc(item.category)} · ${esc(item.unit)} · ${item.isActive === false ? 'Inactive' : 'Active'}</small></td><td data-label="Stock">${formatStockQuantity(item.stock)} ${esc(item.unit)}</td>${canSeeCost ? `<td data-label="Cost / unit" data-mobile-hidden="true">${money(item.cost)}</td>` : ''}<td data-label="Status"><span class="status ${ingredientStockStatusClass(status)}">${status}</span></td><td data-label="Actions">${actions('ingredient', item.id, item)}</td></tr>`;
   }).join('') : `<tr><td colspan="${canSeeCost ? 5 : 4}" class="empty-state">No ingredients match these filters.</td></tr>`}</tbody></table></div></div>`;
   const statusFilters = [
-    { value: 'All', count: ingredients.length },
-    { value: 'Out of Stock', count: ingredients.filter(item => stockStatus(item) === 'Out of Stock').length },
-    { value: 'Low Stock', count: ingredients.filter(item => stockStatus(item) === 'Low Stock').length },
-    { value: 'Healthy', count: ingredients.filter(item => stockStatus(item) === 'Healthy').length },
-    { value: 'Expiring Soon', count: ingredients.filter(hasExpiryWithinSevenDays).length }
+    { value: 'All', count: categoryIngredients.length },
+    { value: 'Out of Stock', count: categoryIngredients.filter(item => stockStatus(item) === 'Out of Stock').length },
+    { value: 'Low Stock', count: categoryIngredients.filter(item => stockStatus(item) === 'Low Stock').length },
+    { value: 'Healthy', count: categoryIngredients.filter(item => stockStatus(item) === 'Healthy').length },
+    { value: 'Expiring Soon', count: categoryIngredients.filter(hasExpiryWithinSevenDays).length }
   ];
   const statusFilterMarkup = statusFilters.map(filter => {
     const selected = filter.value === 'Expiring Soon'
@@ -2298,7 +2306,7 @@ function ingredientCardsPage() {
             : '';
     return `<button type="button" class="ingredient-status-chip ${filterClass} ${selected ? 'active' : ''}" data-ingredient-status-filter="${filter.value}" aria-pressed="${selected}">${filter.value}<b>${filter.count}</b></button>`;
   }).join('');
-  return `${pageHeader('Inventory', 'Products', 'Monitor ingredient stock, expiry dates, and FIFO batches.', `${toggle} ${canManageProducts ? '<button class="primary-btn" data-action="open-ingredient">+ Add product</button>' : ''}`)}<div class="catalog-toolbar"><div class="search-box">⌕<input id="tableSearch" placeholder="Search products or categories..." value="${esc(state.query)}"></div><select data-filter="ingredientCategory"><option>All categories</option>${categories.map(item => `<option ${state.ingredientCategory === item ? 'selected' : ''}>${esc(item)}</option>`).join('')}</select><span class="record-count">${filtered.length} products</span></div><div class="ingredient-status-filters" role="group" aria-label="Filter products by stock status">${statusFilterMarkup}</div>${state.ingredientView === 'cards' ? `<div class="ingredient-card-grid">${cardMarkup}</div>` : tableMarkup}`;
+  return `${pageHeader('Inventory', 'Products', 'Monitor ingredient stock, expiry dates, and FIFO batches.', `${toggle} ${canManageProducts ? '<button class="primary-btn" data-action="open-ingredient">+ New Product</button>' : ''}`)}<div class="catalog-toolbar"><div class="search-box">⌕<input id="tableSearch" placeholder="Search products or categories..." value="${esc(state.query)}"></div><select data-filter="ingredientCategory"><option>All categories</option>${categories.map(item => `<option ${state.ingredientCategory === item ? 'selected' : ''}>${esc(item)}</option>`).join('')}</select><span class="record-count">${filtered.length} products</span></div><div class="ingredient-status-filters" role="group" aria-label="Filter products by stock status">${statusFilterMarkup}</div>${state.ingredientView === 'cards' ? `<div class="ingredient-card-grid">${cardMarkup}</div>` : tableMarkup}`;
 }
 function recipeCardsPage() {
   const recipes = all('recipes');
@@ -5598,6 +5606,416 @@ async function refreshPreparedWasteBatches(form, serviceDate) {
     select.disabled = form.elements.wasteType.value !== 'prepared';
     toast('Ready production batches could not be loaded for this date. You can still record prepared-food waste without linking a batch.', 'error');
   }
+function newProductWizardDraft() {
+  return {
+    name: '',
+    category: '',
+    unit: '',
+    minimum: '0',
+    preferredSupplier: '',
+    trackExpiry: false,
+    shelfLifeDays: '',
+    shelfLifeMode: 'manual',
+    notes: ''
+  };
+}
+
+function productWizardProgress(step, labels) {
+  return `<ol class="product-wizard-progress" aria-label="Product setup progress">${labels.map((label, index) => {
+    const number = index + 1;
+    const current = number === step;
+    const complete = number < step;
+    return `<li class="${current ? 'is-current' : complete ? 'is-complete' : ''}"><span ${current ? 'aria-current="step"' : ''}><b>${number}</b>${esc(label)}</span></li>`;
+  }).join('')}</ol>`;
+}
+
+function productWizardChoices(items, selected, action, scope, index) {
+  return items.map(item => {
+    const value = typeof item === 'string' ? item : item.value;
+    const label = typeof item === 'string' ? item : item.label;
+    return `<button type="button" class="product-choice ${String(value) === String(selected) ? 'is-selected' : ''}" data-product-onboarding-action="${action}" data-scope="${scope}" ${index === undefined ? '' : `data-index="${index}"`} data-value="${esc(value)}" aria-pressed="${String(value) === String(selected)}">${esc(label)}</button>`;
+  }).join('');
+}
+
+function productWizardDetailsMarkup(product, scope, index, catalogs) {
+  const isDefault = scope === 'defaults';
+  const category = product.category || '';
+  const unit = product.unit || '';
+  const prefix = isDefault ? 'Defaults' : `Product ${index + 1}`;
+  const indexAttr = isDefault ? '' : `data-index="${index}"`;
+  const categoryChoices = productWizardChoices(catalogs.categories, category, 'select-category', scope, isDefault ? undefined : index);
+  const unitChoices = productWizardChoices(catalogs.units.map(item => ({
+    value: item.abbreviation,
+    label: item.abbreviation
+  })), unit, 'select-unit', scope, isDefault ? undefined : index);
+  const shelfLifeChoices = [
+    { value: '7', label: '7 days' },
+    { value: '14', label: '14 days' },
+    { value: '30', label: '30 days' },
+    { value: '60', label: '60 days' },
+    { value: '90', label: '90 days' },
+    { value: 'custom', label: 'Custom' },
+    { value: 'manual', label: 'Set date on delivery' }
+  ];
+  const shelfLifeMode = product.shelfLifeMode || 'manual';
+  const shelfLifeMarkup = product.trackExpiry
+    ? `<div class="product-wizard-field"><span class="product-wizard-label">Shelf life</span><div class="product-choice-grid product-choice-grid--compact">${productWizardChoices(shelfLifeChoices, shelfLifeMode === 'custom' ? 'custom' : shelfLifeMode === 'manual' ? 'manual' : String(product.shelfLifeDays || ''), 'select-shelf-life', scope, isDefault ? undefined : index)}</div>${shelfLifeMode === 'custom' ? `<label class="product-wizard-custom-days">Custom shelf life (days)<input type="number" min="1" max="3650" step="1" value="${esc(product.shelfLifeDays || '')}" data-product-onboarding-field="shelf-life" data-scope="${scope}" ${indexAttr}></label>` : ''}</div>`
+    : '';
+  return `<div class="product-wizard-details">
+    <div class="product-wizard-field"><span class="product-wizard-label">${prefix} category</span><div class="product-choice-grid" role="group" aria-label="${prefix} category">${categoryChoices}</div></div>
+    <div class="product-wizard-field"><span class="product-wizard-label">${prefix} unit</span><div class="product-choice-grid product-choice-grid--compact" role="group" aria-label="${prefix} unit">${unitChoices}</div></div>
+    <div class="product-wizard-field"><label class="product-wizard-label" for="product-minimum-${scope}-${index === undefined ? 'all' : index}">Minimum stock</label><div class="product-quantity-control"><div class="product-quantity-shortcuts">${[-10, -5, -1].map(delta => `<button type="button" class="ghost-btn" data-product-onboarding-action="adjust-minimum" data-scope="${scope}" ${indexAttr} data-delta="${delta}">${delta}</button>`).join('')}</div><input id="product-minimum-${scope}-${index === undefined ? 'all' : index}" type="number" min="0" step="0.0001" value="${esc(product.minimum ?? '0')}" data-product-onboarding-field="minimum" data-scope="${scope}" ${indexAttr}><div class="product-quantity-shortcuts">${[1, 5, 10, 20].map(delta => `<button type="button" class="ghost-btn" data-product-onboarding-action="adjust-minimum" data-scope="${scope}" ${indexAttr} data-delta="${delta > 0 ? `+${delta}` : delta}">+${delta}</button>`).join('')}</div></div></div>
+    <div class="product-wizard-field"><span class="product-wizard-label">Track expiration?</span><div class="product-choice-grid product-choice-grid--compact">${productWizardChoices([{ value: 'false', label: 'No' }, { value: 'true', label: 'Yes' }], String(Boolean(product.trackExpiry)), 'select-expiry', scope, isDefault ? undefined : index)}</div>${shelfLifeMarkup}</div>
+  </div>`;
+}
+
+function productWizardReviewList(product) {
+  const shelfLife = !product.trackExpiry
+    ? 'Not tracked'
+    : product.shelfLifeDays
+      ? `${product.shelfLifeDays} days`
+      : 'Set date on delivery';
+  const rows = [
+    ['Name', product.name || 'Not provided'],
+    ['Category', product.category || 'Not selected'],
+    ['Unit', product.unit || 'Not selected'],
+    ['Minimum stock', `${product.minimum || 0} ${product.unit || ''}`.trim()],
+    ['Expiration', product.trackExpiry ? `Tracked · ${shelfLife}` : 'Not tracked'],
+    ['Preferred supplier', product.preferredSupplier || 'Not specified'],
+    ['Notes', product.notes || 'None']
+  ];
+  return `<dl class="product-wizard-review-list">${rows.map(([label, value]) => `<div><dt>${esc(label)}</dt><dd>${esc(value)}</dd></div>`).join('')}</dl>`;
+}
+
+function renderProductOnboarding() {
+  const wizard = state.productOnboarding;
+  if (!wizard) return;
+  if (wizard.mode === 'choose') {
+    modal('How would you like to add inventory?', `<section class="product-entry-choice"><p class="product-wizard-intro">Choose the quickest way to add products to your inventory.</p><div class="product-entry-choice-grid"><button type="button" class="product-entry-choice-card" data-product-onboarding-action="choose-mode" data-mode="single"><span class="product-entry-choice-icon" aria-hidden="true">＋</span><strong>Single Product</strong><span>Best for adding one ingredient or product.</span></button><button type="button" class="product-entry-choice-card" data-product-onboarding-action="choose-mode" data-mode="bulk"><span class="product-entry-choice-icon" aria-hidden="true">▤</span><strong>Multiple Products</strong><span>Best for onboarding many ingredients at once.</span></button></div></section>`, '', 'product-onboarding-modal');
+    document.querySelector('#modalForm').dataset.type = 'product-onboarding';
+    return;
+  }
+
+  const singleLabels = ['Basic information', 'Stock settings', 'Expiration', 'Additional info', 'Review'];
+  const bulkLabels = ['Product names', 'Assign details', 'Review all', 'Create all'];
+  const labels = wizard.mode === 'single' ? singleLabels : bulkLabels;
+  const isSingle = wizard.mode === 'single';
+  const draft = wizard.draft;
+  let content = productWizardProgress(wizard.step, labels);
+  let submitLabel = 'Continue';
+  let formType = 'product-onboarding';
+
+  if (isSingle && wizard.step === 1) {
+    const categories = wizard.catalogs.categories;
+    const units = wizard.catalogs.units.map(unit => ({ value: unit.abbreviation, label: unit.abbreviation }));
+    content += `<section class="product-wizard-panel"><div class="product-wizard-heading"><p class="eyebrow">Step 1 of 5</p><h3>Basic information</h3><p>Start with a name, category, and unit.</p></div><label class="product-wizard-field">Product name<input name="name" value="${esc(draft.name)}" maxlength="200" autocomplete="off" placeholder="e.g. Chicken breast"></label><div class="product-wizard-field"><span class="product-wizard-label">Category</span><div class="product-choice-grid" role="group" aria-label="Category">${productWizardChoices(categories, draft.category, 'select-category', 'single')}</div></div><div class="product-wizard-field"><span class="product-wizard-label">Unit</span><div class="product-choice-grid product-choice-grid--compact" role="group" aria-label="Stocking unit">${productWizardChoices(units, draft.unit, 'select-unit', 'single')}</div></div></section>`;
+  } else if (isSingle && wizard.step === 2) {
+    content += `<section class="product-wizard-panel"><div class="product-wizard-heading"><p class="eyebrow">Step 2 of 5</p><h3>Stock settings</h3><p>Set the low-stock threshold. You can type any quantity or use quick adjustments.</p></div><label class="product-wizard-field">Minimum stock level<div class="product-quantity-control"><div class="product-quantity-shortcuts">${[-10, -5, -1].map(delta => `<button type="button" class="ghost-btn" data-product-onboarding-action="adjust-single-minimum" data-delta="${delta}">${delta}</button>`).join('')}</div><input name="minimum" type="number" min="0" step="0.0001" value="${esc(draft.minimum)}"><div class="product-quantity-shortcuts">${[1, 5, 10, 20].map(delta => `<button type="button" class="ghost-btn" data-product-onboarding-action="adjust-single-minimum" data-delta="${delta}">+${delta}</button>`).join('')}</div></div></label><div class="product-wizard-navigation"><button type="button" class="ghost-btn" data-product-onboarding-action="back">Back</button></div></section>`;
+  } else if (isSingle && wizard.step === 3) {
+    const shelfLifeChoices = [
+      { value: '7', label: '7 days' }, { value: '14', label: '14 days' },
+      { value: '30', label: '30 days' }, { value: '60', label: '60 days' },
+      { value: '90', label: '90 days' }, { value: 'custom', label: 'Custom' },
+      { value: 'manual', label: 'Set date on delivery' }
+    ];
+    const selectedShelfLife = draft.shelfLifeMode === 'custom' ? 'custom'
+      : draft.shelfLifeMode === 'manual' ? 'manual' : String(draft.shelfLifeDays || '');
+    content += `<section class="product-wizard-panel"><div class="product-wizard-heading"><p class="eyebrow">Step 3 of 5</p><h3>Expiration settings</h3><p>Choose whether this product needs expiration tracking.</p></div><div class="product-wizard-field"><span class="product-wizard-label">Track expiration?</span><div class="product-choice-grid product-choice-grid--compact" role="group" aria-label="Track expiration">${productWizardChoices([{ value: 'false', label: 'No' }, { value: 'true', label: 'Yes' }], String(Boolean(draft.trackExpiry)), 'select-expiry', 'single')}</div></div>${draft.trackExpiry ? `<div class="product-wizard-field"><span class="product-wizard-label">Shelf life</span><div class="product-choice-grid product-choice-grid--compact" role="group" aria-label="Shelf life">${productWizardChoices(shelfLifeChoices, selectedShelfLife, 'select-shelf-life', 'single')}</div>${draft.shelfLifeMode === 'custom' ? `<label class="product-wizard-custom-days">Custom shelf life (days)<input name="shelfLifeDays" type="number" min="1" max="3650" step="1" value="${esc(draft.shelfLifeDays || '')}"></label>` : ''}<small class="field-help">Choose a preset, enter a custom duration, or set the expiration date for each delivery.</small></div>` : ''}<div class="product-wizard-navigation"><button type="button" class="ghost-btn" data-product-onboarding-action="back">Back</button></div></section>`;
+  } else if (isSingle && wizard.step === 4) {
+    const suppliers = [...new Set([...(wizard.catalogs.suppliers || []), ...all('ingredients').map(product => product.preferredSupplier).filter(Boolean)])];
+    content += `<section class="product-wizard-panel"><div class="product-wizard-heading"><p class="eyebrow">Step 4 of 5</p><h3>Additional information</h3><p>These details are optional and can be changed later.</p></div><label class="product-wizard-field">Preferred supplier<input name="preferredSupplier" maxlength="200" value="${esc(draft.preferredSupplier)}" list="product-wizard-suppliers" autocomplete="organization"><datalist id="product-wizard-suppliers">${suppliers.map(supplier => `<option value="${esc(supplier)}"></option>`).join('')}</datalist></label><label class="product-wizard-field">Notes<textarea name="notes" rows="3" maxlength="1000" placeholder="Optional notes about this product">${esc(draft.notes)}</textarea></label><div class="product-wizard-navigation"><button type="button" class="ghost-btn" data-product-onboarding-action="back">Back</button></div></section>`;
+    submitLabel = 'Review product';
+  } else if (isSingle) {
+    const hiddenFields = [
+      ['name', draft.name], ['category', draft.category], ['unit', draft.unit],
+      ['minimum', draft.minimum], ['preferredSupplier', draft.preferredSupplier],
+      ['trackExpiry', String(Boolean(draft.trackExpiry))],
+      ['shelfLifeDays', draft.trackExpiry ? draft.shelfLifeDays : ''], ['notes', draft.notes]
+    ].map(([name, value]) => `<input type="hidden" name="${name}" value="${esc(value)}">`).join('');
+    content += `<section class="product-wizard-panel"><div class="product-wizard-heading"><p class="eyebrow">Step 5 of 5</p><h3>Review product</h3><p>Check the details before creating this product.</p></div>${productWizardReviewList(draft)}<div class="product-wizard-review-edit"><button type="button" class="ghost-btn" data-product-onboarding-action="goto" data-step="1">Edit basic information</button><button type="button" class="ghost-btn" data-product-onboarding-action="goto" data-step="2">Edit stock settings</button><button type="button" class="ghost-btn" data-product-onboarding-action="goto" data-step="3">Edit expiration</button><button type="button" class="ghost-btn" data-product-onboarding-action="goto" data-step="4">Edit additional information</button></div>${hiddenFields}</section>`;
+    submitLabel = 'Create product';
+    formType = 'ingredient';
+  } else if (wizard.step === 1) {
+    const rows = wizard.products.map((product, index) => `<div class="product-bulk-name-row"><label>Product ${index + 1}<input type="text" maxlength="200" value="${esc(product.name)}" placeholder="e.g. Chicken breast" data-bulk-name-index="${index}"></label><button type="button" class="ghost-btn" data-product-onboarding-action="remove-bulk-name" data-index="${index}" ${wizard.products.length === 1 ? 'disabled' : ''}>Remove</button></div>`).join('');
+    content += `<section class="product-wizard-panel"><div class="product-wizard-heading"><p class="eyebrow">Step 1 of 4</p><h3>Add product names</h3><p>Add as many products as you need. Details can be assigned together in the next step.</p></div><div class="product-bulk-name-list">${rows}</div><div class="product-wizard-navigation"><button type="button" class="ghost-btn" data-product-onboarding-action="add-bulk-name">Add another product</button></div></section>`;
+  } else if (wizard.step === 2) {
+    const defaultProduct = wizard.defaults;
+    const productRows = wizard.products.map((product, index) => {
+      const summary = `${product.category || 'Choose category'} · ${product.unit || 'Choose unit'} · min ${product.minimum || 0} · ${product.trackExpiry ? `expiration tracked${product.shelfLifeDays ? `, ${product.shelfLifeDays} days` : ''}` : 'no expiration tracking'}`;
+      return `<article class="product-bulk-detail-card"><div class="product-bulk-detail-summary"><div><strong>${esc(product.name)}</strong><small>${esc(summary)}</small></div><button type="button" class="ghost-btn" data-product-onboarding-action="toggle-customize" data-index="${index}">${product.customizing ? 'Done' : 'Customize'}</button></div>${product.customizing ? productWizardDetailsMarkup(product, 'product', index, wizard.catalogs) : ''}</article>`;
+    }).join('');
+    content += `<section class="product-wizard-panel"><div class="product-wizard-heading"><p class="eyebrow">Step 2 of 4</p><h3>Assign details</h3><p>Set shared defaults once, then customize only the products that differ.</p></div><section class="product-bulk-defaults"><div class="product-bulk-defaults-heading"><h4>Defaults for all products</h4><button type="button" class="primary-btn" data-product-onboarding-action="apply-defaults">Apply to all</button></div>${productWizardDetailsMarkup(defaultProduct, 'defaults', undefined, wizard.catalogs)}</section><div class="product-bulk-detail-list">${productRows}</div><div class="product-wizard-navigation"><button type="button" class="ghost-btn" data-product-onboarding-action="back">Back</button></div></section>`;
+    submitLabel = 'Review all';
+  } else {
+    const conflicts = productWizardDuplicateConflicts(wizard.products);
+    const conflictMarkup = wizard.saveOutcomeUnknown
+      ? '<div class="product-wizard-conflict" role="alert"><strong>Save status could not be confirmed.</strong><p>Reload inventory before trying again to avoid creating duplicates.</p></div>'
+      : conflicts.length
+        ? `<div class="product-wizard-conflict" role="alert"><strong>Some products already exist in these categories.</strong><p>${conflicts.map(conflict => esc(`${conflict.name} · ${conflict.category}`)).join('<br>')}</p><button type="button" class="ghost-btn" data-product-onboarding-action="goto" data-step="1">Edit product names</button><button type="button" class="ghost-btn" data-product-onboarding-action="goto" data-step="2">Edit assignments</button></div>`
+        : '';
+    const reviewRows = wizard.products.map(product => `<div><dt>${esc(product.name)}</dt><dd>${esc(`${product.category} · ${product.minimum || 0} ${product.unit} minimum · ${product.trackExpiry ? `expiration tracked${product.shelfLifeDays ? ` (${product.shelfLifeDays} days)` : ''}` : 'no expiration tracking'}`)}</dd></div>`).join('');
+    content += `<section class="product-wizard-panel"><div class="product-wizard-heading"><p class="eyebrow">Step 3 of 4</p><h3>${wizard.products.length} product${wizard.products.length === 1 ? '' : 's'} ready</h3><p>Review the products before creating them.</p></div>${conflictMarkup}<dl class="product-wizard-review-list product-bulk-review-list">${reviewRows}</dl><div class="product-wizard-navigation"><button type="button" class="ghost-btn" data-product-onboarding-action="back">Back</button><span>Step 4: Create all products</span></div></section>`;
+    submitLabel = 'Create all products';
+    formType = 'ingredient-bulk';
+    wizard.hasConflicts = conflicts.length > 0;
+  }
+
+  const modalClass = isSingle
+    ? 'product-onboarding-modal product-onboarding-modal--single'
+    : 'product-onboarding-modal product-onboarding-modal--bulk';
+  modal(isSingle ? 'New product' : 'Add multiple products', content, submitLabel, modalClass);
+  const form = document.querySelector('#modalForm');
+  form.dataset.type = formType;
+  form.dataset.productWizardMode = wizard.mode;
+  form.dataset.productWizardStep = String(wizard.step);
+  const submit = form.querySelector('button[type="submit"]');
+  if (submit && wizard.mode === 'bulk' && (wizard.hasConflicts || wizard.saveOutcomeUnknown)) submit.disabled = true;
+}
+
+function productWizardDuplicateConflicts(products) {
+  const keyFor = (name, category) => `${String(category || '').trim().toLowerCase()}\u0000${String(name || '').trim().toLowerCase()}`;
+  const existing = new Set(all('ingredients').map(product => keyFor(product.name, product.category)));
+  const seen = new Set();
+  const conflicts = [];
+  products.forEach(product => {
+    const key = keyFor(product.name, product.category);
+    if (existing.has(key) || seen.has(key)) conflicts.push({ name: product.name, category: product.category });
+    seen.add(key);
+  });
+  return conflicts;
+}
+
+function captureProductWizardFields(form) {
+  const wizard = state.productOnboarding;
+  if (!wizard || !form) return;
+  if (wizard.mode === 'single') {
+    const draft = wizard.draft;
+    ['name', 'minimum', 'preferredSupplier', 'notes'].forEach(name => {
+      if (form.elements[name]) draft[name] = form.elements[name].value;
+    });
+    if (form.elements.shelfLifeDays) draft.shelfLifeDays = form.elements.shelfLifeDays.value;
+    return;
+  }
+  form.querySelectorAll('[data-bulk-name-index]').forEach(input => {
+    const product = wizard.products[Number(input.dataset.bulkNameIndex)];
+    if (product) product.name = input.value;
+  });
+  form.querySelectorAll('[data-product-onboarding-field]').forEach(input => {
+    const target = input.dataset.scope === 'defaults'
+      ? wizard.defaults
+      : wizard.products[Number(input.dataset.index)];
+    if (!target) return;
+    if (input.dataset.productOnboardingField === 'minimum') target.minimum = input.value;
+    if (input.dataset.productOnboardingField === 'shelf-life') target.shelfLifeDays = input.value;
+  });
+}
+
+function newBulkProductDraft(name = '') {
+  return {
+    id: id('ING'),
+    name,
+    category: '',
+    unit: '',
+    minimum: '0',
+    trackExpiry: false,
+    shelfLifeDays: '',
+    shelfLifeMode: 'manual',
+    customizing: false
+  };
+}
+
+function adjustProductMinimum(target, delta) {
+  const current = Number(target.minimum || 0);
+  const next = Math.max(0, current + Number(delta));
+  target.minimum = String(Number(next.toFixed(4)));
+}
+
+function handleProductWizardNext(form) {
+  const wizard = state.productOnboarding;
+  if (!wizard) return;
+  captureProductWizardFields(form);
+  if (wizard.mode === 'single') {
+    if (wizard.step === 1) {
+      if (!wizard.draft.name.trim()) return toast('Enter a product name.', 'error');
+      if (!wizard.draft.category) return toast('Choose a product category.', 'error');
+      if (!wizard.draft.unit) return toast('Choose a stocking unit.', 'error');
+    } else if (wizard.step === 2) {
+      const minimum = Number(wizard.draft.minimum);
+      if (!String(wizard.draft.minimum).trim() || !Number.isFinite(minimum) || minimum < 0) return toast('Minimum stock must be zero or more.', 'error');
+    } else if (wizard.step === 3 && wizard.draft.trackExpiry && wizard.draft.shelfLifeMode === 'custom') {
+      const days = Number(wizard.draft.shelfLifeDays);
+      if (!Number.isInteger(days) || days < 1 || days > 3650) return toast('Enter a whole number from 1 to 3,650 days.', 'error');
+    }
+    if (wizard.step < 5) wizard.step += 1;
+    state.modalDirty = true;
+    renderProductOnboarding();
+    return;
+  }
+
+  if (wizard.step === 1) {
+    const products = wizard.products.filter(product => product.name.trim());
+    if (!products.length) return toast('Enter at least one product name.', 'error');
+    wizard.products = products.map(product => ({ ...product, name: product.name.trim() }));
+  } else if (wizard.step === 2) {
+    const invalid = wizard.products.find(product => {
+      const minimum = Number(product.minimum);
+      const shelfLife = Number(product.shelfLifeDays);
+      return !product.category || !product.unit || !String(product.minimum).trim() || !Number.isFinite(minimum) || minimum < 0
+        || (product.trackExpiry && product.shelfLifeMode === 'custom'
+          && (!Number.isInteger(shelfLife) || shelfLife < 1 || shelfLife > 3650));
+    });
+    if (invalid) {
+      return toast(`Complete valid category, unit, stock, and expiration details for ${invalid.name}.`, 'error');
+    }
+  }
+  if (wizard.step < 3) wizard.step += 1;
+  state.modalDirty = true;
+  renderProductOnboarding();
+}
+
+document.addEventListener('click', event => {
+  const action = event.target.closest('[data-product-onboarding-action]');
+  if (!action) return;
+  event.preventDefault();
+  const wizard = state.productOnboarding;
+  const form = document.querySelector('#modalForm');
+  if (!wizard || !form) return;
+  const name = action.dataset.productOnboardingAction;
+
+  if (name === 'choose-mode') {
+    if (action.dataset.mode === 'single') {
+      Object.assign(wizard, { mode: 'single', step: 1, draft: newProductWizardDraft() });
+    } else {
+      Object.assign(wizard, {
+        mode: 'bulk',
+        step: 1,
+        products: [newBulkProductDraft()],
+        defaults: { category: '', unit: '', minimum: '0', trackExpiry: false, shelfLifeDays: '', shelfLifeMode: 'manual' },
+        savedCount: 0
+      });
+    }
+    renderProductOnboarding();
+    return;
+  }
+
+  captureProductWizardFields(form);
+  if (name === 'next') return handleProductWizardNext(form);
+  if (name === 'back') {
+    if (wizard.step > 1) wizard.step -= 1;
+    renderProductOnboarding();
+    return;
+  }
+  if (name === 'goto') {
+    const step = Number(action.dataset.step);
+    if (Number.isInteger(step) && step >= 1 && step <= (wizard.mode === 'single' ? 5 : 3)) {
+      wizard.step = step;
+      renderProductOnboarding();
+    }
+    return;
+  }
+  if (name === 'add-bulk-name') {
+    wizard.products.push(newBulkProductDraft());
+    state.modalDirty = true;
+    renderProductOnboarding();
+    return;
+  }
+  if (name === 'remove-bulk-name') {
+    if (wizard.products.length > 1) wizard.products.splice(Number(action.dataset.index), 1);
+    state.modalDirty = true;
+    renderProductOnboarding();
+    return;
+  }
+  if (name === 'apply-defaults') {
+    if (!wizard.defaults.category || !wizard.defaults.unit) return toast('Choose a default category and unit before applying them.', 'error');
+    wizard.products.forEach(product => Object.assign(product, {
+      category: wizard.defaults.category,
+      unit: wizard.defaults.unit,
+      minimum: wizard.defaults.minimum,
+      trackExpiry: wizard.defaults.trackExpiry,
+      shelfLifeDays: wizard.defaults.shelfLifeDays,
+      shelfLifeMode: wizard.defaults.shelfLifeMode
+    }));
+    state.modalDirty = true;
+    renderProductOnboarding();
+    return;
+  }
+  if (name === 'toggle-customize') {
+    const product = wizard.products[Number(action.dataset.index)];
+    if (product) product.customizing = !product.customizing;
+    renderProductOnboarding();
+    return;
+  }
+  if (name === 'adjust-single-minimum') {
+    const input = form.elements.minimum;
+    wizard.draft.minimum = input.value;
+    adjustProductMinimum(wizard.draft, action.dataset.delta);
+    input.value = wizard.draft.minimum;
+    state.modalDirty = true;
+    return;
+  }
+  if (name === 'adjust-minimum') {
+    const target = action.dataset.scope === 'defaults'
+      ? wizard.defaults
+      : wizard.products[Number(action.dataset.index)];
+    if (!target) return;
+    adjustProductMinimum(target, action.dataset.delta);
+    const input = [...form.querySelectorAll('[data-product-onboarding-field="minimum"]')].find(field =>
+      field.dataset.scope === action.dataset.scope && field.dataset.index === action.dataset.index
+    );
+    if (input) input.value = target.minimum;
+    state.modalDirty = true;
+    return;
+  }
+  if (name === 'select-category' || name === 'select-unit') {
+    const target = action.dataset.scope === 'single'
+      ? wizard.draft
+      : action.dataset.scope === 'defaults'
+        ? wizard.defaults
+        : wizard.products[Number(action.dataset.index)];
+    if (!target) return;
+    const field = name === 'select-category' ? 'category' : 'unit';
+    target[field] = action.dataset.value;
+    const selector = `[data-product-onboarding-action="${name}"]`;
+    form.querySelectorAll(selector).forEach(button => {
+      if (button.dataset.scope !== action.dataset.scope || button.dataset.index !== action.dataset.index) return;
+      const selected = button.dataset.value === action.dataset.value;
+      button.classList.toggle('is-selected', selected);
+      button.setAttribute('aria-pressed', String(selected));
+    });
+    state.modalDirty = true;
+    return;
+  }
+  if (name === 'select-expiry') {
+    const target = action.dataset.scope === 'single'
+      ? wizard.draft
+      : action.dataset.scope === 'defaults'
+        ? wizard.defaults
+        : wizard.products[Number(action.dataset.index)];
+    if (!target) return;
+    target.trackExpiry = action.dataset.value === 'true';
+    if (!target.trackExpiry) {
+      target.shelfLifeDays = '';
+      target.shelfLifeMode = 'manual';
+    }
+    state.modalDirty = true;
+    renderProductOnboarding();
+    return;
+  }
+  if (name === 'select-shelf-life') {
+    const target = action.dataset.scope === 'single'
+      ? wizard.draft
+      : action.dataset.scope === 'defaults'
+        ? wizard.defaults
+        : wizard.products[Number(action.dataset.index)];
+    if (!target) return;
+    const value = action.dataset.value;
+    target.shelfLifeMode = value === 'custom' || value === 'manual' ? value : 'preset';
+    target.shelfLifeDays = value === 'custom' || value === 'manual' ? '' : value;
+    state.modalDirty = true;
+    renderProductOnboarding();
+  }
+});
+
 }
 async function openForm(type, item) {
   const requiredAction = {
@@ -5647,6 +6065,18 @@ async function openForm(type, item) {
     }
     const categories = catalogs.categories.map(category => `<option value="${esc(category)}" ${value('category') === category ? 'selected' : ''}>${esc(category)}</option>`).join('');
     const units = catalogs.units.map(unit => `<option value="${esc(unit.abbreviation)}" ${value('unit') === unit.abbreviation ? 'selected' : ''}>${esc(unit.name)} (${esc(unit.abbreviation)})</option>`).join('');
+    if (!edit) {
+      state.productOnboarding = {
+        mode: 'choose',
+        catalogs,
+        step: 1,
+        products: [],
+        defaults: { category: '', unit: '', minimum: '0', trackExpiry: false, shelfLifeDays: '', shelfLifeMode: 'manual' },
+        savedCount: 0
+      };
+      renderProductOnboarding();
+      return;
+    }
     state.supplierOptions = catalogs.suppliers;
     const suppliers = [...new Set([
       ...catalogs.suppliers,
@@ -7599,6 +8029,10 @@ async function handleSubmit(form, submitter = null) {
   if (form.dataset.type === 'walk-in') refreshWalkInTimestamp(form);
   const data = Object.fromEntries(new FormData(form));
   const type = form.dataset.type;
+  if (type === 'product-onboarding') {
+    handleProductWizardNext(form);
+    return;
+  }
   const editId = form.dataset.id;
   if (type === 'product-lifecycle') {
     await submitProductLifecycle(form, data);
@@ -8560,6 +8994,52 @@ async function handleSubmit(form, submitter = null) {
     };
     await save('recipes', editId ? all('recipes').map(item => item.id === editId ? record : item) : [...all('recipes'), record]);
     state.recipeDraft = [];
+  } else if (type === 'ingredient-bulk') {
+    const wizard = state.productOnboarding;
+    if (!wizard || wizard.mode !== 'bulk' || wizard.step !== 3 || !wizard.products.length) {
+      return toast('The bulk product form changed. Review the products and try again.', 'error');
+    }
+    const conflicts = productWizardDuplicateConflicts(wizard.products);
+    if (conflicts.length) {
+      wizard.hasConflicts = true;
+      renderProductOnboarding();
+      return toast('Some products already exist in the selected categories. Review the highlighted names before saving.', 'error');
+    }
+    const records = wizard.products.map(product => ({
+      id: product.id,
+      name: product.name.trim(),
+      category: product.category,
+      unit: product.unit,
+      minimum: Number(product.minimum),
+      preferredSupplier: '',
+      trackExpiry: Boolean(product.trackExpiry),
+      shelfLifeDays: product.trackExpiry && product.shelfLifeDays ? Number(product.shelfLifeDays) : null,
+      notes: ''
+    }));
+    try {
+      await save('ingredients', [...all('ingredients'), ...records]);
+    } catch (error) {
+      try {
+        await refetchCollection('ingredients');
+      } catch (refreshError) {
+        console.error('Bulk product save result could not be refreshed.', refreshError);
+        wizard.saveOutcomeUnknown = true;
+        renderProductOnboarding();
+        throw new Error(`The bulk save may have partially completed, but its result could not be confirmed. Reload inventory before retrying. ${friendlyRpcError(error)}`);
+      }
+      const savedIds = new Set(all('ingredients').map(product => String(product.id)));
+      const savedRecords = records.filter(product => savedIds.has(String(product.id)));
+      wizard.savedCount += savedRecords.length;
+      wizard.products = wizard.products.filter(product => !savedIds.has(String(product.id)));
+      wizard.step = 3;
+      if (wizard.products.length) {
+        renderProductOnboarding();
+        throw new Error(`Created ${savedRecords.length} of ${records.length} products before the save stopped. Remaining products are still in the wizard. ${friendlyRpcError(error)}`);
+      }
+    }
+    wizard.savedCount += records.length;
+    successMessage = `Created ${records.length} products.`;
+    state.productOnboarding = null;
     state.recipeForm = {};
   } else if (type === 'ingredient') {
     const record = {
@@ -8569,7 +9049,9 @@ async function handleSubmit(form, submitter = null) {
       unit: data.unit,
       minimum: Number(data.minimum),
       preferredSupplier: data.preferredSupplier.trim(),
-      trackExpiry: form.elements.trackExpiry.checked,
+      trackExpiry: form.dataset.productWizardMode === 'single'
+        ? data.trackExpiry === 'true'
+        : form.elements.trackExpiry.checked,
       shelfLifeDays: data.shelfLifeDays ? Number(data.shelfLifeDays) : null,
       notes: data.notes.trim()
     };
@@ -10701,7 +11183,16 @@ async function syncWithSupabase() {
     state.notificationReadKeys = await window.supabaseRecord.notificationReadKeys();
   } catch (error) {
     throw new Error(`Notification state could not be loaded: ${error.message}`);
+  let productCategoryOptions = [];
+  if (collections.includes('ingredients')) {
+    try {
+      productCategoryOptions = await window.supabaseRecord.loadProductCategories();
+    } catch (error) {
+      throw new Error(`Could not load active product categories: ${error.message}`);
+    }
   }
+  }
+  state.productCategoryOptions = productCategoryOptions;
   KEYS.forEach(key => { collectionState[key] = pendingCollections[key]; });
   supabaseSyncEnabled = true;
   realtimeNeedsResync = false;
@@ -10768,6 +11259,7 @@ async function signOutCurrentUser({ force = false } = {}) {
   closeMobileDrawer(false);
   closeShellPopovers(false);
   state.user = null;
+  state.productCategoryOptions = [];
   state.role = null;
   realtimeNeedsResync = false;
   resetUserInviteHistory();
@@ -11114,6 +11606,7 @@ window.supabaseClient.auth.onAuthStateChange((event, session) => {
   if (event === 'SIGNED_OUT' && state.user) {
     stopRealtimeSubscriptions();
     state.user = null;
+    state.productCategoryOptions = [];
     state.role = null;
     resetUserInviteHistory();
     supabaseSyncEnabled = false;
