@@ -488,6 +488,16 @@ function throwIfError(error) {
   if (error) throw new Error(error.message || 'The database operation failed.');
 }
 
+async function loadActiveProductCategories(client = window.supabaseClient) {
+  const { data, error } = await client
+    .from('product_categories')
+    .select('name')
+    .eq('is_active', true)
+    .order('name');
+  throwIfError(error);
+  return (data || []).map(item => item.name);
+}
+
 async function throwInvitationError(error, fallbackMessage = 'The invitation could not be sent.') {
   let message = error.message || fallbackMessage;
   let code = '';
@@ -920,18 +930,20 @@ window.supabaseRecord = {
   async loadProductFormOptions() {
     const client = window.supabaseClient;
     const [categories, units, suppliers] = await Promise.all([
-      client.from('product_categories').select('name').eq('is_active', true).order('name'),
+      loadActiveProductCategories(client),
       client.from('units').select('name,abbreviation').eq('is_active', true).order('name'),
       client.from('suppliers').select('name').eq('is_active', true).order('name')
     ]);
-    throwIfError(categories.error);
     throwIfError(units.error);
     throwIfError(suppliers.error);
     return {
-      categories: (categories.data || []).map(item => item.name),
+      categories,
       units: units.data || [],
       suppliers: (suppliers.data || []).map(item => item.name)
     };
+  },
+  async loadProductCategories() {
+    return loadActiveProductCategories();
   },
   async productLifecycle(action, productId, reason = '') {
     const { data, error } = await withSaveTimeout(

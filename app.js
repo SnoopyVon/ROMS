@@ -2634,8 +2634,100 @@ function logsPage(type) {
     rows
   });
 }
+function productionPrepTargets() {
+  return all('recipes')
+    .filter(item => window.CostTrackLogic.isRecipeActive(item) && Number(item.prepTarget || 0) > 0)
+    .map(recipe => {
+      const target = Number(recipe.prepTarget || 0);
+      return { recipe, target, readiness: kitchenRecipeReadiness(recipe, target) };
+    })
+    .sort((a, b) => b.target - a.target || String(a.recipe.name || '').localeCompare(String(b.recipe.name || '')));
+}
+
+function productionBoardPriorityAlerts(prepTargets) {
+  const serviceDate = today();
+  const lowStockCount = all('ingredients').filter(item => item.isActive !== false
+    && ['Out of Stock', 'Low Stock'].includes(stockStatus(item))).length;
+  const shortageCount = prepTargets.reduce((sum, item) => sum + item.readiness.lines
+    .filter(line => line.available < line.required).length, 0);
+  const missingSetupCount = prepTargets.filter(item => !Array.isArray(item.recipe.ingredients) || !item.recipe.ingredients.length).length;
+  const expiringIngredients = new Set();
+  all('inventoryBatches').forEach(batch => {
+    const product = ingredient(batch.productId);
+    if (!product || product.isActive === false || Number(batch.quantityRemaining || 0) <= 0) return;
+    const expirationDate = String(batch.expirationDate || batch.expiration_date || '').slice(0, 10);
+    if (expirationDate !== serviceDate) return;
+    const expiry = window.CostTrackLogic.batchStatus(batch, serviceDate, 3);
+    if (expiry.status === 'Expiring soon' && expiry.daysUntilExpiry === 0) {
+      expiringIngredients.add(String(batch.productId));
+    }
+  });
+  const alerts = [];
+  if (lowStockCount) {
+    alerts.push({
+      tone: 'critical',
+      title: `${lowStockCount} Low / Out of Stock Ingredient${lowStockCount === 1 ? '' : 's'}`,
+      detail: 'Review items at or below their minimum level.',
+      view: 'ingredients',
+      action: 'Review stock'
+    });
+  }
+  if (shortageCount) {
+    alerts.push({
+      tone: 'critical',
+      title: `${shortageCount} Ingredient Shortage${shortageCount === 1 ? '' : 's'} for Today’s Prep`,
+      detail: 'Some recipe targets need more stock before they can be produced.',
+      view: 'ingredients',
+      action: 'Review stock'
+    });
+  }
+  if (missingSetupCount) {
+    alerts.push({
+      tone: 'warning',
+      title: `${missingSetupCount} Recipe Target${missingSetupCount === 1 ? '' : 's'} Missing Ingredients`,
+      detail: 'Add ingredient details before starting these recipes.',
+      view: 'recipes',
+      action: 'Review recipes'
+    });
+  }
+  if (expiringIngredients.size) {
+    alerts.push({
+      tone: 'warning',
+      title: `${expiringIngredients.size} Ingredient${expiringIngredients.size === 1 ? '' : 's'} Expiring Today`,
+      detail: 'Check today’s active inventory batches.',
+      view: 'ingredients',
+      action: 'Review expiry'
+    });
+  }
+  if (['Administrator', 'Manager'].includes(state.role)) {
+    const pendingReservations = all('reservations').filter(item => (
+      item.status === 'Pending' && (!item.date || item.date >= serviceDate)
+    )).length;
+    if (pendingReservations) {
+      alerts.push({
+        tone: 'warning',
+        title: `${pendingReservations} Reservation${pendingReservations === 1 ? '' : 's'} Awaiting Confirmation`,
+        detail: 'Review upcoming pending reservations.',
+        view: 'reservations',
+        action: 'Review bookings'
+      });
+    }
+  }
+  if (!alerts.length) return '';
+  return `<section class="production-priority-alerts" aria-label="Priority alerts">
+    <div class="production-priority-heading"><strong>Needs attention</strong><small>Current operational risks</small></div>
+    <div class="production-priority-list">${alerts.map(alert => `
+      <button type="button" class="production-priority-alert is-${alert.tone}" data-view="${alert.view}" aria-label="${esc(alert.title)}. ${esc(alert.detail)} ${esc(alert.action)}.">
+        <span class="production-priority-icon" aria-hidden="true">!</span>
+        <span class="production-priority-copy"><strong>${esc(alert.title)}</strong><small>${esc(alert.detail)}</small></span>
+        <span class="production-priority-action">${esc(alert.action)}</span>
+      </button>`).join('')}
+    </div>
+  </section>`;
+}
 function productionBoardPage() {
   const rows = state.productionBoard.rows.filter(item => item.serviceDate === today());
+  const prepTargets = productionPrepTargets();
   const cooking = rows.filter(item => item.status === 'Cooking').sort((a, b) => String(a.startedAt || '').localeCompare(String(b.startedAt || '')));
   const ready = rows.filter(item => item.status === 'Ready').sort((a, b) => Number(b.batchNumber) - Number(a.batchNumber)).slice(0, 8);
   const batchTime = value => value ? new Date(value).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }) : 'Historical batch';
@@ -2647,67 +2739,24 @@ function productionBoardPage() {
     const minutes = elapsedMinutes % 60;
     return `Elapsed ${hours ? `${hours}h ` : ''}${minutes}m`;
   };
+  const cookingEmptyState = state.productionBoard.loading || state.productionBoard.error
+    ? ''
+    : `<div class="production-empty-state"><span class="production-empty-icon" aria-hidden="true">+</span><div><strong>No production batches in progress.</strong><p>Start a batch to track its cooking status and portions.</p></div><button type="button" class="secondary-btn compact-btn" data-action="open-start-production">Start a batch</button></div>`;
   const cookingRows = cooking.length ? cooking.map(item => `<div class="production-queue-row">
     <div class="production-batch-number">#${item.batchNumber}</div>
     <div class="production-queue-copy"><strong>${esc(item.recipeName || recipe(item.recipeId)?.name || 'Recipe')}</strong><small>${Number(item.expectedCovers || 0)} portions · Started ${esc(batchTime(item.startedAt))} · ${esc(elapsedTime(item.startedAt))}</small></div>
     <button class="primary-btn compact-btn" data-ready-production="${esc(item.id)}" aria-label="Mark batch ${item.batchNumber} of ${esc(item.recipeName || recipe(item.recipeId)?.name || 'recipe')} ready" ${state.productionBoard.loading ? 'disabled' : ''}>Mark ready</button>
-  </div>`).join('') : '<div class="production-queue-empty">Nothing is cooking right now. Use Start Production to begin a batch.</div>';
-  const readyRows = ready.length ? ready.map(item => `<div class="production-queue-row ready-row"><div class="production-batch-number">#${item.batchNumber}</div><div class="production-queue-copy"><strong>${esc(item.recipeName || recipe(item.recipeId)?.name || 'Recipe')}</strong><small>${item.expectedCovers} portions · Ready ${esc(batchTime(item.readyAt))}</small></div><span class="status status-good">Ready</span></div>`).join('') : '<div class="production-queue-empty">Ready batches will appear here as the kitchen completes them.</div>';
+  </div>`).join('') : cookingEmptyState;
+  const readyRows = ready.map(item => `<div class="production-queue-row ready-row"><div class="production-batch-number">#${item.batchNumber}</div><div class="production-queue-copy"><strong>${esc(item.recipeName || recipe(item.recipeId)?.name || 'Recipe')}</strong><small>${item.expectedCovers} portions · Ready ${esc(batchTime(item.readyAt))}</small></div><span class="status status-good">Ready</span></div>`).join('');
   const error = state.productionBoard.error ? `<div class="production-board-error" role="alert"><strong>Production queue unavailable</strong><span>${esc(state.productionBoard.error)}</span><button class="ghost-btn compact-btn" data-action="retry-production-board">Try again</button></div>` : '';
   const loading = state.productionBoard.loading ? '<div class="production-queue-empty" role="status">Loading today’s production batches…</div>' : '';
   const readyTabActive = state.productionQueueTab === 'ready';
-  const readyTab = readyTabActive
+  const readyTab = readyTabActive && ready.length
     ? `<section class="panel production-ready-panel" aria-label="Ready production batches"><div class="production-queue-list">${readyRows}</div></section>`
-    : '';
-  const productionLogs = all('productionLogs');
-  const producedByDish = new Map();
-  productionLogs.forEach(log => {
-    const dish = recipe(log.recipeId);
-    if (!dish) return;
-    const key = dish.id;
-    const current = producedByDish.get(key) || { name: dish.name, portions: 0 };
-    const portions = log.coversProduced != null
-      ? Number(log.coversProduced)
-      : Math.round(Number(log.quantity || 0) * Number(dish.batchYield || 30));
-    current.portions += portions;
-    producedByDish.set(key, current);
-  });
-  const mostProduced = [...producedByDish.values()].sort((a, b) => b.portions - a.portions).slice(0, 3);
-  const wasteByDish = new Map();
-  all('preparedFoodWasteLogs').forEach(log => {
-    const key = String(log.dishName || '').trim();
-    if (!key) return;
-    const current = wasteByDish.get(key) || { name: key, portions: 0 };
-    current.portions += Number(log.quantity || 0);
-    wasteByDish.set(key, current);
-  });
-  const mostWasted = [...wasteByDish.values()].sort((a, b) => b.portions - a.portions).slice(0, 3);
-  const consumedIngredients = new Map();
-  productionLogs.forEach(log => {
-    const dish = recipe(log.recipeId);
-    if (!dish) return;
-    const producedPortions = log.coversProduced != null
-      ? Number(log.coversProduced)
-      : Math.round(Number(log.quantity || 0) * Number(dish.batchYield || 30));
-    dish.ingredients.forEach(line => {
-      const product = ingredient(line.ingredientId);
-      if (!product) return;
-      const scale = producedPortions / Math.max(1, Number(dish.batchYield || 30));
-      const current = consumedIngredients.get(product.id) || { name: product.name, unit: product.unit, quantity: 0 };
-      current.quantity += Number(line.quantity || 0) * scale;
-      consumedIngredients.set(product.id, current);
-    });
-  });
-  const topConsumed = [...consumedIngredients.values()].sort((a, b) => b.quantity - a.quantity).slice(0, 3);
-  const analyticsPanel = ['Administrator', 'Manager'].includes(state.role)
-    ? `<section class="kitchen-analytics-grid" aria-label="Kitchen analytics">
-      <div class="kitchen-analytics-card"><h3>Most produced dishes</h3>${mostProduced.length ? `<ol>${mostProduced.map(item => `<li><span>${esc(item.name)}</span><strong>${Number(item.portions.toFixed(2))} portions</strong></li>`).join('')}</ol>` : '<p>No completed production yet.</p>'}</div>
-      <div class="kitchen-analytics-card"><h3>Most wasted dishes</h3>${mostWasted.length ? `<ol>${mostWasted.map(item => `<li><span>${esc(item.name)}</span><strong>${Number(item.portions.toFixed(2))} portions</strong></li>`).join('')}</ol>` : '<p>No prepared-food waste logged.</p>'}</div>
-      <div class="kitchen-analytics-card"><h3>Ingredient consumption</h3>${topConsumed.length ? `<ol>${topConsumed.map(item => `<li><span>${esc(item.name)}</span><strong>${Number(item.quantity.toFixed(2))} ${esc(item.unit)}</strong></li>`).join('')}</ol>` : '<p>No completed consumption recorded.</p>'}</div>
-    </section>`
     : '';
   return `${pageHeader('Buffet kitchen', 'Production board', 'Start, monitor, and complete today’s production batches.', `<div class="production-page-actions"><button class="primary-btn" data-action="open-start-production">+ Start Production</button><button class="ghost-btn" data-action="toggle-production-history">${state.productionHistoryOpen ? 'Hide history' : 'View history'}</button></div>`)}
     <div class="production-date-bar"><div><strong>Today’s service</strong><small>${new Date(`${today()}T12:00:00`).toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' })}</small></div><span class="tag">${cooking.length} cooking · ${rows.filter(item => item.status === 'Ready').length} ready</span></div>
+    ${productionBoardPriorityAlerts(prepTargets)}
     ${kitchenProductionSummary(rows)}
     ${error}${loading}
     <section class="panel production-in-progress" aria-label="In progress production batches">
@@ -2719,9 +2768,93 @@ function productionBoardPage() {
       <button type="button" class="${readyTabActive ? 'active' : ''}" aria-pressed="${readyTabActive}" data-production-queue-tab="ready">Ready batches <span>${rows.filter(item => item.status === 'Ready').length}</span></button>
     </div>
     ${readyTab}
-    ${analyticsPanel}
     ${state.productionHistoryOpen ? productionHistoryPanel() : ''}`;
 }
+
+function kitchenHistoricalInsights(reportTab) {
+  if (!['Administrator', 'Manager'].includes(state.role)) return '';
+  const analyticsCard = (title, context, items, emptyMessage) => `
+    <section class="kitchen-analytics-card">
+      <div class="kitchen-analytics-heading"><div><h3>${esc(title)}</h3><p>${esc(context)}</p></div><span>${items.length}</span></div>
+      ${items.length ? `<ol>${items.map((item, index) => `<li class="${item.priority ? 'is-priority' : ''}">
+        <span class="kitchen-insight-rank">${String(index + 1).padStart(2, '0')}</span>
+        <span class="kitchen-insight-copy"><strong>${esc(item.name)}</strong>${item.priority ? '<small>Highest recorded</small>' : ''}</span>
+        <strong class="kitchen-insight-value">${esc(item.value)}</strong>
+      </li>`).join('')}</ol>` : `<p class="kitchen-insight-empty">${esc(emptyMessage)}</p>`}
+    </section>`;
+  const insightsHeading = title => `<div class="kitchen-report-insights-heading"><h2>${title}</h2><p>All recorded history · independent of the selected date range</p></div>`;
+
+  if (reportTab === 'production') {
+    const productionLogs = all('productionLogs');
+    const producedByDish = new Map();
+    productionLogs.forEach(log => {
+      const dish = recipe(log.recipeId);
+      if (!dish) return;
+      const current = producedByDish.get(dish.id) || { name: dish.name, portions: 0 };
+      const portions = log.coversProduced != null
+        ? Number(log.coversProduced)
+        : Math.round(Number(log.quantity || 0) * Number(dish.batchYield || 30));
+      current.portions += portions;
+      producedByDish.set(dish.id, current);
+    });
+    const mostProduced = [...producedByDish.values()].sort((a, b) => b.portions - a.portions).slice(0, 3);
+    const consumedIngredients = new Map();
+    productionLogs.forEach(log => {
+      const dish = recipe(log.recipeId);
+      if (!dish) return;
+      const producedPortions = log.coversProduced != null
+        ? Number(log.coversProduced)
+        : Math.round(Number(log.quantity || 0) * Number(dish.batchYield || 30));
+      dish.ingredients.forEach(line => {
+        const product = ingredient(line.ingredientId);
+        if (!product) return;
+        const scale = producedPortions / Math.max(1, Number(dish.batchYield || 30));
+        const current = consumedIngredients.get(product.id) || { name: product.name, unit: product.unit, quantity: 0 };
+        current.quantity += Number(line.quantity || 0) * scale;
+        consumedIngredients.set(product.id, current);
+      });
+    });
+    const topConsumed = [...consumedIngredients.values()].sort((a, b) => b.quantity - a.quantity).slice(0, 3);
+    return `<section class="kitchen-report-insights" aria-label="Historical production insights">
+      ${insightsHeading('Historical production insights')}
+      <div class="kitchen-analytics-grid kitchen-report-analytics">
+        ${analyticsCard('Most produced dishes', 'All recorded production output', mostProduced.map(item => ({
+          name: item.name,
+          value: `${Number(item.portions.toFixed(2))} portions`
+        })), 'No completed production logged yet.')}
+        ${analyticsCard('Ingredient consumption', 'Estimated from recorded output and recipe quantities', topConsumed.map(item => ({
+          name: item.name,
+          value: `${Number(item.quantity.toFixed(2))} ${item.unit}`
+        })), 'No completed ingredient consumption yet.')}
+      </div>
+    </section>`;
+  }
+
+  if (reportTab === 'waste') {
+    const wasteByDish = new Map();
+    all('preparedFoodWasteLogs').forEach(log => {
+      const key = String(log.dishName || '').trim();
+      if (!key) return;
+      const current = wasteByDish.get(key) || { name: key, portions: 0 };
+      current.portions += Number(log.quantity || 0);
+      wasteByDish.set(key, current);
+    });
+    const mostWasted = [...wasteByDish.values()].sort((a, b) => b.portions - a.portions).slice(0, 3);
+    return `<section class="kitchen-report-insights" aria-label="Historical waste insights">
+      ${insightsHeading('Historical waste insights')}
+      <div class="kitchen-analytics-grid kitchen-report-analytics">
+        ${analyticsCard('Most wasted dishes', 'All recorded prepared-food waste entries', mostWasted.map((item, index) => ({
+          name: item.name,
+          value: `${Number(item.portions.toFixed(2))} portions`,
+          priority: index === 0
+        })), 'No prepared-food waste logged yet.')}
+      </div>
+    </section>`;
+  }
+
+  return '';
+}
+
 async function loadProductionBoard(force = false) {
   const date = today();
   const board = state.productionBoard;
@@ -2746,23 +2879,74 @@ async function loadProductionBoard(force = false) {
 }
 function kitchenProductionSummary(rows) {
   const activeRecipes = all('recipes').filter(window.CostTrackLogic.isRecipeActive);
+  const recipesWithTarget = activeRecipes.filter(item => Number(item.prepTarget || 0) > 0);
   const target = activeRecipes.reduce((sum, item) => sum + Number(item.prepTarget || 0), 0);
-  const cooking = rows.filter(item => item.status === 'Cooking').reduce((sum, item) => sum + Number(item.expectedCovers || 0), 0);
-  const ready = rows.filter(item => item.status === 'Ready').reduce((sum, item) => sum + Number(item.expectedCovers || 0), 0);
+  const cookingBatches = rows.filter(item => item.status === 'Cooking');
+  const readyBatches = rows.filter(item => item.status === 'Ready');
+  const cooking = cookingBatches.reduce((sum, item) => sum + Number(item.expectedCovers || 0), 0);
+  const ready = readyBatches.reduce((sum, item) => sum + Number(item.expectedCovers || 0), 0);
   const remaining = Math.max(0, target - ready - cooking);
-  const preparedWaste = all('preparedFoodWasteLogs').filter(item => item.date === today())
+  const serviceDate = today();
+  const yesterdayDate = new Date(`${serviceDate}T12:00:00`);
+  yesterdayDate.setDate(yesterdayDate.getDate() - 1);
+  const yesterday = `${yesterdayDate.getFullYear()}-${String(yesterdayDate.getMonth() + 1).padStart(2, '0')}-${String(yesterdayDate.getDate()).padStart(2, '0')}`;
+  const ingredientWasteLogs = all('wasteLogs');
+  const preparedWasteLogs = all('preparedFoodWasteLogs');
+  const ingredientWasteToday = ingredientWasteLogs.filter(item => item.date === serviceDate).length;
+  const ingredientWasteYesterday = ingredientWasteLogs.filter(item => item.date === yesterday).length;
+  const preparedWasteToday = preparedWasteLogs.filter(item => item.date === serviceDate);
+  const preparedWasteYesterday = preparedWasteLogs.filter(item => item.date === yesterday);
+  const preparedWaste = preparedWasteToday
     .reduce((sum, item) => sum + Number(item.quantity || 0), 0);
-  const ingredientWasteEntries = all('wasteLogs').filter(item => item.date === today()).length;
+  const preparedWasteYesterdayPortions = preparedWasteYesterday
+    .reduce((sum, item) => sum + Number(item.quantity || 0), 0);
+  const wasteTrend = (current, previous, unit) => {
+    if (!current && !previous) return '';
+    const difference = Number((current - previous).toFixed(2));
+    const direction = difference > 0 ? 'is-increase' : difference < 0 ? 'is-decrease' : 'is-steady';
+    const movement = difference > 0 ? '↑' : difference < 0 ? '↓' : '•';
+    const differenceAmount = Math.abs(difference);
+    const differenceUnit = unit === 'entries' && differenceAmount === 1 ? 'entry' : unit;
+    const trendText = difference === 0
+    ? 'No change vs yesterday'
+    : `${differenceAmount.toLocaleString('en-US', { maximumFractionDigits: 2 })} ${differenceUnit} vs yesterday`;
+    return `<small class="kitchen-summary-trend ${direction}"><span aria-hidden="true">${movement}</span><span>${esc(trendText)}</span></small>`;
+  };
   const lowStock = all('ingredients').filter(item => item.isActive !== false && ['Out of Stock', 'Low Stock'].includes(stockStatus(item))).length;
+  const readyProgress = target > 0 ? Math.min(ready / target * 100, 100) : 0;
+  const cookingProgress = target > 0 ? Math.min(cooking / target * 100, Math.max(0, 100 - readyProgress)) : 0;
+  const progressPercent = Math.round(readyProgress + cookingProgress);
   return `
     <section class="kitchen-operations-summary" aria-label="Today's kitchen operations summary">
-      <div class="kitchen-summary-card"><small>Today's target</small><strong>${target}</strong><span>portions</span></div>
-      <div class="kitchen-summary-card kitchen-summary-cooking"><small>Cooking</small><strong>${cooking}</strong><span>portions</span></div>
-      <div class="kitchen-summary-card kitchen-summary-ready"><small>Ready</small><strong>${ready}</strong><span>portions</span></div>
-      <div class="kitchen-summary-card"><small>Remaining</small><strong>${remaining}</strong><span>portions</span></div>
-      <div class="kitchen-summary-card"><small>Ingredient waste today</small><strong>${ingredientWasteEntries}</strong><span>entries</span></div>
-      <div class="kitchen-summary-card"><small>Prepared waste today</small><strong>${preparedWaste}</strong><span>portions</span></div>
-      <div class="kitchen-summary-card ${lowStock ? 'kitchen-summary-alert' : ''}"><small>Low / out of stock</small><strong>${lowStock}</strong><span>items</span></div>
+      <section class="kitchen-summary-group kitchen-summary-production" aria-labelledby="productionMetricsHeading">
+        <div class="kitchen-summary-group-heading"><div><h2 id="productionMetricsHeading">Production Metrics</h2><p>Today's portions and progress toward target</p></div></div>
+        <article class="kitchen-summary-target">
+          <div class="kitchen-summary-target-label"><span class="kitchen-summary-icon">${shellIcon('chef-hat')}</span><span><small>Today's Target</small><span>${recipesWithTarget.length} recipe target${recipesWithTarget.length === 1 ? '' : 's'} set</span></span></div>
+          <div class="kitchen-summary-target-value"><strong>${target}</strong><span>portions</span></div>
+          <div class="kitchen-production-progress">
+            <div class="kitchen-production-progress-heading"><span>Production progress <small>Ready + cooking</small></span><strong>${target > 0 ? `${progressPercent}%` : '—'}</strong></div>
+            ${target > 0
+              ? `<div class="kitchen-production-progress-track" role="progressbar" aria-label="Production progress from ready and cooking portions" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${progressPercent}">
+                  <span class="is-ready" style="width:${readyProgress.toFixed(2)}%"></span><span class="is-cooking" style="width:${cookingProgress.toFixed(2)}%"></span>
+                </div>
+                <div class="kitchen-production-progress-legend"><span><i class="is-ready"></i>Ready ${ready}</span><span><i class="is-cooking"></i>Cooking ${cooking}</span><span>Remaining ${remaining}</span></div>`
+              : '<p class="kitchen-production-progress-empty">Set an active recipe target to track production progress.</p>'}
+          </div>
+        </article>
+        <div class="kitchen-summary-production-secondary">
+          <article class="kitchen-summary-production-card kitchen-summary-cooking"><span class="kitchen-summary-icon">${shellIcon('clock')}</span><div><small>Cooking</small><strong>${cooking}</strong><span>${cookingBatches.length} batch${cookingBatches.length === 1 ? '' : 'es'} in progress</span></div></article>
+          <article class="kitchen-summary-production-card kitchen-summary-ready"><span class="kitchen-summary-icon">${shellIcon('check')}</span><div><small>Ready</small><strong>${ready}</strong><span>${readyBatches.length} batch${readyBatches.length === 1 ? '' : 'es'} ready</span></div></article>
+          <article class="kitchen-summary-production-card kitchen-summary-remaining"><span class="kitchen-summary-icon">${shellIcon('trend-down')}</span><div><small>Remaining</small><strong>${remaining}</strong><span>${target === 0 ? 'No active recipe targets' : remaining ? 'portions to reach target' : 'Target covered'}</span></div></article>
+        </div>
+      </section>
+      <section class="kitchen-summary-group kitchen-summary-operations-alerts" aria-labelledby="operationalAlertsHeading">
+        <div class="kitchen-summary-group-heading"><div><h2 id="operationalAlertsHeading">Operational Alerts</h2><p>Waste and stock needing attention</p></div></div>
+        <div class="kitchen-summary-alert-grid">
+          <article class="kitchen-summary-alert-card kitchen-summary-ingredient-waste"><div class="kitchen-summary-alert-label"><span class="kitchen-summary-icon">${shellIcon('trash')}</span><small>Ingredient Waste</small></div><strong>${ingredientWasteToday}</strong><span>entries today</span>${wasteTrend(ingredientWasteToday, ingredientWasteYesterday, 'entries')}</article>
+          <article class="kitchen-summary-alert-card kitchen-summary-prepared-waste"><div class="kitchen-summary-alert-label"><span class="kitchen-summary-icon">${shellIcon('restaurant')}</span><small>Prepared Waste</small></div><strong>${Number(preparedWaste.toFixed(2))}</strong><span>portions today</span>${wasteTrend(preparedWaste, preparedWasteYesterdayPortions, 'portions')}</article>
+          <article class="kitchen-summary-alert-card kitchen-summary-alert ${lowStock ? '' : 'kitchen-summary-stock-clear'}"><div class="kitchen-summary-alert-label"><span class="kitchen-summary-icon">${shellIcon('alert')}</span><small>Low / Out of Stock</small></div><strong>${lowStock}</strong><span>${lowStock ? 'items need attention' : 'All active stock is above minimum'}</span>${lowStock ? '<button type="button" class="kitchen-summary-action" data-view="ingredients">Review inventory</button>' : ''}</article>
+        </div>
+      </section>
     </section>`;
 }
 
@@ -6939,9 +7123,18 @@ function recipeCostPanelMarkup(form) {
       : '<p class="recipe-cost-validity" role="status">No unusual quantities or costs detected.</p>';
     return `<section class="recipe-live-cost-panel" data-recipe-cost-panel aria-live="polite">
       <div class="recipe-cost-panel-heading"><div><strong>Live recipe cost</strong><small>Uses current ingredient unit costs and the wastage allowance.</small></div></div>
-      <div class="recipe-cost-highlights"><div><small>Cost per portion</small><strong>${money(breakdown.costPerPortion)}</strong></div><div><small>Total batch cost</small><strong>${money(breakdown.totalBatchCost)}</strong></div></div>
-      ${ingredientRows ? `<div class="recipe-cost-ingredients">${ingredientRows}</div>` : '<p class="recipe-cost-validity">Add ingredients to calculate the recipe cost.</p>'}
-      ${stockHint}${estimate}${warningMarkup}
+      <div class="recipe-cost-highlights">
+        <div><small>Cost per portion</small><strong>${money(breakdown.costPerPortion)}</strong></div>
+        <div><small>Total batch cost</small><strong>${money(breakdown.totalBatchCost)}</strong></div>
+        <div><small>Estimated food cost</small><strong>${foodCostPercent == null ? '—' : `${foodCostPercent.toFixed(1)}%`}</strong></div>
+      </div>
+      <details class="recipe-cost-details"${form?.dataset?.recipeCostDetailsOpen === 'true' ? ' open' : ''}>
+        <summary>Cost breakdown and checks</summary>
+        <div class="recipe-cost-details-content">
+          ${ingredientRows ? `<div class="recipe-cost-ingredients">${ingredientRows}</div>` : '<p class="recipe-cost-validity">Add ingredients to calculate the recipe cost.</p>'}
+          ${stockHint}${estimate}${warningMarkup}
+        </div>
+      </details>
     </section>`;
   } catch (error) {
     return `<section class="recipe-live-cost-panel" data-recipe-cost-panel aria-live="polite"><div class="recipe-cost-panel-heading"><strong>Live recipe cost</strong></div><p class="recipe-preview-error" role="alert">${esc(error.message || 'Enter valid recipe quantities to calculate cost.')}</p></section>`;
@@ -6949,13 +7142,107 @@ function recipeCostPanelMarkup(form) {
 }
 function updateRecipeCostPanel(form) {
   const panel = form.querySelector('[data-recipe-cost-panel]');
-  if (panel) panel.outerHTML = recipeCostPanelMarkup(form);
+  if (panel) {
+    form.dataset.recipeCostDetailsOpen = String(Boolean(panel.querySelector('.recipe-cost-details')?.open));
+    panel.outerHTML = recipeCostPanelMarkup(form);
+  }
 }
 function updateRecipeDraftUnit(form) {
-  const select = form.elements.draftIngredient;
-  const unit = ingredient(select?.value)?.unit || 'unit';
+  const selectedIngredient = ingredient(form.elements.draftIngredient?.value);
+  const unit = selectedIngredient?.unit || 'unit';
   const label = form.querySelector('[data-recipe-draft-unit]');
   if (label) label.textContent = `Quantity required (${unit})`;
+  const selection = form.querySelector('[data-recipe-selected-ingredient]');
+  if (selection) {
+    selection.textContent = selectedIngredient
+      ? `Adding ${selectedIngredient.name} (${unit})`
+      : 'Choose an ingredient, then enter its quantity.';
+  }
+}
+function recipeIngredientUsageCounts(recipes) {
+  const usageCounts = new Map();
+  recipes.forEach(recipe => {
+    const ingredientIds = new Set((Array.isArray(recipe.ingredients) ? recipe.ingredients : [])
+      .map(line => line?.ingredientId)
+      .filter(ingredientId => ingredientId != null)
+      .map(String));
+    ingredientIds.forEach(ingredientId => {
+      usageCounts.set(ingredientId, (usageCounts.get(ingredientId) || 0) + 1);
+    });
+  });
+  return usageCounts;
+}
+function recipeIngredientSuggestions(category, excludedRecipeId, availableIngredients) {
+  const recipes = all('recipes').filter(recipe => (
+    !excludedRecipeId || String(recipe.id) !== String(excludedRecipeId)
+  ));
+  const normalizedCategory = String(category || '').trim().toLocaleLowerCase();
+  if (normalizedCategory) {
+    const categoryRecipes = recipes.filter(recipe => (
+      String(recipe.category || '').trim().toLocaleLowerCase() === normalizedCategory
+    ));
+    const categoryUsage = recipeIngredientUsageCounts(categoryRecipes);
+    if (availableIngredients.some(item => categoryUsage.has(String(item.id)))) {
+      return {
+        usageCounts: categoryUsage,
+        heading: `Suggested for ${category}`,
+        description: 'Frequently used in recipes in this category.'
+      };
+    }
+  }
+  const popularUsage = recipeIngredientUsageCounts(recipes);
+  if (availableIngredients.some(item => popularUsage.has(String(item.id)))) {
+    return {
+      usageCounts: popularUsage,
+      heading: 'Popular across recipes',
+      description: normalizedCategory
+        ? `No ingredient history for ${category} yet; these are common picks.`
+        : 'Frequently used in existing recipes.'
+    };
+  }
+  return {
+    usageCounts: new Map(),
+    heading: 'Browse ingredients',
+    description: 'Search the active inventory to find ingredients.'
+  };
+}
+function recipeIngredientOptionsMarkup(query = '', selectedId = '', category = '', excludedRecipeId = '') {
+  const normalizedQuery = query.trim().toLocaleLowerCase();
+  const selectedIds = new Set(state.recipeDraft.map(item => String(item.ingredientId)));
+  const availableIngredients = all('ingredients')
+    .filter(item => item.isActive !== false
+      && !selectedIds.has(String(item.id)));
+  const suggestions = recipeIngredientSuggestions(category, excludedRecipeId, availableIngredients);
+  if (normalizedQuery && suggestions.usageCounts.size) {
+    suggestions.description = suggestions.heading.startsWith('Suggested for')
+      ? 'Search matches all active inventory; category favorites appear first.'
+      : 'Search matches all active inventory; commonly used ingredients appear first.';
+  }
+  const matches = availableIngredients
+    .filter(item => !normalizedQuery || item.name.toLocaleLowerCase().includes(normalizedQuery))
+    .sort((a, b) => (
+      (suggestions.usageCounts.get(String(b.id)) || 0) - (suggestions.usageCounts.get(String(a.id)) || 0)
+      || a.name.localeCompare(b.name)
+    ));
+  const heading = `<div class="recipe-ingredient-suggestion-heading"><strong>${esc(suggestions.heading)}</strong><small>${esc(suggestions.description)}</small></div>`;
+  if (!matches.length) {
+    return `${heading}<p class="recipe-ingredient-search-empty" role="status">${normalizedQuery ? 'No matching ingredients.' : 'No available ingredients.'}</p>`;
+  }
+  return `${heading}<div class="recipe-ingredient-suggestion-options">${matches.slice(0, 8).map(item => `
+    <button type="button" class="recipe-ingredient-option${String(item.id) === String(selectedId) ? ' is-selected' : ''}" data-action="select-recipe-ingredient" data-id="${esc(item.id)}" aria-pressed="${String(item.id) === String(selectedId)}">
+      <strong>${esc(item.name)}</strong><small>${esc(item.unit)}</small>
+    </button>`).join('')}</div>`;
+}
+function updateRecipeIngredientOptions(form) {
+  const results = form.querySelector('[data-recipe-ingredient-results]');
+  if (results) {
+    results.innerHTML = recipeIngredientOptionsMarkup(
+      form.elements.draftIngredientSearch?.value || '',
+      form.elements.draftIngredient?.value || '',
+      form.elements.category?.value || state.recipeForm?.category || '',
+      form.dataset.id || state.recipeForm?.id || ''
+    );
+  }
 }
 function renderRecipeModal() {
   const form = state.recipeForm || {};
@@ -6963,8 +7250,8 @@ function renderRecipeModal() {
     'Main Course', 'Appetizer', 'Dessert', 'Beverage', 'Side Dish', 'Sauce',
     ...all('recipes').map(item => item.category).filter(Boolean)
   ])].sort((a, b) => a.localeCompare(b));
-  const names = state.recipeDraft.map(item => `${ingredient(item.ingredientId)?.name || 'Ingredient'} | ${item.quantity} ${ingredient(item.ingredientId)?.unit || ''}`);
-  const ingredientOptions = all('ingredients').filter(item => item.isActive !== false).map(item => `<option value="${esc(item.id)}" ${form.draftIngredient === item.id ? 'selected' : ''}>${esc(item.name)} · ${esc(item.unit)}</option>`).join('');
+  const customCategory = Boolean(form.category && !categories.includes(form.category));
+  const selectedCategory = customCategory ? '' : form.category || '';
   const selectedIngredients = state.recipeDraft.length
     ? state.recipeDraft.map((item, index) => {
       const product = ingredient(item.ingredientId);
@@ -6976,26 +7263,66 @@ function renderRecipeModal() {
       </div>`;
     }).join('')
     : '<div class="empty-ingredient">No ingredients added yet.</div>';
-  modal(form.id ? 'Edit recipe' : 'Create recipe', `<div class="form-grid">
-    <label>Recipe name<input name="name" value="${esc(form.name || '')}" maxlength="160" required></label>
-    <label>Category<input name="category" list="recipeCategoryOptions" value="${esc(form.category || '')}" maxlength="80" placeholder="Choose or type a category" required><datalist id="recipeCategoryOptions">${categories.map(category => `<option value="${esc(category)}"></option>`).join('')}</datalist><small class="field-help">Choose an existing category or type a new one.</small></label>
-    <label>Portions per base recipe <small class="field-help">Yield from one full base recipe; production portions scale from this size.</small><input name="batchYield" type="number" min="1" step="1" value="${Number(form.batchYield || 30)}" required></label>
-    <label>Daily production target <small class="field-help">Portions to prepare for one service day; separate from the base recipe yield.</small><input name="prepTarget" type="number" min="1" step="1" value="${Number(form.prepTarget || 30)}" required></label>
-    <label>Wastage percentage<input name="wastage" type="number" min="0" max="100" step=".1" value="${form.wastage ?? 2}" required></label>
-    <label class="recipe-active-switch"><span><strong>Active on production board</strong><small>Inactive recipes stay in production history.</small></span><input name="isActive" type="checkbox" ${form.isActive !== false ? 'checked' : ''}></label>
-    <div class="full">${recipeCostPanelMarkup(document.createElement('form'))}</div>
-    <label class="full">Preparation notes <small class="field-help">Short cooking or presentation instructions shown on the Chef’s production board.</small><textarea name="prepNotes" maxlength="1000" rows="3" placeholder="e.g. Cook in shallow batches; keep sauce separate until service.">${esc(form.prepNotes || '')}</textarea></label>
-    <div class="full recipe-ingredients-field"><div class="field-label">Recipe ingredients <small class="field-hint">Set the quantity used in one base recipe. The unit comes from the ingredient’s stock unit.</small></div>
-      <div class="selected-ingredients">${selectedIngredients}</div>
-      <button type="button" class="ghost-btn add-ingredient-btn" data-action="toggle-recipe-picker">+ Add Ingredient</button>
-      <div class="recipe-picker is-hidden"><label>Inventory ingredient<select name="draftIngredient"><option value="">Choose an ingredient</option>${ingredientOptions}</select></label><label><span data-recipe-draft-unit>Quantity required (unit)</span><input name="draftQuantity" type="number" min=".001" step=".001" placeholder="e.g. 0.25"></label><button type="button" class="primary-btn compact-btn" data-action="add-recipe-ingredient">Add to recipe</button></div>
-      <input type="hidden" name="composition" value="${esc(names.join('\\n'))}">
+  const categoryChoices = categories.map(category => `
+    <button type="button" class="recipe-category-choice${selectedCategory === category ? ' is-selected' : ''}" data-recipe-form-category="${esc(category)}" aria-pressed="${selectedCategory === category}">${esc(category)}</button>`).join('');
+  const initialCostForm = document.createElement('form');
+  initialCostForm.dataset.recipeCostDetailsOpen = 'false';
+  modal(form.id ? 'Edit recipe' : 'Create recipe', `
+    <div class="recipe-editor-main">
+      <section class="recipe-editor-section recipe-basics-section" aria-labelledby="recipeBasicsHeading">
+        <div class="recipe-section-heading"><div><h3 id="recipeBasicsHeading">Recipe basics</h3><p>Start with the dish name and where it belongs.</p></div></div>
+        <div class="recipe-basics-fields">
+          <label class="recipe-name-field"><span>Recipe name <span class="recipe-required-marker" aria-hidden="true">*</span></span><input name="name" value="${esc(form.name || '')}" maxlength="160" required></label>
+          <fieldset class="recipe-category-field" aria-required="true">
+            <legend>Category <span class="recipe-required-marker" aria-hidden="true">*</span></legend>
+            <input type="hidden" name="category" value="${esc(form.category || '')}">
+            <div class="recipe-category-choices" role="group" aria-label="Recipe category">
+              ${categoryChoices}
+              <button type="button" class="recipe-category-choice${customCategory ? ' is-selected' : ''}" data-recipe-form-category="__custom__" aria-pressed="${customCategory}">Other</button>
+            </div>
+            <label class="recipe-custom-category"${customCategory ? '' : ' hidden'} data-recipe-custom-category>Custom category<input name="categoryCustom" maxlength="80" value="${customCategory ? esc(form.category) : ''}" placeholder="Enter a category"></label>
+          </fieldset>
+        </div>
+      </section>
+      <section class="recipe-editor-section recipe-ingredients-section" aria-labelledby="recipeIngredientsHeading">
+        <div class="recipe-section-heading"><div><h3 id="recipeIngredientsHeading">Recipe ingredients</h3><p>Add what goes into one base recipe, then set each quantity in its stock unit.</p></div><span class="recipe-ingredient-count">${state.recipeDraft.length} added</span></div>
+        <div class="selected-ingredients">${selectedIngredients}</div>
+        <div class="recipe-ingredient-picker">
+          <label class="recipe-ingredient-search">Search ingredients<input type="search" name="draftIngredientSearch" autocomplete="off" placeholder="Type an ingredient name"></label>
+          <div class="recipe-ingredient-results" data-recipe-ingredient-results role="group" aria-label="Ingredient suggestions">${recipeIngredientOptionsMarkup(
+            '',
+            form.draftIngredient || '',
+            form.category || '',
+            form.id || ''
+          )}</div>
+          <p class="recipe-ingredient-selection" data-recipe-selected-ingredient aria-live="polite">Choose an ingredient, then enter its quantity.</p>
+          <input type="hidden" name="draftIngredient" value="${esc(form.draftIngredient || '')}">
+          <label class="recipe-ingredient-quantity"><span data-recipe-draft-unit>Quantity required (unit)</span><input name="draftQuantity" type="number" min=".001" step=".001" value="${esc(form.draftQuantity || '')}" placeholder="e.g. 0.25"></label>
+          <button type="button" class="primary-btn compact-btn" data-action="add-recipe-ingredient">Add ingredient</button>
+        </div>
+      </section>
+      <details class="recipe-production-settings">
+        <summary><span><strong>Production settings</strong><small>Yield ${Number(form.batchYield || 30)} portions · Daily target ${Number(form.prepTarget || 30)} portions</small></span><span class="recipe-settings-toggle">Adjust</span></summary>
+        <div class="recipe-production-fields">
+          <label>Portions per base recipe <small class="field-help">Yield from one full base recipe; production portions scale from this size.</small><input name="batchYield" type="number" min="1" step="1" value="${Number(form.batchYield || 30)}" required></label>
+          <label>Daily production target <small class="field-help">Portions to prepare for one service day; separate from the base recipe yield.</small><input name="prepTarget" type="number" min="1" step="1" value="${Number(form.prepTarget || 30)}" required></label>
+          <label>Wastage percentage<input name="wastage" type="number" min="0" max="100" step=".1" value="${form.wastage ?? 2}" required></label>
+          <label class="recipe-active-switch"><span><strong>Available for production</strong><small>Inactive recipes stay in production history.</small></span><input name="isActive" type="checkbox" ${form.isActive !== false ? 'checked' : ''}></label>
+        </div>
+      </details>
+      <label class="recipe-preparation-notes">Preparation notes <small class="field-help">Short cooking or presentation instructions shown on the Chef’s production board.</small><textarea name="prepNotes" maxlength="1000" rows="3" placeholder="e.g. Cook in shallow batches; keep sauce separate until service.">${esc(form.prepNotes || '')}</textarea></label>
     </div>
-  </div>`, 'Save recipe');
+    <aside class="recipe-cost-sidebar" aria-label="Live recipe cost summary">${recipeCostPanelMarkup(initialCostForm)}</aside>`, 'Save recipe', 'recipe-creation-modal');
   const recipeForm = document.querySelector('#modalForm');
   recipeForm.dataset.type = 'recipe';
   if (form.id) recipeForm.dataset.id = form.id;
+  const customCategoryField = recipeForm.querySelector('[data-recipe-custom-category]');
+  if (customCategoryField) {
+    const customCategoryInput = customCategoryField.querySelector('input');
+    if (customCategoryInput) customCategoryInput.required = customCategoryField.hidden === false;
+  }
   updateRecipeDraftUnit(recipeForm);
+  updateRecipeIngredientOptions(recipeForm);
   updateRecipeCostPanel(recipeForm);
 }
 function openRecipeForm(item) {
@@ -9556,10 +9883,14 @@ async function handleSubmit(form, submitter = null) {
       return;
     }
   } else if (type === 'recipe') {
+    const recipeName = String(data.name || '').trim();
+    const recipeCategory = String(data.category || '').trim();
+    if (!recipeName) return toast('Enter a recipe name.', 'error');
+    if (!recipeCategory) return toast('Choose a recipe category or enter a custom category.', 'error');
     const ingredients = state.recipeDraft.map(item => ({ ingredientId: item.ingredientId, quantity: Number(item.quantity) })).filter(item => item.ingredientId && item.quantity > 0);
     if (!ingredients.length) return toast('Add at least one inventory ingredient.', 'error');
     const record = {
-      id: editId || id('rec'), name: data.name, category: data.category,
+      id: editId || id('rec'), name: recipeName, category: recipeCategory,
       wastage: Number(data.wastage),
       batchYield: Number(data.batchYield), prepTarget: Number(data.prepTarget),
       prepNotes: data.prepNotes.trim(), isActive: form.elements.isActive.checked, ingredients
@@ -11310,6 +11641,31 @@ document.addEventListener('click', event => {
 document.addEventListener('click', event => {
   const actionMenuSummary = event.target.closest('.user-management-page .user-action-menu > summary');
   if (actionMenuSummary) return;
+  const recipeCategoryButton = event.target.closest('[data-recipe-form-category]');
+  if (recipeCategoryButton) {
+    const form = recipeCategoryButton.closest('#modalForm[data-type="recipe"]');
+    if (!form) return;
+    const customField = form.querySelector('[data-recipe-custom-category]');
+    const customInput = form.elements.categoryCustom;
+    const categoryInput = form.elements.category;
+    const isCustom = recipeCategoryButton.dataset.recipeFormCategory === '__custom__';
+    form.querySelectorAll('[data-recipe-form-category]').forEach(button => {
+      button.classList.toggle('is-selected', button === recipeCategoryButton);
+      button.setAttribute('aria-pressed', String(button === recipeCategoryButton));
+    });
+    if (customField) customField.hidden = !isCustom;
+    if (customInput) {
+      customInput.required = isCustom;
+      if (isCustom) customInput.value = '';
+      else customInput.value = '';
+    }
+    if (categoryInput) categoryInput.value = isCustom ? '' : recipeCategoryButton.dataset.recipeFormCategory;
+    captureRecipeFormState(form);
+    updateRecipeIngredientOptions(form);
+    state.modalDirty = true;
+    if (isCustom) customInput?.focus();
+    return;
+  }
   const category = event.target.closest('[data-recipe-category]')?.dataset.recipeCategory;
   if (category) {
     state.recipeCategory = category;
@@ -11438,8 +11794,18 @@ document.addEventListener('click', event => {
   else if (name === 'edit-reservation') {
     const record = all('reservations').find(item => item.id === action.dataset.id);
     if (record) reservationForm(record);
-  } else if (name === 'toggle-recipe-picker') document.querySelector('.recipe-picker').classList.toggle('is-hidden');
-  else if (name === 'add-recipe-ingredient') {
+  } else if (name === 'select-recipe-ingredient') {
+    const form = document.querySelector('#modalForm[data-type="recipe"]');
+    const selected = ingredient(action.dataset.id);
+    if (!form || !selected || selected.isActive === false) return;
+    if (form.elements.draftIngredient.value !== selected.id) form.elements.draftQuantity.value = '';
+    form.elements.draftIngredient.value = selected.id;
+    form.elements.draftIngredientSearch.value = selected.name;
+    captureRecipeFormState(form);
+    updateRecipeDraftUnit(form);
+    updateRecipeIngredientOptions(form);
+    form.elements.draftQuantity.focus();
+  } else if (name === 'add-recipe-ingredient') {
     const form = document.querySelector('#modalForm');
     const ingredientId = form.elements.draftIngredient.value;
     const quantity = Number(form.elements.draftQuantity.value);
@@ -11451,6 +11817,7 @@ document.addEventListener('click', event => {
     captureRecipeFormState(form);
     state.recipeDraft.push({ ingredientId, quantity });
     state.recipeForm.draftIngredient = '';
+    state.recipeForm.draftIngredientSearch = '';
     state.recipeForm.draftQuantity = '';
     renderRecipeModal();
     state.modalDirty = true;
@@ -11476,7 +11843,7 @@ document.addEventListener('click', event => {
     const map = { ingredient: 'ingredients', recipe: 'recipes' };
     const record = all(map[type]).find(item => item.id === action.dataset.id);
     if (record) viewRecord(type, record);
-  } else if (name.startsWith('open-')) openForm(name.replace('open-', ''));
+  } else if (name.startsWith('open-') && name !== 'open-start-production') openForm(name.replace('open-', ''));
   else if (name.startsWith('edit-')) {
     const type = name.replace('edit-', '');
     const map = { ingredient: 'ingredients', recipe: 'recipes', user: 'users' };
@@ -11649,12 +12016,28 @@ document.addEventListener('input', event => {
 document.addEventListener('input', event => {
   const form = event.target.closest('#modalForm[data-type="recipe"]');
   if (!form) return;
+  if (event.target.name === 'draftIngredientSearch') {
+    if (form.elements.draftIngredient.value) {
+      form.elements.draftIngredient.value = '';
+      form.elements.draftQuantity.value = '';
+      state.recipeForm.draftIngredient = '';
+      state.recipeForm.draftQuantity = '';
+      updateRecipeDraftUnit(form);
+    }
+    updateRecipeIngredientOptions(form);
+    return;
+  }
+  if (event.target.name === 'categoryCustom') {
+    form.elements.category.value = event.target.value;
+    state.modalDirty = true;
+  }
   const quantityInput = event.target.closest('[data-recipe-quantity]');
   if (quantityInput) {
     const index = Number(quantityInput.dataset.recipeQuantity);
     if (state.recipeDraft[index]) state.recipeDraft[index].quantity = Number(quantityInput.value);
   }
   captureRecipeFormState(form);
+  if (event.target.name === 'categoryCustom') updateRecipeIngredientOptions(form);
   updateRecipeDraftUnit(form);
   updateRecipeCostPanel(form);
 });
@@ -11843,18 +12226,18 @@ async function syncWithSupabase() {
       throw new Error(`Could not load the "${key}" collection for ${state.role}: ${error.message}`);
     }
   }
+  let productCategoryOptions = [];
   try {
     state.notificationReadKeys = await window.supabaseRecord.notificationReadKeys();
   } catch (error) {
     throw new Error(`Notification state could not be loaded: ${error.message}`);
-  let productCategoryOptions = [];
+  }
   if (collections.includes('ingredients')) {
     try {
       productCategoryOptions = await window.supabaseRecord.loadProductCategories();
     } catch (error) {
       throw new Error(`Could not load active product categories: ${error.message}`);
     }
-  }
   }
   state.productCategoryOptions = productCategoryOptions;
   KEYS.forEach(key => { collectionState[key] = pendingCollections[key]; });
@@ -13077,7 +13460,7 @@ function reportsPage() {
     : state.reportTab === 'food_cost'
       ? 'New production logs use cost snapshots. Older logs are estimated from current ingredient costs; waste is valued at current cost.'
       : 'Net sales exclude voided bills, deposits, and all legacy revenue records.';
-  return `${pageHeader('Management insight', 'Reports & analytics', 'Revenue and customer counts derive from closed POS bills. Deposits and cash movements are shown separately in operational reports.', `<button class="ghost-btn" data-action="print-report">Print / PDF</button> <button class="secondary-btn" data-action="export-report">Export CSV</button>`)}<div class="report-toolbar"><div class="report-tabs" role="tablist" aria-label="Report categories">${tabs.map(([tab, label]) => `<button type="button" role="tab" aria-selected="${state.reportTab === tab}" class="${state.reportTab === tab ? 'active' : ''}" data-report-tab="${tab}">${label}</button>`).join('')}</div>${dateRangeControls()}<label>Group by<select data-report-group ${state.reportTab === 'daily_revenue' ? 'disabled' : ''}><option value="day" ${state.reportGrouping === 'day' ? 'selected' : ''}>Day</option><option value="week" ${state.reportGrouping === 'week' ? 'selected' : ''}>Week</option><option value="month" ${state.reportGrouping === 'month' ? 'selected' : ''}>Month</option></select></label>${state.reportTab === 'food_cost' ? `<label class="filter-check"><input type="checkbox" data-report-waste ${state.reportIncludeWaste ? 'checked' : ''}> Include logged waste</label>` : ''}</div>${invalidDateRange ? '<div class="panel error-state" role="alert">Choose a valid custom date range to view this report.</div>' : loading ? '<div class="panel loading-state" role="status">Loading report…</div>' : error ? `<div class="panel error-state" role="alert">${esc(error)} <button class="ghost-btn" data-action="retry-report">Retry</button></div>` : `<div class="report-disclaimer">${disclaimer}</div><div class="metric-grid">${kpis}</div><div class="report-chart-grid">${charts}</div><div class="panel ${reportTableClass}">${state.reportTab === 'waste' ? '<h2>Top wasted ingredients</h2>' : ''}${reportTable(headers, tableRows, tableEmptyMessage, tableFooter)}${pagination}</div>${additionalWasteReport}`}${legacyArchive}`;
+  return `${pageHeader('Management insight', 'Reports & analytics', 'Revenue and customer counts derive from closed POS bills. Deposits and cash movements are shown separately in operational reports.', `<button class="ghost-btn" data-action="print-report">Print / PDF</button> <button class="secondary-btn" data-action="export-report">Export CSV</button>`)}<div class="report-toolbar"><div class="report-tabs" role="tablist" aria-label="Report categories">${tabs.map(([tab, label]) => `<button type="button" role="tab" aria-selected="${state.reportTab === tab}" class="${state.reportTab === tab ? 'active' : ''}" data-report-tab="${tab}">${label}</button>`).join('')}</div>${dateRangeControls()}<label>Group by<select data-report-group ${state.reportTab === 'daily_revenue' ? 'disabled' : ''}><option value="day" ${state.reportGrouping === 'day' ? 'selected' : ''}>Day</option><option value="week" ${state.reportGrouping === 'week' ? 'selected' : ''}>Week</option><option value="month" ${state.reportGrouping === 'month' ? 'selected' : ''}>Month</option></select></label>${state.reportTab === 'food_cost' ? `<label class="filter-check"><input type="checkbox" data-report-waste ${state.reportIncludeWaste ? 'checked' : ''}> Include logged waste</label>` : ''}</div>${invalidDateRange ? '<div class="panel error-state" role="alert">Choose a valid custom date range to view this report.</div>' : loading ? '<div class="panel loading-state" role="status">Loading report…</div>' : error ? `<div class="panel error-state" role="alert">${esc(error)} <button class="ghost-btn" data-action="retry-report">Retry</button></div>` : `<div class="report-disclaimer">${disclaimer}</div><div class="metric-grid">${kpis}</div><div class="report-chart-grid">${charts}</div><div class="panel ${reportTableClass}">${state.reportTab === 'waste' ? '<h2>Top wasted ingredients</h2>' : ''}${reportTable(headers, tableRows, tableEmptyMessage, tableFooter)}${pagination}</div>${additionalWasteReport}`}${kitchenHistoricalInsights(state.reportTab)}${legacyArchive}`;
 }
 
 let backdropMouseDown = null;

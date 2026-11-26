@@ -751,6 +751,42 @@ test('product lifecycle RPC uses the guarded timeout and product mapping retains
   assert.equal(timers.size, 0);
 });
 
+test('active product categories are exported, ordered, and filtered', async () => {
+  const query = {};
+  const queryBuilder = {
+    select(columns) {
+      query.columns = columns;
+      return this;
+    },
+    eq(column, value) {
+      query.filter = { column, value };
+      return this;
+    },
+    order(column) {
+      query.order = column;
+      return this;
+    },
+    then(resolve, reject) {
+      return Promise.resolve({
+        data: [{ name: 'Dry Goods' }, { name: 'Produce' }],
+        error: null
+      }).then(resolve, reject);
+    }
+  };
+  const { record } = loadSupabaseRecord(() => ({}), {
+    from(table) {
+      query.table = table;
+      return queryBuilder;
+    }
+  });
+
+  assert.deepEqual(Array.from(await record.loadProductCategories()), ['Dry Goods', 'Produce']);
+  assert.equal(query.table, 'product_categories');
+  assert.equal(query.columns, 'name');
+  assert.deepEqual(JSON.parse(JSON.stringify(query.filter)), { column: 'is_active', value: true });
+  assert.equal(query.order, 'name');
+});
+
 test('production log mapping retains its immutable cost snapshot', () => {
   const { record } = loadSupabaseRecord(() => ({}));
   const mapped = record.mapRecord('productionLogs', {
