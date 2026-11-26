@@ -176,6 +176,7 @@ export function parseCreateAccountPayload(value: unknown): CreateAccountPayload 
 export function parseVerificationRecordPayload(
   value: unknown,
   actorId: string,
+  allowFaceTemplateWithOverride = false,
 ): VerificationRecordPayload {
   if (!isRecord(value)) {
     throw new InviteValidationError("A verification record object is required.");
@@ -348,6 +349,7 @@ export function parseVerificationRecordPayload(
   }
   if (
     faceDescriptor &&
+    !allowFaceTemplateWithOverride &&
     (!ocrSummary.ocr_passed || !faceCheckPassed || value.override_used)
   ) {
     throw new InviteValidationError(
@@ -417,7 +419,7 @@ export function parseVerifiedAccountRecord(
   value: unknown,
   actorId: string,
 ): VerificationRecordPayload {
-  const record = parseVerificationRecordPayload(value, actorId);
+  const record = parseVerificationRecordPayload(value, actorId, true);
   const facePassed = record.face_match_result === "match" &&
     record.face_match_score !== null &&
     record.face_match_score >= 85;
@@ -426,17 +428,20 @@ export function parseVerifiedAccountRecord(
     record.face_match_score >= 70 &&
     record.face_match_score < 85 &&
     record.override_used;
-  if (record.face_scan_passed !== true || (!facePassed && !faceNeedsReview)) {
+  if (
+    record.face_scan_passed !== true ||
+    (!facePassed && !faceNeedsReview) ||
+    !record.face_descriptor
+  ) {
     throw new InviteValidationError(
-      "The face scan must pass or be approved for manual review before creating this account.",
+      "A completed face scan and valid face template are required before creating this account.",
     );
   }
   if (
     record.override_used
       ? (record.ocr_summary.ocr_passed &&
-        record.face_match_result !== "manual_review") ||
-        record.face_descriptor != null
-      : !record.ocr_summary.ocr_passed || !record.face_descriptor
+        record.face_match_result !== "manual_review")
+      : !record.ocr_summary.ocr_passed
   ) {
     throw new InviteValidationError(
       "Manual review requires a reason and cannot approve a failed face comparison.",

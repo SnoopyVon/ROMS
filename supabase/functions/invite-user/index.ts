@@ -60,6 +60,15 @@ function readErrorCode(error: unknown): string {
   return error instanceof Error ? error.name : "unknown_error";
 }
 
+function readErrorMessage(error: unknown): string {
+  if (typeof error === "string") return error.slice(0, 500);
+  if (typeof error === "object" && error !== null && "message" in error) {
+    const message = error.message;
+    if (typeof message === "string") return message.slice(0, 500);
+  }
+  return error instanceof Error ? error.message.slice(0, 500) : "Unknown error";
+}
+
 function requiredEnv(name: string): string {
   const value = Deno.env.get(name);
   if (!value) {
@@ -144,6 +153,7 @@ function logFailure(
     request_id: requestId,
     operation,
     error_code: readErrorCode(error),
+    error_message: readErrorMessage(error),
   }));
 }
 
@@ -1209,8 +1219,8 @@ async function removeUserAccount(
     throw new HttpError(
       502,
       accountRemainsBlocked
-        ? "Supabase Auth could not complete account removal. The account remains blocked; retry Remove or contact an Administrator."
-        : "Supabase Auth could not complete account removal. The account remains in the staff list and sign-in was restored; retry Remove.",
+        ? `Supabase Auth could not complete account removal. The account remains blocked; retry Remove or contact an Administrator. Request ID: ${requestId}.`
+        : `Supabase Auth could not complete account removal. The account remains in the staff list and sign-in was restored; retry Remove. Request ID: ${requestId}.`,
     );
   }
 

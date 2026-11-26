@@ -220,29 +220,35 @@ Deno.test("direct account creation requires a confirmed face match and strong pa
     ocr_summary: { ...valid.ocr_summary, ocr_passed: false },
     override_used: true,
     override_reason: "ID details were manually checked.",
-    face_descriptor: null,
   }, actorId);
   assertEquals(manualReview.override_used, true, "Administrator review may accept low-confidence ID details");
-  assertEquals(manualReview.face_descriptor, null, "manual review must not enroll a face template");
+  assertEquals(manualReview.face_descriptor?.length, 128, "manual review must retain the enrolled face template");
   const faceManualReview = parseVerifiedAccountRecord({
     ...valid,
     face_match_score: 84,
     face_match_result: "manual_review",
     override_used: true,
     override_reason: "Administrator approved the manual review by selecting Add User.",
-    face_descriptor: null,
   }, actorId);
   assertEquals(faceManualReview.face_match_result, "manual_review", "scores from 70 through 84 require manual review");
   assertEquals(faceManualReview.override_reason, "Administrator approved the manual review by selecting Add User.", "Add User approval must be recorded for manual review");
-  assertEquals(faceManualReview.face_descriptor, null, "manual face review must not enroll a face template");
+  assertEquals(faceManualReview.face_descriptor?.length, 128, "manual face review must retain the enrolled face template");
   assertEquals(parseVerifiedAccountRecord({
     ...valid,
     face_match_score: 84.5,
     face_match_result: "manual_review",
     override_used: true,
     override_reason: "The face similarity score needs a manual check.",
-    face_descriptor: null,
   }, actorId).face_match_result, "manual_review", "decimal scores below 85 remain in manual review");
+  assertValidationError(
+    () => parseVerifiedAccountRecord({
+      ...valid,
+      override_used: true,
+      override_reason: "The face scan did not produce a valid descriptor.",
+      face_descriptor: null,
+    }, actorId),
+    "account creation must require a valid face template even when an override was used",
+  );
   assertEquals(parseAccountPassword("Password123").length, 11, "valid password should pass");
   assertValidationError(
     () => parseVerifiedAccountRecord({

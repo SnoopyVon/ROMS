@@ -184,7 +184,8 @@ create table if not exists public.reservations (
   request text not null default '',
   last_correction_reason text not null default '',
   table_id text,
-  created_by uuid references auth.users (id) on delete set null,
+  -- Keep the original creator UUID as immutable reservation history.
+  created_by uuid,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now(),
   constraint reservations_contact_check check (

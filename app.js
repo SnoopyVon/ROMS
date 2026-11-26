@@ -3604,7 +3604,7 @@ function userManagementStyles() {
     .user-management-card .card-count { color: var(--teal-dark); font-size: 13px; font-weight: 700; }
     .user-management-card .card-icon { display: grid; width: 44px; height: 44px; place-items: center; border-radius: 14px; background: var(--mint); color: var(--teal-dark); font-size: 22px; }
     .user-management-refresh { display: flex; align-items: center; gap: 8px; }
-    .user-refresh-error, .user-invite-error { display: flex; align-items: center; justify-content: space-between; gap: 14px; border: 1px solid var(--danger); border-radius: var(--radius-md); background: var(--red-bg); padding: 13px 15px; color: #873e3a; }
+    .user-refresh-error, .user-management-error { display: flex; align-items: center; justify-content: space-between; gap: 14px; border: 1px solid var(--danger); border-radius: var(--radius-md); background: var(--red-bg); padding: 13px 15px; color: #873e3a; }
     .user-management-nav { display: flex; align-items: center; justify-content: space-between; gap: 14px; }
     .user-back-link { display: inline-flex; min-height: 44px; align-items: center; gap: 8px; border: 1px solid var(--accent); border-radius: var(--radius-sm); background: var(--accent); padding: 0 14px; color: var(--paper); font-weight: 700; cursor: pointer; }
     .user-back-link:hover { border-color: var(--accent-hover); background: var(--accent-hover); }
@@ -3618,8 +3618,8 @@ function userManagementStyles() {
     .user-management-filter select, .user-management-filter input { width: 100%; border: 1px solid var(--line); border-radius: var(--radius-sm); background: #fff; padding: 8px 11px; color: var(--ink); }
     .user-management-count { margin-left: auto; color: var(--muted); font-size: 12px; font-weight: 700; }
     .user-management-table { min-width: 980px; }
-    .user-invitations-table { min-width: 1120px; }
-    .user-management-table td, .user-invitations-table td { vertical-align: middle; }
+    .user-management-table td { vertical-align: middle; }
+    .user-management-table .user-row { cursor: pointer; }
     .verification-record-toolbar { display: flex; align-items: end; gap: 12px; margin: 18px 0 14px; }
     .verification-record-toolbar .user-management-filter { flex: 1; max-width: 420px; }
     .verification-record-table { min-width: 920px; }
@@ -3639,9 +3639,11 @@ function userManagementStyles() {
     .verification-record-timeline small { margin-top: 3px; color: var(--muted); }
     .verification-record-warning { color: #854d0e; font-size: 12px; }
     .modal.verification-record-modal { width: min(820px, calc(100vw - 32px)); }
+    .staff-details-modal .modal-actions { display: none; }
     .user-staff-cell { display: flex; min-width: 190px; align-items: center; gap: 11px; }
     .user-staff-cell > span:last-child { min-width: 0; }
     .user-staff-cell strong, .user-staff-cell small { display: block; overflow-wrap: anywhere; }
+    .user-staff-cell .verification-record-open { display: block; max-width: 100%; overflow-wrap: anywhere; }
     .user-staff-cell small { margin-top: 3px; color: var(--muted); font-size: 11px; }
     .user-management-role-badge { display: inline-flex; align-items: center; border: 1px solid var(--line); border-radius: 999px; background: var(--success-bg); padding: 6px 10px; color: #215e4e; font-size: 11px; font-weight: 700; }
     .user-protected { display: inline-grid; gap: 4px; }
@@ -3651,10 +3653,9 @@ function userManagementStyles() {
     .user-action-menu summary { display: inline-flex; min-width: 112px; min-height: 44px; align-items: center; justify-content: center; border: 1px solid var(--line); border-radius: var(--radius-sm); background: #fff; padding: 8px 12px; color: var(--ink); font-size: 12px; font-weight: 700; cursor: pointer; list-style: none; }
     .user-action-menu summary::-webkit-details-marker { display: none; }
     .user-action-menu[open] summary { border-color: #a9d1c3; background: var(--mint); color: var(--teal-dark); }
-    .user-action-list { position: absolute; z-index: 3; top: calc(100% + 5px); right: 0; display: grid; min-width: 185px; gap: 3px; border: 1px solid var(--line); border-radius: var(--radius-md); background: #fff; padding: 6px; box-shadow: 0 12px 28px rgba(35,62,53,.14); }
+    .user-action-list { position: absolute; z-index: 20; top: calc(100% + 5px); right: 0; display: grid; min-width: 185px; max-height: calc(100vh - 16px); gap: 3px; overflow-y: auto; border: 1px solid var(--line); border-radius: var(--radius-md); background: #fff; padding: 6px; box-shadow: 0 12px 28px rgba(35,62,53,.14); }
     .user-action-list button { width: 100%; border: 0; border-radius: 7px; background: #fff; padding: 9px 10px; color: var(--ink); text-align: left; cursor: pointer; }
     .user-action-list button:hover { background: var(--mint); color: var(--teal-dark); }
-    .user-invitation-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 6px; }
     .user-management-empty { display: grid; justify-items: center; gap: 8px; padding: 36px 16px; text-align: center; }
     .user-management-empty p { max-width: 430px; margin: 0 0 8px; color: var(--muted); }
     .user-management-skeleton { display: grid; gap: 10px; padding: 20px; }
@@ -3754,21 +3755,19 @@ function userManagementStyles() {
       .user-management-toolbar { align-items: stretch; }
       .user-management-filter { min-width: 100%; }
       .user-management-count { margin-left: 0; }
-      .user-management-table, .user-invitations-table, .verification-record-table { display: block; min-width: 0; }
-      .user-management-table thead, .user-invitations-table thead, .verification-record-table thead { display: none; }
-      .user-management-table tbody, .user-invitations-table tbody, .verification-record-table tbody { display: grid; gap: 11px; }
+      .user-management-table, .verification-record-table { display: block; min-width: 0; }
+      .user-management-table thead, .verification-record-table thead { display: none; }
+      .user-management-table tbody, .verification-record-table tbody { display: grid; gap: 11px; }
       .user-management-table tbody tr:not(.user-management-empty-row),
-      .user-invitations-table tbody tr:not(.user-management-empty-row),
       .verification-record-table tbody tr:not(.user-management-empty-row) { display: block; overflow: visible; border: 1px solid var(--line); border-radius: var(--radius-md); background: #fff; }
-      .user-management-table td, .user-invitations-table td, .verification-record-table td { display: flex; min-height: 44px; align-items: flex-start; justify-content: space-between; gap: 12px; padding: 10px 12px; white-space: normal; overflow-wrap: anywhere; }
-      .user-management-table td::before, .user-invitations-table td::before, .verification-record-table td::before { flex: 0 0 92px; color: var(--muted); content: attr(data-label); font-size: 10px; font-weight: 700; text-transform: uppercase; }
-      .user-management-table .user-management-empty-row td, .user-invitations-table .user-management-empty-row td, .verification-record-table .user-management-empty-row td { display: block; }
+      .user-management-table td, .verification-record-table td { display: flex; min-height: 44px; align-items: flex-start; justify-content: space-between; gap: 12px; padding: 10px 12px; white-space: normal; overflow-wrap: anywhere; }
+      .user-management-table td::before, .verification-record-table td::before { flex: 0 0 92px; color: var(--muted); content: attr(data-label); font-size: 10px; font-weight: 700; text-transform: uppercase; }
+      .user-management-table .user-management-empty-row td, .verification-record-table .user-management-empty-row td { display: block; }
       .verification-record-toolbar { align-items: stretch; flex-direction: column; }
       .verification-record-toolbar .user-management-filter { max-width: none; }
       .verification-record-detail dl { grid-template-columns: 1fr; }
       .user-management-page .table-scroll { overflow: visible; }
       .user-action-list { position: static; margin-top: 5px; }
-      .user-invitation-actions { justify-content: flex-start; }
     }
     @media (prefers-reduced-motion: reduce) {
       .user-management-skeleton span { animation: none; }
@@ -3788,9 +3787,66 @@ function verificationRecordActorName(userId) {
 }
 
 function userManagementTabSelector(tab) {
-  if (tab === 'invitations') return '#userInvitationsTab';
   if (tab === 'verification-records') return '#userVerificationRecordsTab';
   return '#userStaffTab';
+}
+
+function openUserDetails(userId) {
+  if (state.role !== 'Administrator') return toast('Only Administrators can view staff details.', 'error');
+  const user = findUserManagementTarget(userId);
+  if (!user) return toast('This staff account is no longer available. Refresh the list and try again.', 'error');
+
+  const history = state.verificationRecordHistory;
+  const verificationRecord = history.rows
+    .filter(record => String(record.profile_id) === String(user.id))
+    .sort((left, right) => new Date(right.verified_at).getTime() - new Date(left.verified_at).getTime())[0];
+  const verificationStatus = verificationRecord
+    ? verificationRecord.final_status === 'Approved' && verificationRecordIsAutomaticallyApproved(verificationRecord)
+      ? 'Approved · Automatically verified'
+      : verificationRecord.final_status === 'Approved' && verificationRecord.override_used
+        ? 'Approved · Administrator reviewed'
+        : verificationRecord.final_status
+    : history.loaded && !history.search && history.rows.length < 1000
+      ? 'No linked verification record found'
+      : 'Not available in the current verification results';
+  const verificationDate = verificationRecord
+    ? formatVerificationTimestamp(verificationRecord.verified_at)
+    : 'Not available';
+  const accountStatus = user.accountStatus === 'Active' ? 'Active' : 'Inactive';
+  const accountStatusClass = user.accountStatus === 'Active' ? 'status-good' : 'status-out';
+  const content = `<div class="verification-record-detail">
+    <section>
+      <h3>Staff information</h3>
+      <dl>
+        <div><dt>Name</dt><dd>${esc(user.name || 'Not recorded')}</dd></div>
+        <div><dt>Email</dt><dd>${esc(user.email || 'Not recorded')}</dd></div>
+        <div><dt>Role</dt><dd>${esc(user.role || 'Unassigned')}</dd></div>
+      </dl>
+    </section>
+    <section>
+      <h3>Account details</h3>
+      <dl>
+        <div><dt>Account ID</dt><dd>${esc(user.id)}</dd></div>
+        <div><dt>Status</dt><dd><span class="status ${accountStatusClass}">${accountStatus}</span></dd></div>
+        <div><dt>Last updated</dt><dd>${esc(formatUserManagementDate(user.updatedAt))}</dd></div>
+      </dl>
+    </section>
+    <section>
+      <h3>Verification</h3>
+      <dl>
+        <div><dt>Status</dt><dd>${esc(verificationStatus)}</dd></div>
+        <div><dt>Most recent verification</dt><dd>${esc(verificationDate)}</dd></div>
+      </dl>
+    </section>
+  </div>`;
+  modal('Staff Details', content, '', 'staff-details-modal verification-record-modal', 'read-only');
+}
+
+function verificationRecordIsAutomaticallyApproved(record) {
+  return record.final_status === 'Approved'
+    && record.face_match_result === 'match'
+    && record.override_used === false
+    && record.ocr_summary?.ocr_passed === true;
 }
 
 function verificationRecordListContent() {
@@ -3799,10 +3855,16 @@ function verificationRecordListContent() {
     const statusClass = record.final_status === 'Approved'
       ? 'status-good'
       : record.final_status === 'Rejected' ? 'status-out' : 'status-low';
-    const faceResult = record.face_match_result === 'match'
-      ? 'Identity verified'
+    const faceResult = verificationRecordIsAutomaticallyApproved(record)
+      ? 'Automatically verified'
+      : record.face_match_result === 'match'
+        ? record.final_status === 'Approved' && record.override_used
+          ? 'Administrator reviewed'
+          : 'Identity verified'
       : record.face_match_result === 'manual_review'
-        ? 'Manual review required'
+        ? record.final_status === 'Approved'
+          ? 'Administrator reviewed'
+          : 'Manual review required'
         : record.face_match_result === 'no_match'
           ? 'Face did not match'
           : record.face_scan_passed
@@ -3818,7 +3880,7 @@ function verificationRecordListContent() {
   });
   let content = '';
   if (history.error) {
-    content = `<div class="user-invite-error" role="alert"><span>${esc(history.error)}</span><button type="button" class="ghost-btn" data-action="retry-verification-records">Retry</button></div>`;
+    content = `<div class="user-management-error" role="alert"><span>${esc(history.error)}</span><button type="button" class="ghost-btn" data-action="retry-verification-records">Retry</button></div>`;
   } else if (history.loading || !history.loaded) {
     content = '<div class="user-management-skeleton" role="status" aria-label="Loading verification records"><span></span><span></span><span></span><span></span></div>';
   } else if (!recordRows.length) {
@@ -3841,9 +3903,7 @@ function openVerificationRecordDetail(recordId) {
   if (state.role !== 'Administrator') return toast('Only Administrators can view verification records.', 'error');
   const record = state.verificationRecordHistory.rows.find(item => String(item.id) === String(recordId));
   if (!record) return toast('That verification record is not available in the current results.', 'error');
-  const inviter = state.userInviteHistory.rows.find(item => String(item.id) === String(record.invitation_id));
   const timeline = [
-    { title: 'Invitation created', date: inviter?.invited_at, detail: record.invitation_id || 'No invitation linked' },
     { title: 'Identity reviewed', date: record.verified_at, detail: verificationRecordActorName(record.verified_by) },
     { title: 'Role assigned', date: record.assigned_at, detail: record.role_assigned || 'No role assigned' },
     { title: 'Account profile created', date: record.created_at, detail: record.profile_id || 'No profile linked' }
@@ -3859,10 +3919,16 @@ function openVerificationRecordDetail(recordId) {
     && Number.isFinite(Number(record.face_match_score))
     ? `${Number(record.face_match_score).toLocaleString(undefined, { maximumFractionDigits: 2 })}%`
     : 'Unavailable';
-  const faceResultLabel = record.face_match_result === 'match'
-    ? 'Identity verified successfully'
+  const faceResultLabel = verificationRecordIsAutomaticallyApproved(record)
+    ? 'Automatically verified'
+    : record.face_match_result === 'match'
+      ? record.final_status === 'Approved' && record.override_used
+        ? 'Identity verified; other checks were reviewed by Administrator'
+        : 'Identity verified successfully'
     : record.face_match_result === 'manual_review'
-      ? 'Manual review required'
+      ? record.final_status === 'Approved'
+        ? 'Face match approved after Administrator review'
+        : 'Manual review required'
       : record.face_match_result === 'no_match'
         ? 'Face did not sufficiently match the ID photo'
         : 'Unable to compare the face with the ID photo';
@@ -3904,7 +3970,6 @@ function openVerificationRecordDetail(recordId) {
       <dl>
         <div><dt>Role</dt><dd>${esc(record.role_assigned || 'Not assigned')}</dd></div>
         <div><dt>Assigned by</dt><dd>${esc(record.assigned_by ? verificationRecordActorName(record.assigned_by) : 'Not assigned')}</dd></div>
-        <div><dt>Invitation ID</dt><dd>${esc(record.invitation_id || 'Not linked')}</dd></div>
         <div><dt>Profile ID</dt><dd>${esc(record.profile_id || 'Not linked')}</dd></div>
         <div><dt>Record ID</dt><dd>${esc(record.id)}</dd></div>
       </dl>
@@ -3919,14 +3984,7 @@ function usersPage() {
     return '<section class="user-management-page"><div class="panel error-state" role="alert">Only Administrators can access User Management.</div></section>';
   }
   const users = all('users').filter(item => ['Active', 'Deactivated'].includes(item.accountStatus));
-  const invitations = state.userInviteHistory.rows;
   const activeCount = users.filter(item => item.accountStatus === 'Active').length;
-  const pendingCount = invitations.filter(item => effectiveInvitationStatus(item) === 'Pending').length;
-  const pendingLabel = state.userInviteHistory.loading && !state.userInviteHistory.loaded
-    ? 'Loading invitations…'
-    : state.userInviteHistory.error
-      ? 'Invitation count unavailable'
-      : `${pendingCount} pending invitation${pendingCount === 1 ? '' : 's'}`;
   const refreshNotice = userManagementRefreshNotice();
   const header = userManagementHeader('Add staff members, review their information, and manage existing access.');
   if (state.userManagementPane !== 'workspace') {
@@ -3963,7 +4021,7 @@ function usersPage() {
     const isLastAdmin = active && item.role === 'Administrator' && activeAdminCount <= 1;
     const protection = [
       isCurrent ? 'Your current account is protected.' : '',
-      isLastAdmin ? 'The last active Administrator cannot be removed, demoted, or deactivated.' : ''
+      isLastAdmin ? 'The last active Administrator cannot be deleted, demoted, or deactivated.' : ''
     ].filter(Boolean).join(' ');
     const initials = (item.name || item.email || '?').trim().split(/\s+/).map(part => part[0]).join('').slice(0, 2).toUpperCase();
     const actions = protection
@@ -3971,14 +4029,15 @@ function usersPage() {
       : `<details class="user-action-menu">
           <summary aria-label="Actions for ${esc(item.name || item.email || 'staff member')}">Actions</summary>
           <div class="user-action-list">
+            <button type="button" data-action="open-user-details" data-id="${esc(item.id)}">View Details</button>
             <button type="button" data-action="open-user-role" data-id="${esc(item.id)}">Change role</button>
-            ${active ? '' : `<button type="button" data-action="open-user-status" data-id="${esc(item.id)}" data-status="Active">Reactivate</button>`}
-            <button type="button" data-action="open-user-remove" data-id="${esc(item.id)}">Remove</button>
+            <button type="button" data-action="open-user-status" data-id="${esc(item.id)}" data-status="${active ? 'Deactivated' : 'Active'}">${active ? 'Deactivate Account' : 'Reactivate Account'}</button>
+            <button type="button" data-action="open-user-remove" data-id="${esc(item.id)}">Delete Account</button>
           </div>
         </details>`;
     const searchText = `${item.name || ''} ${item.email || ''} ${item.role || ''}`.toLowerCase();
-    return `<tr class="user-row" data-user-search="${esc(searchText)}">
-      <td data-label="Staff member"><div class="user-staff-cell"><span class="avatar user-avatar" aria-hidden="true">${esc(initials)}</span><span><strong>${esc(item.name || 'Staff member')}</strong><small>${esc(item.email || '')}</small></span></div></td>
+    return `<tr class="user-row" data-user-id="${esc(item.id)}" data-user-search="${esc(searchText)}">
+      <td data-label="Staff member"><div class="user-staff-cell"><span class="avatar user-avatar" aria-hidden="true">${esc(initials)}</span><span><button type="button" class="verification-record-open" data-action="open-user-details" data-id="${esc(item.id)}" aria-label="View details for ${esc(item.name || item.email || 'staff member')}">${esc(item.name || 'Staff member')}</button><small>${esc(item.email || '')}</small></span></div></td>
       <td data-label="Role"><span class="user-management-role-badge">${esc(item.role || 'Unassigned')}</span></td>
       <td data-label="Status"><span class="status ${active ? 'status-good' : 'status-out'}">${active ? 'Active' : 'Inactive'}</span></td>
       <td data-label="Last updated">${esc(formatUserManagementDate(item.updatedAt))}</td>
@@ -3999,66 +4058,28 @@ function usersPage() {
       </div>
       <div class="panel table-panel"><div class="table-scroll"><table class="user-management-table">
         <thead><tr><th>Staff member</th><th>Role</th><th>Status</th><th>Last updated</th><th>Actions</th></tr></thead>
-        <tbody>${staffRows.join('')}<tr class="user-management-empty-row" ${staffRows.length ? 'hidden' : ''}><td colspan="5"><div class="user-management-empty"><strong>${users.length ? 'No staff match these filters.' : 'No staff accounts yet.'}</strong><p>${users.length ? 'Try another search or clear a filter.' : 'Add the first staff member.'}</p>${users.length ? '' : '<button type="button" class="primary-btn" data-action="user-invite-open">Add User</button>'}</div></td></tr></tbody>
+        <tbody>${staffRows.join('')}<tr class="user-management-empty-row" ${staffRows.length ? 'hidden' : ''}><td colspan="5"><div class="user-management-empty"><strong>${users.length ? 'No staff match these filters.' : 'No staff accounts yet.'}</strong><p>${users.length ? 'Try another search or clear a filter.' : 'Add the first staff member.'}</p></div></td></tr></tbody>
       </table></div></div>`;
-
-  const inviterNames = new Map(users.map(item => [String(item.id), item.name || item.email || 'Staff member']));
-  const inviteRows = invitations.map(invite => {
-    const status = effectiveInvitationStatus(invite);
-    const statusClass = status === 'Accepted' ? 'status-good' : status === 'Pending' ? 'status-low' : 'status-out';
-    const canResend = ['Pending', 'Expired'].includes(status);
-    const canCancel = status === 'Pending';
-    const busy = state.userManagementBusyId === invite.id;
-    const busyAction = busy ? state.userManagementBusyAction : '';
-    const inviter = inviterNames.get(String(invite.invited_by))
-      || (String(invite.invited_by) === String(state.user?.id) ? state.user.email : 'Staff account');
-    return `<tr>
-      <td data-label="Email">${esc(invite.email)}</td>
-      <td data-label="Full name">${esc(invite.full_name)}</td>
-      <td data-label="Role"><span class="user-management-role-badge">${esc(invite.role)}</span></td>
-      <td data-label="Status"><span class="status ${statusClass}">${esc(status)}</span></td>
-      <td data-label="Invited">${esc(formatUserManagementDate(invite.invited_at))}</td>
-      <td data-label="Expires">${esc(formatUserManagementDate(invite.expires_at))}</td>
-      <td data-label="Accepted">${esc(formatUserManagementDate(invite.accepted_at))}</td>
-      <td data-label="Invited by">${esc(inviter)}</td>
-      <td data-label="Actions"><div class="user-invitation-actions">
-        ${canResend ? `<button type="button" class="ghost-btn" data-action="resend-user-invite" data-id="${esc(invite.id)}" ${busy ? 'disabled' : ''}>${busy && busyAction === 'resend' ? 'Sending…' : 'Resend'}</button>` : ''}
-        ${canCancel ? `<button type="button" class="ghost-btn" data-action="cancel-user-invite" data-id="${esc(invite.id)}" ${busy ? 'disabled' : ''}>${busy && busyAction === 'cancel' ? 'Cancelling…' : 'Cancel'}</button>` : '—'}
-      </div></td>
-    </tr>`;
-  });
-  const invitationContent = state.userInviteHistory.error
-    ? `<div class="user-invite-error" role="alert"><span>${esc(state.userInviteHistory.error)}</span><button type="button" class="ghost-btn" data-action="retry-user-invites">Retry</button></div>`
-    : state.userInviteHistory.loading && !state.userInviteHistory.loaded
-      ? '<div class="user-management-skeleton" role="status" aria-label="Loading invitations"><span></span><span></span><span></span><span></span></div>'
-      : `<div class="table-scroll"><table class="user-invitations-table">
-          <thead><tr><th>Email</th><th>Full name</th><th>Role</th><th>Status</th><th>Invited</th><th>Expires</th><th>Accepted</th><th>Invited by</th><th>Actions</th></tr></thead>
-          <tbody>${inviteRows.length
-            ? inviteRows.join('')
-            : '<tr class="user-management-empty-row"><td colspan="9"><div class="user-management-empty"><strong>No pending invitations</strong><p>New staff invitations will appear here with their delivery and acceptance details.</p><button type="button" class="primary-btn" data-action="user-invite-open">Add User</button></div></td></tr>'
-          }</tbody>
-        </table></div>`;
-  const selectedTab = ['invitations', 'verification-records'].includes(state.userManagementTab)
-    ? state.userManagementTab
+  const selectedTab = state.userManagementTab === 'verification-records'
+    ? 'verification-records'
     : 'staff';
   const workspaceContent = selectedTab === 'staff'
     ? staffContent
-    : selectedTab === 'invitations' ? invitationContent : verificationRecordListContent();
+    : verificationRecordListContent();
   const workspaceDescription = selectedTab === 'verification-records'
     ? 'Search Administrator-only verification history. Records are read-only and never expose the full ID number.'
-    : 'View staff accounts and manage their invitation status.';
+    : 'Manage staff accounts, roles, and access.';
   const workspaceHeader = userManagementHeader(workspaceDescription);
   const action = `<button type="button" class="ghost-btn user-back-link" data-action="user-management-back">← Back to User Management</button>`;
   return `<section class="user-management-page">
     ${workspaceHeader}
     ${refreshNotice}
-    <div class="user-management-nav">${action}<span class="field-help">Manage access and invitation status without leaving this page.</span></div>
+    <div class="user-management-nav">${action}<span class="field-help">Manage staff accounts and review verification records.</span></div>
     <div class="user-management-tabs" role="tablist" aria-label="User management sections">
       <button type="button" id="userStaffTab" role="tab" aria-selected="${selectedTab === 'staff'}" aria-controls="userManagementPanel" tabindex="${selectedTab === 'staff' ? '0' : '-1'}" data-action="user-management-tab" data-tab="staff">Staff</button>
-      <button type="button" id="userInvitationsTab" role="tab" aria-selected="${selectedTab === 'invitations'}" aria-controls="userManagementPanel" tabindex="${selectedTab === 'invitations' ? '0' : '-1'}" data-action="user-management-tab" data-tab="invitations">Invitations <span class="tab-count">${state.userInviteHistory.loaded ? pendingCount : '…'}</span></button>
       <button type="button" id="userVerificationRecordsTab" role="tab" aria-selected="${selectedTab === 'verification-records'}" aria-controls="userManagementPanel" tabindex="${selectedTab === 'verification-records' ? '0' : '-1'}" data-action="user-management-tab" data-tab="verification-records">Verification Records <span class="tab-count">${state.verificationRecordHistory.loaded ? state.verificationRecordHistory.rows.length : '…'}</span></button>
     </div>
-    <div id="userManagementPanel" class="user-management-panel" role="tabpanel" tabindex="0" aria-labelledby="${selectedTab === 'staff' ? 'userStaffTab' : selectedTab === 'invitations' ? 'userInvitationsTab' : 'userVerificationRecordsTab'}">
+    <div id="userManagementPanel" class="user-management-panel" role="tabpanel" tabindex="0" aria-labelledby="${selectedTab === 'staff' ? 'userStaffTab' : 'userVerificationRecordsTab'}">
       ${workspaceContent}
     </div>
     ${userManagementStyles()}
@@ -4106,7 +4127,7 @@ function focusUserManagementAction(action, idValue) {
     const target = [...document.querySelectorAll('.user-management-page [data-action]')]
       .find(element => element.dataset.action === action
         && (idValue == null || element.dataset.id === String(idValue)));
-    (target || document.querySelector('#userInvitationsTab'))?.focus();
+    (target || document.querySelector('.user-management-page [data-action="user-management-back"]'))?.focus();
   });
 }
 
@@ -5587,8 +5608,7 @@ function openUserStatusModal(userId, accountStatus) {
   const backdrop = modal(deactivate ? 'Deactivate staff account' : 'Reactivate staff account', `<div class="user-form-fields">
     <p class="field-help">${esc(effect)}</p>
     <label>Staff member<input value="${esc(user.name || user.email)}" readonly></label>
-    <label>Reason for ${deactivate ? 'deactivation' : 'reactivation'}<textarea name="reason" maxlength="500" required placeholder="Explain this account status change"></textarea><small class="field-help">Required for the audit record. Maximum 500 characters.</small></label>
-  </div>`, deactivate ? 'Review deactivation' : 'Review reactivation', 'user-management-form-modal');
+  </div>`, deactivate ? 'Deactivate' : 'Reactivate', 'user-management-form-modal', 'single-action');
   const form = backdrop.querySelector('#modalForm');
   form.dataset.type = 'user-account-status';
   form.dataset.userId = user.id;
@@ -5597,7 +5617,7 @@ function openUserStatusModal(userId, accountStatus) {
 }
 
 function openUserRemoveModal(userId) {
-  if (state.role !== 'Administrator') return toast('Only Administrators can remove staff accounts.', 'error');
+  if (state.role !== 'Administrator') return toast('Only Administrators can delete staff accounts.', 'error');
   const user = findUserManagementTarget(userId);
   if (!user || !['Active', 'Deactivated'].includes(user.accountStatus)) {
     return toast('This staff account is no longer available. Refresh the list and try again.', 'error');
@@ -5605,12 +5625,12 @@ function openUserRemoveModal(userId) {
   const protectedReason = userManagementProtectionReason(user);
   if (protectedReason) return toast(protectedReason, 'error');
   const backdrop = modal(
-    'Remove account',
+    'Delete Account',
     `<div class="user-form-fields">
-      <p>Are you sure you want to remove this?</p>
+      <p>Are you sure you want to permanently delete this account?</p>
       <p class="field-help">${esc(user.name || user.email)}</p>
     </div>`,
-    'Remove',
+    'Delete Account',
     'user-management-form-modal',
     'removal'
   );
@@ -5648,15 +5668,11 @@ async function refreshUserManagementLists() {
   const userId = state.user.id;
   state.userManagementRefreshLoading = true;
   state.userManagementRefreshError = '';
-  state.userInviteHistory.loading = false;
+  state.userInviteHistory = { rows: [], loading: false, loaded: false, error: '' };
   try {
-    const [users, invitations] = await Promise.all([
-      window.supabaseRecord.load('users'),
-      window.supabaseRecord.loadUserInvites()
-    ]);
+    const users = await window.supabaseRecord.load('users');
     if (requestId !== userInviteRequestId || state.user?.id !== userId || state.role !== 'Administrator') return false;
     persistCollection('users', users);
-    state.userInviteHistory = { rows: invitations, loading: false, loaded: true, error: '' };
     state.userManagementRefreshError = '';
     state.userManagementRefreshSaved = false;
     return true;
@@ -5886,22 +5902,20 @@ async function submitUserAccountStatus(form) {
   if (!user) return toast('This staff account is no longer available. Refresh the list and try again.', 'error');
   const protectedReason = userManagementProtectionReason(user);
   if (protectedReason) return toast(protectedReason, 'error');
-  const reason = form.elements.reason.value.trim();
-  if (!reason || reason.length > 500) return toast('Enter a reason of no more than 500 characters.', 'error');
   const deactivate = accountStatus === 'Deactivated';
+  const reason = deactivate ? 'Deactivated by administrator' : 'Reactivated by administrator';
   const effect = deactivate
     ? `${user.name || user.email} will immediately lose sign-in and CostTrack API access. Their operational history remains.`
     : `${user.name || user.email} will regain sign-in and CostTrack API access.`;
-  const confirmed = await confirmInApp(`${effect}\n\nReason: ${reason}`, {
-    title: deactivate ? 'Confirm deactivation' : 'Confirm reactivation',
-    confirmLabel: deactivate ? 'Deactivate' : 'Reactivate'
-  });
-  if (!confirmed) return;
   setUserManagementFormBusy(form, true, deactivate ? 'Deactivating…' : 'Reactivating…');
   try {
     await window.supabaseRecord.setUserAccountStatus(user.id, accountStatus, reason);
+    persistCollection('users', all('users').map(item =>
+      String(item.id) === String(user.id) ? { ...item, accountStatus } : item
+    ));
     state.modalDirty = false;
     closeModal(true);
+    render();
     await finishUserManagementSave(
       deactivate ? 'User deactivated.' : 'User reactivated.',
       'open-user-status',
@@ -5916,21 +5930,25 @@ async function submitUserAccountStatus(form) {
 }
 
 async function submitUserAccountRemoval(form) {
-  if (state.role !== 'Administrator') return toast('Only Administrators can remove staff accounts.', 'error');
+  if (state.role !== 'Administrator') return toast('Only Administrators can delete staff accounts.', 'error');
   if (form.dataset.saving === 'true') return;
   const user = findUserManagementTarget(form.dataset.userId);
   if (!user) return toast('This staff account is no longer available. Refresh the list and try again.', 'error');
   const protectedReason = userManagementProtectionReason(user);
   if (protectedReason) return toast(protectedReason, 'error');
-  setUserManagementFormBusy(form, true, 'Removing…');
+  setUserManagementFormBusy(form, true, 'Deleting…');
   try {
     await window.supabaseRecord.removeUserAccount(user.id);
+    state.verificationRecordHistory.rows = state.verificationRecordHistory.rows
+      .filter(record => String(record.profile_id) !== String(user.id));
+    verificationRecordRequestId += 1;
+    state.verificationRecordHistory.loading = false;
     state.modalDirty = false;
     closeModal(true);
-    await finishUserManagementSave('User removed.', 'open-user-remove', user.id);
+    await finishUserManagementSave('User deleted.', 'open-user-remove', user.id);
   } catch (error) {
-    console.error('Staff account could not be removed.', error);
-    toast(error.message || 'The account could not be removed.', 'error');
+    console.error('Staff account could not be deleted.', error);
+    toast(error.message || 'The account could not be deleted.', 'error');
   } finally {
     if (form.isConnected) setUserManagementFormBusy(form, false);
   }
@@ -5995,10 +6013,8 @@ async function runUserInvitationAction(invitationId, action) {
         inviteForm.querySelector('[data-action="resend-user-invite"]')?.focus();
       } else if (inviteForm) {
         focusUserManagementAction('user-invite-open');
-      } else if (action === 'resend') {
-        focusUserManagementAction('resend-user-invite', invitationId);
       } else {
-        focusUserManagementAction('cancel-user-invite', invitationId);
+        focusUserManagementAction('user-invite-open');
       }
     }
   }
@@ -6113,13 +6129,6 @@ async function retryVerificationRecordLoad() {
   if (!state.verificationRecordHistory.error) toast('Verification records refreshed.');
 }
 
-async function retryUserInvitationLoad() {
-  if (state.role !== 'Administrator') return toast('Only Administrators can view invitation history.', 'error');
-  state.userInviteHistory.loaded = false;
-  state.userInviteHistory.error = '';
-  await loadUserInvitations(true);
-  if (!state.userInviteHistory.error) toast('Invitation history refreshed.');
-}
 function options(items, valueKey = 'id', labelKey = 'name') { return items.map(x => `<option value="${x[valueKey]}">${esc(x[labelKey])}</option>`).join(''); }
 function updateWasteFormPreview(form) {
   if (form.elements.wasteType?.value !== 'ingredient') return;
@@ -11178,7 +11187,7 @@ async function submitApplicantAccountCreation() {
     faceMatchResult: applicantFaceMatchResult,
     overrideUsed: manualReview,
     overrideReason: manualReview ? overrideReason : null,
-    faceDescriptor: manualReview ? null : applicantFaceDescriptor,
+    faceDescriptor: applicantFaceDescriptor,
     idImage,
     selfie: applicantFaceCaptureBlob
   };
@@ -11251,7 +11260,56 @@ async function submitApplicantAccountCreation() {
   }
 }
 
+function positionUserActionMenu(details) {
+  const menu = details.querySelector('.user-action-list');
+  const summary = details.querySelector('summary');
+  if (!details.open || !menu || !summary) return;
+  if (window.matchMedia('(max-width: 760px)').matches) {
+    ['position', 'top', 'left', 'right', 'bottom'].forEach(property => menu.style.removeProperty(property));
+    return;
+  }
+  const trigger = summary.getBoundingClientRect();
+  menu.style.position = 'fixed';
+  menu.style.top = '0px';
+  menu.style.left = '0px';
+  menu.style.right = 'auto';
+  menu.style.bottom = 'auto';
+  const menuRect = menu.getBoundingClientRect();
+  const edge = 8;
+  const gap = 5;
+  const spaceBelow = window.innerHeight - trigger.bottom - gap - edge;
+  const spaceAbove = trigger.top - gap - edge;
+  const opensAbove = spaceBelow < menuRect.height && spaceAbove > spaceBelow;
+  const preferredTop = opensAbove
+    ? trigger.top - menuRect.height - gap
+    : trigger.bottom + gap;
+  const top = Math.max(edge, Math.min(preferredTop, window.innerHeight - menuRect.height - edge));
+  const left = Math.max(edge, Math.min(trigger.right - menuRect.width, window.innerWidth - menuRect.width - edge));
+  menu.style.top = `${top}px`;
+  menu.style.left = `${left}px`;
+}
+
+function repositionOpenUserActionMenus() {
+  document.querySelectorAll('.user-management-page .user-action-menu[open]')
+    .forEach(positionUserActionMenu);
+}
+
+document.addEventListener('scroll', repositionOpenUserActionMenus, { capture: true, passive: true });
+window.addEventListener('resize', repositionOpenUserActionMenus);
 document.addEventListener('click', event => {
+  const actionMenuSummary = event.target.closest('.user-management-page .user-action-menu > summary');
+  if (actionMenuSummary) {
+    const details = actionMenuSummary.parentElement;
+    requestAnimationFrame(() => positionUserActionMenu(details));
+    return;
+  }
+  const row = event.target.closest('.user-management-page .user-row');
+  if (!row || event.target.closest('button, a, input, select, textarea, summary, details')) return;
+  openUserDetails(row.dataset.userId);
+});
+document.addEventListener('click', event => {
+  const actionMenuSummary = event.target.closest('.user-management-page .user-action-menu > summary');
+  if (actionMenuSummary) return;
   const category = event.target.closest('[data-recipe-category]')?.dataset.recipeCategory;
   if (category) {
     state.recipeCategory = category;
@@ -11337,8 +11395,8 @@ document.addEventListener('click', event => {
   else if (name === 'user-management-open') {
     if (state.role !== 'Administrator') return toast('Only Administrators can access User Management.', 'error');
     state.userManagementPane = 'workspace';
-    state.userManagementTab = ['invitations', 'verification-records'].includes(action.dataset.tab)
-      ? action.dataset.tab
+    state.userManagementTab = action.dataset.tab === 'verification-records'
+      ? 'verification-records'
       : 'staff';
     render();
     requestAnimationFrame(() => document.querySelector(userManagementTabSelector(state.userManagementTab))?.focus());
@@ -11348,14 +11406,18 @@ document.addEventListener('click', event => {
     render();
     requestAnimationFrame(() => document.querySelector('[data-action="user-management-open"]')?.focus());
   } else if (name === 'user-management-tab') {
-    state.userManagementTab = ['invitations', 'verification-records'].includes(action.dataset.tab)
-      ? action.dataset.tab
+    state.userManagementTab = action.dataset.tab === 'verification-records'
+      ? 'verification-records'
       : 'staff';
     render();
     requestAnimationFrame(() => document.querySelector(userManagementTabSelector(state.userManagementTab))?.focus());
     if (state.userManagementTab === 'verification-records') void loadVerificationRecords();
   } else if (name === 'verification-record-open') openVerificationRecordDetail(action.dataset.id);
   else if (name === 'retry-verification-records') void retryVerificationRecordLoad();
+  else if (name === 'open-user-details') {
+    action.closest('details')?.removeAttribute('open');
+    openUserDetails(action.dataset.id);
+  }
   else if (name === 'open-user-role') {
     action.closest('details')?.removeAttribute('open');
     openUserRoleModal(action.dataset.id);
@@ -11367,7 +11429,6 @@ document.addEventListener('click', event => {
     openUserRemoveModal(action.dataset.id);
   } else if (name === 'resend-user-invite') void runUserInvitationAction(action.dataset.id, 'resend');
   else if (name === 'cancel-user-invite') void runUserInvitationAction(action.dataset.id, 'cancel');
-  else if (name === 'retry-user-invites') void retryUserInvitationLoad();
   else if (name === 'refresh-user-management') void refreshUserManagementManually();
   else if (name === 'retry-user-management-refresh') void retryUserManagementLists();
   else if (name === 'close-modal') closeModal();
@@ -11554,7 +11615,7 @@ document.addEventListener('keydown', event => {
   const tab = event.target.closest('.user-management-tabs [role="tab"]');
   if (!tab || !['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
   event.preventDefault();
-  const tabs = ['staff', 'invitations', 'verification-records'];
+  const tabs = ['staff', 'verification-records'];
   const currentIndex = tabs.indexOf(state.userManagementTab);
   let nextIndex = currentIndex;
   if (event.key === 'Home') nextIndex = 0;
@@ -12280,7 +12341,14 @@ function modal(title, content, submit = 'Save record', modalClass = '', modalTyp
   if (isConfirmation) root.insertAdjacentHTML('beforeend', markup);
   else root.innerHTML = markup;
   const backdrop = root.lastElementChild;
-  const visibleToast = document.querySelector('#toastRoot .toast');
+  const toastRoot = document.querySelector('#toastRoot');
+  let visibleToast = toastRoot?.querySelector('.toast');
+  const visibleToastMessage = visibleToast?.querySelector('span:nth-child(2)')?.textContent;
+  if (visibleToastMessage === 'User deactivated.' || visibleToastMessage === 'User reactivated.') {
+    toastRoot.innerHTML = '';
+    window.clearTimeout(toastTimeoutId);
+    visibleToast = null;
+  }
   const notification = backdrop.querySelector('[data-modal-notification]');
   if (visibleToast && notification) {
     const type = visibleToast.classList.contains('error') ? 'error' : 'success';
@@ -12555,7 +12623,6 @@ function render({ preserveReportCharts = false } = {}) {
   if (['production', 'recipes'].includes(state.view)) {
     loadProductionBoard();
   }
-  if (state.view === 'users' && state.role === 'Administrator') loadUserInvitations();
   normaliseRenderedStatuses();
   if (state.view === 'ingredients') {
     const toolbar = document.querySelector('.catalog-toolbar');
@@ -13468,6 +13535,11 @@ document.addEventListener('submit', async event => {
   if (form.dataset.type === 'user-role-change') {
     event.stopImmediatePropagation();
     await submitUserRoleChange(form);
+    return;
+  }
+  if (form.dataset.type === 'user-account-status') {
+    event.stopImmediatePropagation();
+    await submitUserAccountStatus(form);
     return;
   }
   let valid = true;

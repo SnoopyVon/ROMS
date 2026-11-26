@@ -109,17 +109,12 @@ begin
     )
     or coalesce(p_verification_record->>'override_used', '') not in ('true', 'false')
     or coalesce(p_verification_record->>'consent_given', 'false') <> 'true'
+    or jsonb_typeof(p_verification_record->'face_descriptor') is distinct from 'array'
     or (
       p_verification_record->>'override_used' = 'false'
       and (
         coalesce(p_verification_record->'ocr_summary'->>'ocr_passed', 'false') <> 'true'
         or p_verification_record->>'face_match_result' <> 'match'
-        or jsonb_typeof(p_verification_record->'face_descriptor') is distinct from 'array'
-        or case
-          when jsonb_typeof(p_verification_record->'face_descriptor') = 'array'
-            then jsonb_array_length(p_verification_record->'face_descriptor') <> 128
-          else true
-        end
       )
     )
     or (
@@ -130,10 +125,6 @@ begin
           and p_verification_record->>'face_match_result' <> 'manual_review'
         )
         or char_length(btrim(coalesce(p_verification_record->>'override_reason', ''))) not between 1 and 500
-        or (
-          p_verification_record ? 'face_descriptor'
-          and jsonb_typeof(p_verification_record->'face_descriptor') <> 'null'
-        )
       )
     )
     or (p_verification_record->'ocr_summary' - array[
@@ -175,7 +166,7 @@ begin
       using errcode = '23514';
   end if;
 
-  if not v_override_used and not exists (
+  if not exists (
     select 1
     from public.user_face_templates as template
     where template.user_id = p_profile_id
