@@ -451,6 +451,8 @@ language plpgsql
 security definer
 set search_path = pg_catalog
 as $$
+declare
+  report_result jsonb;
 begin
   if report_key = 'production' then
     return public.costtrack_production_report_with_snapshots(start_date, end_date);
@@ -465,13 +467,45 @@ begin
       start_date, end_date, group_by, include_waste
     );
   end if;
-  if not public.has_app_role(array['Administrator', 'Manager', 'Inventory Clerk']) then
+  if report_key = 'waste' then
+    if not public.has_app_role(array['Administrator', 'Manager', 'Chef / Kitchen Staff', 'Inventory Clerk']) then
+      raise exception 'Not authorized to read waste reports.'
+        using errcode = '42501';
+    end if;
+  elsif not public.has_app_role(array['Administrator', 'Manager', 'Inventory Clerk']) then
     raise exception 'Not authorized to read operational reports.'
       using errcode = '42501';
   end if;
-  return public.costtrack_report_analytics_legacy(
+  report_result := public.costtrack_report_analytics_legacy(
     report_key, start_date, end_date, group_by, include_waste
   );
+  if public.has_app_role(array['Administrator', 'Manager']) then
+    return report_result;
+  end if;
+  if report_key = 'waste' then
+    report_result := jsonb_set(report_result, '{by_ingredient}', coalesce((
+      select jsonb_agg(item.value - 'waste_cost')
+      from jsonb_array_elements(coalesce(report_result->'by_ingredient', '[]'::jsonb)) as item(value)
+    ), '[]'::jsonb));
+    report_result := jsonb_set(report_result, '{by_reason}', coalesce((
+      select jsonb_agg(item.value - 'waste_cost')
+      from jsonb_array_elements(coalesce(report_result->'by_reason', '[]'::jsonb)) as item(value)
+    ), '[]'::jsonb));
+    report_result := jsonb_set(report_result, '{by_day}', coalesce((
+      select jsonb_agg(item.value - 'waste_cost')
+      from jsonb_array_elements(coalesce(report_result->'by_day', '[]'::jsonb)) as item(value)
+    ), '[]'::jsonb));
+  elsif report_key = 'inventory' then
+    report_result := jsonb_set(report_result, '{valuation_by_category}', coalesce((
+      select jsonb_agg(item.value - 'valuation')
+      from jsonb_array_elements(coalesce(report_result->'valuation_by_category', '[]'::jsonb)) as item(value)
+    ), '[]'::jsonb));
+    report_result := jsonb_set(report_result, '{variance}', coalesce((
+      select jsonb_agg(item.value - 'variance_cost')
+      from jsonb_array_elements(coalesce(report_result->'variance', '[]'::jsonb)) as item(value)
+    ), '[]'::jsonb));
+  end if;
+  return report_result;
 end;
 $$;
 revoke all on function public.report_analytics(text, date, date, text, boolean)

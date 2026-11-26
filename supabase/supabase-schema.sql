@@ -3526,17 +3526,23 @@ begin
   elsif report_key = 'waste' then
     if not public.has_app_role(array['Administrator', 'Manager', 'Chef / Kitchen Staff', 'Inventory Clerk']) then raise exception 'permission denied'; end if;
     select jsonb_build_object(
-      'by_ingredient', coalesce((select jsonb_agg(to_jsonb(x) order by x.waste_cost desc) from (
+      'by_ingredient', coalesce((select jsonb_agg(
+        to_jsonb(x) - (case when public.has_app_role(array['Administrator', 'Manager']) then '' else 'waste_cost' end)
+        order by x.waste_cost desc) from (
         select i.id as ingredient_id, i.name, i.unit, sum(w.quantity) as quantity, sum(w.quantity * i.cost) as waste_cost
         from public.waste_logs w join public.ingredients i on i.id = w.ingredient_id
         where w.waste_date between start_date and end_date group by i.id, i.name, i.unit
         order by sum(w.quantity * i.cost) desc limit 10) x), '[]'::jsonb),
-      'by_reason', coalesce((select jsonb_agg(to_jsonb(x) order by x.waste_cost desc) from (
+      'by_reason', coalesce((select jsonb_agg(
+        to_jsonb(x) - (case when public.has_app_role(array['Administrator', 'Manager']) then '' else 'waste_cost' end)
+        order by x.waste_cost desc) from (
         select w.reason, sum(w.quantity) as quantity, sum(w.quantity * i.cost) as waste_cost
         from public.waste_logs w join public.ingredients i on i.id = w.ingredient_id
         where w.waste_date between start_date and end_date group by w.reason
         order by sum(w.quantity * i.cost) desc) x), '[]'::jsonb),
-      'by_day', coalesce((select jsonb_agg(to_jsonb(x) order by x.period) from (
+      'by_day', coalesce((select jsonb_agg(
+        to_jsonb(x) - (case when public.has_app_role(array['Administrator', 'Manager']) then '' else 'waste_cost' end)
+        order by x.period) from (
         select w.waste_date as period, sum(w.quantity * i.cost) as waste_cost, sum(w.quantity) as quantity
         from public.waste_logs w join public.ingredients i on i.id = w.ingredient_id
         where w.waste_date between start_date and end_date group by w.waste_date) x), '[]'::jsonb),
@@ -3546,7 +3552,9 @@ begin
   elsif report_key = 'inventory' then
     if not public.has_app_role(array['Administrator', 'Manager', 'Inventory Clerk']) then raise exception 'permission denied'; end if;
     select jsonb_build_object(
-      'valuation_by_category', coalesce((select jsonb_agg(to_jsonb(x) order by x.valuation desc) from (
+      'valuation_by_category', coalesce((select jsonb_agg(
+        to_jsonb(x) - (case when public.has_app_role(array['Administrator', 'Manager']) then '' else 'valuation' end)
+        order by x.valuation desc) from (
         select category, sum(stock * cost) as valuation, count(*) as ingredients
         from public.ingredients group by category order by sum(stock * cost) desc) x), '[]'::jsonb),
       'low_stock', coalesce((select jsonb_agg(to_jsonb(x) order by x.name) from (
@@ -3556,7 +3564,9 @@ begin
         select transaction_type, sum(quantity) as quantity, count(*) as entries
         from public.inventory_transactions where transaction_date between start_date and end_date
         group by transaction_type) x), '[]'::jsonb),
-      'variance', coalesce((select jsonb_agg(to_jsonb(x) order by x.count_date desc) from (
+      'variance', coalesce((select jsonb_agg(
+        to_jsonb(x) - (case when public.has_app_role(array['Administrator', 'Manager']) then '' else 'variance_cost' end)
+        order by x.count_date desc) from (
         select c.count_date, i.name, i.unit, c.expected, c.actual, c.actual - c.expected as variance,
           (c.actual - c.expected) * i.cost as variance_cost
         from public.physical_counts c join public.ingredients i on i.id = c.ingredient_id

@@ -388,6 +388,12 @@
     return Boolean(INVENTORY_ACTION_ROLES[action]?.includes(role));
   }
 
+  function canCloseShift(shift, role, userId) {
+    if (shift?.status !== 'Open') return false;
+    if (role === 'Receptionist') return Boolean(userId && shift.openedBy === userId);
+    return role === 'Manager' || role === 'Administrator';
+  }
+
   function assertInventoryRole(role, action) {
     if (!canPerformInventoryAction(role, action)) {
       const error = new Error(`Not authorized to perform ${action}.`);
@@ -920,6 +926,7 @@
     availableStock,
     batchStatus,
     buildReservationRecord,
+    canCloseShift,
     canPerformInventoryAction,
     closedBillRevenueTotals,
     formatManilaTimestamp,

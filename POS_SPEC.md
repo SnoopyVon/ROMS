@@ -77,8 +77,8 @@ Walk-ins remain a single-screen workflow. The visual table cards show capacity a
 
 Enforce access in UI, routes, RLS, and RPC:
 
-- **Receptionist / cashier:** opens and closes their own shift; creates bills; records reservation deposits; books packages; requests voids and 100% discounts. Cannot approve requests or view revenue/profit.
-- **Manager:** all Receptionist operations; approves requests; closes any shift; refunds or forfeits deposits.
+- **Receptionist / cashier:** opens and closes their own shift, including a shift left open overnight; creates bills; records reservation deposits; books packages; requests voids and 100% discounts. Cannot approve requests or view revenue/profit.
+- **Manager:** all Receptionist operations; approves requests; closes any shift, including on another cashier's behalf with a reason; refunds or forfeits deposits.
 - **Administrator:** all operations.
 - **Inventory Clerk and Chef / Kitchen Staff:** no POS access.
 
@@ -86,13 +86,13 @@ Enforce access in UI, routes, RLS, and RPC:
 
 ### Shifts and cash movements
 
-- One open shift per cashier. A bill cannot be created without an open shift.
+- One shared open restaurant shift per Manila business day. A shift left open overnight remains open until reconciled and closed; another shift cannot be opened first. A bill cannot be created without an open shift.
 - Open shift with starting cash.
 - Cash movements are Paid in or Paid out and require a reason.
 - Expected cash = starting cash + cash payments kept (not tendered cash) + cash deposits received + paid in - paid out - cash refunds.
 - Close shift using counted cash. Show expected, counted, and variance; render shortage as red with a minus sign, and overage as green with a plus sign.
 - Block shift close while it has Open bills or bills awaiting approval.
-- Provide printable shift report and shift history. Receptionists see only their own shifts; Managers and Administrators see all.
+- Provide printable shift report and shift history. All POS roles can view the shared shift; Receptionists can close only shifts they opened, while Managers and Administrators can close any shift and must record a reason when closing another cashier's shift.
 
 ### Reservation deposits
 
@@ -115,7 +115,7 @@ Enforce access in UI, routes, RLS, and RPC:
 - The Reservations page has an **Unresolved** filter for past Pending/Confirmed bookings and past Seated bookings without a settled bill. Receptionists, Managers, and Administrators may read it; Open-bill Seated rows are labelled **Payable** and continue through the existing cashier flow.
 - The Reservation calendar uses one status-color map for its events and legend, with visible status labels and a marker for past unresolved bookings. Calendar events remain clickable to open the booking.
 - Only Managers and Administrators may explicitly resolve a past booking. Close without charge is limited to past Seated Reservation/Walk-in rows, requires a 10–500 character reason and a no-meal/test-record confirmation, refuses an open/unsettled bill, and creates no bill, payment, or revenue. Pending/Confirmed rows may be marked No-show or Cancelled. Held deposits require an explicit Refund or Forfeit action in the same transaction; refunds require the Manager's own open shift, and forfeits require a reason. Every resolution is audited and idempotent.
-- Resolving a Seated record sets its table to **Needs cleaning**. Explicit No-show/Cancelled resolution frees the table to Available. A timer never releases a table. Receptionists see the unresolved list but have no resolve or deposit-settlement controls; database RPC and RLS enforce access.
+- Resolving a Seated record sets its table to **Needs cleaning**. Explicit No-show/Cancelled resolution sets the table to Available unless it already needs cleaning, in which case that state is preserved while the booking is resolved. A timer never releases a table. Receptionists see the unresolved list but have no resolve or deposit-settlement controls; database RPC and RLS enforce access.
 - A reservation cannot have two open bills.
 - Closing its bill completes the reservation and updates actual covers.
 - A bill may link to a table. Closing it sets the table to the existing system “needs cleaning” status. Bills without a table do not affect table status.

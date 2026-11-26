@@ -1473,7 +1473,19 @@ window.supabaseRecord = {
       });
       const { data, error } = await Promise.race([request, timeout]);
       throwIfError(error);
-      return data || [];
+      const rows = data || [];
+      if (!Array.isArray(rows)) {
+        throw new Error('Unresolved bookings response is not a list.');
+      }
+      return rows.map((row, index) => {
+        const reservationId = [row?.reservation_id, row?.reservationId, row?.id]
+          .map(value => String(value ?? '').trim())
+          .find(Boolean);
+        if (!reservationId) {
+          throw new Error(`Unresolved booking row ${index + 1} is missing a reservation ID.`);
+        }
+        return { ...row, reservation_id: reservationId };
+      });
     } catch (error) {
       if (timedOut) {
         throw new Error('Unresolved bookings request timed out after 15 seconds. Retry loading the list.');
@@ -1484,12 +1496,14 @@ window.supabaseRecord = {
     }
   },
   async posResolveStaleBooking(payload) {
+    const reservationId = String(payload?.reservationId || '').trim();
+    if (!reservationId) throw new Error('A reservation ID is required.');
     const controller = new AbortController();
     let timedOut = false;
     let timeoutId;
     try {
       const request = window.supabaseClient.rpc('pos_resolve_stale_booking', {
-        p_reservation_id: payload.reservationId,
+        p_reservation_id: reservationId,
         p_outcome: payload.outcome,
         p_reason: payload.reason,
         p_confirm_no_meal: payload.confirmNoMeal,

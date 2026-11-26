@@ -19,7 +19,8 @@ const state = {
   focusPageAfterNavigation: false,
   notificationReadKeys: [],
   notificationViewAll: false,
-  notificationMarkingRead: false
+  notificationMarkingRead: false,
+  productOnboarding: null
 };
 let modalOpener = null;
 let invitationAcceptanceMode = window.costTrackInviteLink === true;
@@ -30,6 +31,7 @@ let realtimeChannel = null;
 let realtimeSubscriptionKey = '';
 const realtimeRefreshTimers = new Map();
 let realtimeConnected = false;
+let realtimeNeedsResync = false;
 let realtimeConfigPromise = null;
 let realtimeRequestedKey = '';
 let reservationCalendar = null;
@@ -37,6 +39,8 @@ let lastSavedAt = null;
 const recentLocalChanges = new Set();
 const collectionState = Object.fromEntries(KEYS.map(key => [key, []]));
 state.ingredientStatus = 'All';
+state.ingredientExpiryFilter = false;
+state.productCategoryOptions = [];
 state.ingredientCategory = 'All';
 state.ingredientUnit = 'All';
 state.recipeCategory = 'All';
@@ -134,9 +138,36 @@ let verificationRecordRequestId = 0;
 let verificationRecordSearchTimer = 0;
 const userInvitationVerificationDrafts = new WeakMap();
 const reportServerData = {};
-let reportRequestKey = '';
-let reportRequestPending = false;
-let reportDataVersion = 0;
+const reportPendingRequests = new Set();
+const reportDataVersions = new Map();
+const reportTabsBySource = {
+  ingredients: ['food_cost', 'waste', 'inventory', 'production'],
+  recipes: ['food_cost', 'production'],
+  recipe_ingredients: ['food_cost', 'production'],
+  production_logs: ['food_cost', 'production'],
+  waste_logs: ['food_cost', 'waste'],
+  pos_bills: ['daily_revenue', 'revenue_trend', 'customer_count', 'shift_revenue', 'closed_bill_summary', 'food_cost'],
+  pos_bill_lines: ['daily_revenue', 'revenue_trend', 'customer_count', 'shift_revenue', 'closed_bill_summary', 'food_cost'],
+  pos_bill_payments: ['daily_revenue', 'revenue_trend', 'customer_count', 'shift_revenue', 'closed_bill_summary', 'food_cost'],
+  pos_shifts: ['shift_revenue'],
+  pos_cash_movements: ['shift_revenue'],
+  pos_reservation_deposits: ['shift_revenue']
+};
+const reportRevenueSources = new Set([
+  'pos_bills', 'pos_bill_lines', 'pos_bill_payments', 'pos_shifts',
+  'pos_cash_movements', 'pos_reservation_deposits'
+]);
+const reportSourceAliases = {
+  productionLogs: 'production_logs',
+  preparedFoodWasteLogs: 'prepared_food_waste_logs',
+  wasteLogs: 'waste_logs',
+  recipeIngredients: 'recipe_ingredients',
+  billLines: 'pos_bill_lines',
+  billPayments: 'pos_bill_payments',
+  reservationDeposits: 'pos_reservation_deposits',
+  cashMovements: 'pos_cash_movements',
+  shifts: 'pos_shifts'
+};
 let revenueDashboardData = null;
 let revenueDashboardLoading = false;
 let revenueDashboardError = '';
@@ -167,7 +198,7 @@ const roleAccess = {
   'Administrator': ['dashboard', 'notifications', 'activity-logs', 'ingredients', 'receiving', 'recipes', 'production', 'waste', 'counts', 'reports', 'revenue', 'rates', 'users', 'reservations', 'calendar', 'tables', 'cashier', 'shifts', 'approvals', 'charge-catalog'],
   'Manager': ['dashboard', 'notifications', 'activity-logs', 'ingredients', 'receiving', 'recipes', 'production', 'waste', 'counts', 'reports', 'revenue', 'rates', 'reservations', 'calendar', 'tables', 'cashier', 'shifts', 'approvals', 'charge-catalog'],
   'Inventory Clerk': ['dashboard', 'notifications', 'activity-logs', 'ingredients', 'receiving', 'counts', 'reports'],
-  'Chef / Kitchen Staff': ['dashboard', 'notifications', 'activity-logs', 'recipes', 'production', 'waste'],
+  'Chef / Kitchen Staff': ['dashboard', 'notifications', 'activity-logs', 'recipes', 'production', 'waste', 'reports'],
   'Receptionist': ['dashboard', 'notifications', 'activity-logs', 'reservations', 'calendar', 'tables', 'cashier', 'shifts', 'approvals']
 };
 const canAccess = view => Boolean(roleAccess[state.role]?.includes(view));
@@ -304,7 +335,7 @@ async function saveCollections(changes) {
       if (touched.some(key => ['reservations', 'restaurantTables', 'posBills', 'reservationDeposits'].includes(key))) {
         invalidateUnresolvedBookings();
       }
-      invalidateReportData();
+      invalidateReportData(touched);
       setPostSaveSyncState();
       render();
       return touched;
@@ -346,6 +377,7 @@ async function removeRecord(key, recordId) {
   try {
     await window.supabaseRecord.remove(key, recordId, window.supabaseRecord.version(key, recordId));
     collectionState[key] = await window.supabaseRecord.load(key);
+    invalidateReportData([key]);
     setPostSaveSyncState();
     render();
   } catch (error) {
@@ -365,7 +397,7 @@ async function saveDelivery(payload) {
     if (!navigator.onLine) throw new Error('You are offline. Reconnect to save.');
     const outcome = await window.CostTrackLogic.saveThenRefresh(async () => {
       const saved = await window.supabaseRecord.receiveDelivery(payload);
-      invalidateReportData();
+      invalidateReportData(touched);
       setPostSaveSyncState();
       render();
       return saved;
@@ -440,6 +472,9 @@ function activeBuffetRate(item, date = item?.date || today()) {
   return window.CostTrackLogic.activeBuffetRate(all('buffetRates'), mealPeriod, date, dayType);
 }
 function friendlyRpcError(error) {
+  if (/a product with this name already exists in the selected category/i.test(message)) {
+    return 'A product with this name already exists in the selected category. Please choose another name or category.';
+  }
   const message = String(error?.message || error || '');
   if (/users cannot change their own role/i.test(message)) return 'You cannot change your own role. Ask another Administrator.';
   if (/cannot remove or demote the last administrator/i.test(message)) return 'At least one Administrator must remain in the system.';
@@ -569,7 +604,7 @@ function realtimeCollectionsForView() {
     'charge-catalog': ['pos_charge_items', 'pos_package_tiers', 'pos_discounts', 'pos_settings'],
     rates: ['buffet_rates'],
     revenue: ['revenue_records'],
-    reports: ['ingredients', 'recipes', 'recipe_ingredients', 'production_logs', 'waste_logs', 'prepared_food_waste_logs', 'inventory_transactions', 'physical_counts', 'reservations', 'pos_bills', 'pos_bill_payments', 'pos_shifts', 'pos_cash_movements', 'pos_reservation_deposits']
+    reports: ['ingredients', 'recipes', 'recipe_ingredients', 'production_logs', 'waste_logs', 'prepared_food_waste_logs', 'revenue_records', 'pos_bills', 'pos_bill_lines', 'pos_bill_payments', 'pos_shifts', 'pos_cash_movements', 'pos_reservation_deposits']
   };
   const alertTablesByRole = {
     Administrator: ['ingredients', 'inventory_batches', 'reservations', 'pos_shifts', 'pos_bills', 'pos_bill_approvals', 'pos_reservation_deposits', 'pos_notifications', 'notifications', 'notification_read_states', 'audit_logs'],
@@ -590,6 +625,7 @@ function realtimeCollectionsForView() {
       ...(alertTablesByRole[state.role] || [])
     ])];
   }
+  if (state.view === 'reports') return common.reports;
   return [...new Set([...(common[state.view] || []), ...(alertTablesByRole[state.role] || [])])];
 }
 function realtimeTablesForRole(tables) {
@@ -672,7 +708,7 @@ async function refreshSavedCollections(collections) {
   if (collections.some(key => ['reservations', 'restaurantTables', 'posBills', 'reservationDeposits'].includes(key))) {
     invalidateUnresolvedBookings();
   }
-  invalidateReportData();
+  invalidateReportData(collections);
   setPostSaveSyncState();
   render();
 }
@@ -772,6 +808,7 @@ async function refreshPosCollections() {
   }
   collections.forEach((collection, index) => persistCollection(collection, loaded[index]));
   invalidateUnresolvedBookings();
+  invalidateReportData(collections);
   setPostSaveSyncState();
   render();
 }
@@ -814,17 +851,20 @@ async function refreshRealtimeCollection(table, payload) {
     const record = await window.supabaseRecord.loadRecord(collection, recordId);
     if (record) upsertLocalRecord(collection, record);
   }
-  invalidateReportData();
-  if (table === 'pos_bills') {
-    revenueDashboardData = null;
-    revenueDashboardError = '';
-    if (revenueDashboardLoading) revenueDashboardRefreshAfterLoad = true;
-  }
+  const affectedReportTabs = invalidateReportData([table]);
   if (['reservations', 'restaurant_tables', 'pos_bills', 'pos_reservation_deposits'].includes(table)) {
     invalidateUnresolvedBookings();
     if (document.querySelector('[data-popover-panel="notifications"]:not([hidden])')) {
       loadUnresolvedBookings(true);
     }
+  }
+  if (state.view === 'reports') {
+    if (affectedReportTabs.includes(state.reportTab)) {
+      void loadReportData({ preserveCharts: true });
+    } else if (['prepared_food_waste_logs', 'revenue_records'].includes(table)) {
+      render({ preserveReportCharts: true });
+    }
+    return;
   }
   if (['ingredients', 'inventory_batches', 'notifications', 'audit_logs', 'reservations', 'restaurant_tables', 'revenue_records', 'production_logs', 'waste_logs', 'prepared_food_waste_logs', 'inventory_transactions', 'physical_counts', 'recipes', 'buffet_rates', 'pos_shifts', 'pos_cash_movements', 'pos_bills', 'pos_bill_lines', 'pos_bill_payments', 'pos_reservation_deposits', 'pos_bill_approvals', 'pos_notifications'].includes(table)) {
     renderWithNotificationPopover();
@@ -846,10 +886,11 @@ function scheduleRealtimeRefresh(table, payload) {
 async function stopRealtimeSubscriptions() {
   for (const timer of realtimeRefreshTimers.values()) clearTimeout(timer);
   realtimeRefreshTimers.clear();
-  if (realtimeChannel) await window.supabaseClient.removeChannel(realtimeChannel);
+  const channel = realtimeChannel;
   realtimeChannel = null;
   realtimeSubscriptionKey = '';
   realtimeConnected = false;
+  if (channel) await window.supabaseClient.removeChannel(channel);
 }
 async function applyRealtimeSubscriptions(key, tables) {
   if (!supabaseSyncEnabled || !state.user || key !== realtimeRequestedKey) return;
@@ -858,10 +899,11 @@ async function applyRealtimeSubscriptions(key, tables) {
   if (!supabaseSyncEnabled || !state.user || key !== realtimeRequestedKey || !tables.length) return;
   realtimeSubscriptionKey = key;
   realtimeConnected = false;
-  realtimeChannel = window.supabaseClient.channel(`costtrack:${state.user.id}:${state.view}`);
+  const channel = window.supabaseClient.channel(`costtrack:${state.user.id}:${state.view}`);
+  realtimeChannel = channel;
   tables.forEach(table => {
     if (table === 'profiles') {
-      realtimeChannel.on(
+      channel.on(
         'postgres_changes',
         { event: 'UPDATE', schema: 'public', table, filter: `id=eq.${state.user.id}` },
         payload => {
@@ -882,19 +924,25 @@ async function applyRealtimeSubscriptions(key, tables) {
       );
       return;
     }
-    realtimeChannel.on('postgres_changes', { event: '*', schema: 'public', table }, payload => scheduleRealtimeRefresh(table, payload));
+    channel.on('postgres_changes', { event: '*', schema: 'public', table }, payload => scheduleRealtimeRefresh(table, payload));
   });
-  realtimeChannel.subscribe(async status => {
+  channel.subscribe(async status => {
+    if (realtimeChannel !== channel) return;
     if (status === 'SUBSCRIBED') {
       realtimeConnected = true;
       setSyncState('live');
-      try {
-        await syncWithSupabase();
-      } catch (error) {
-        console.error('Realtime reconnect refresh failed.', error);
-        setSyncState('reconnecting', error.message);
+      if (realtimeNeedsResync) {
+        try {
+          await syncWithSupabase();
+          realtimeNeedsResync = false;
+        } catch (error) {
+          realtimeNeedsResync = true;
+          console.error('Realtime reconnect refresh failed.', error);
+          setSyncState('reconnecting', error.message);
+        }
       }
     } else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT' || status === 'CLOSED') {
+      realtimeNeedsResync = true;
       realtimeConnected = false;
       console.warn(`Realtime channel ${status.toLowerCase()}.`, { role: state.role, view: state.view, tables });
       setSyncState(navigator.onLine ? 'reconnecting' : 'offline');
@@ -1887,11 +1935,53 @@ function tablePage(config) {
   return `${pageHeader(config.eyebrow, config.title, config.subtitle, config.action)}${config.beforeTable || ''}<div class="toolbar"><div class="search-box">⌕<input id="tableSearch" placeholder="Search ${config.search || 'records'}..." value="${esc(state.query)}"></div>${config.filters || ''}<span class="record-count">${rows.length} records</span></div><div class="panel table-panel${tableClass}"><div class="table-scroll"><table data-table="${esc(tableId)}"><thead><tr>${headerMarkup}</tr></thead><tbody>${mobileRows.length ? mobileRows.join('') : `<tr><td colspan="${config.headers.length}" class="empty-state">${esc(emptyMessage)}</td></tr>`}</tbody></table></div>${pagination}</div>`;
 }
 function stockStatus(item) { return item.stock <= 0 ? 'Out of Stock' : item.stock <= item.minimum ? 'Low Stock' : 'Healthy'; }
+function ingredientStockStatusClass(status) {
+  return status === 'Healthy' ? 'status-good' : status === 'Out of Stock' ? 'status-out' : 'status-low';
+}
 function formatStockQuantity(value) {
   const quantity = Number(value);
   return Number.isFinite(quantity)
     ? new Intl.NumberFormat('en', { maximumFractionDigits: 2 }).format(quantity)
     : '—';
+}
+function inventoryMovementPeriods(businessDate) {
+  const dateOffset = (date, offset) => {
+    const value = new Date(`${date}T12:00:00Z`);
+    value.setUTCDate(value.getUTCDate() + offset);
+    return value.toISOString().slice(0, 10);
+  };
+  const currentStart = dateOffset(businessDate, -6);
+  const previousStart = dateOffset(businessDate, -13);
+  const previousEnd = dateOffset(businessDate, -7);
+  const transactions = all('inventoryTransactions').filter(item => item.date);
+  return {
+    forIngredients(ingredientIds) {
+      const matches = transactions.filter(item => ingredientIds.has(String(item.ingredientId)));
+      const current = matches.filter(item => item.date >= currentStart && item.date <= businessDate);
+      const previous = matches.filter(item => item.date >= previousStart && item.date <= previousEnd);
+      return { current: current.length, previous: previous.length };
+    },
+    value: (() => {
+      const total = items => items.reduce((sum, item) => sum + Number(item.quantity || 0) * Number(item.unitCost || 0), 0);
+      const current = transactions.filter(item => item.date >= currentStart && item.date <= businessDate);
+      const previous = transactions.filter(item => item.date >= previousStart && item.date <= previousEnd);
+      return { current: total(current), previous: total(previous) };
+    })()
+  };
+}
+function inventoryTrendMarkup(current, previous, label) {
+  const difference = current - previous;
+  const direction = difference > 0 ? 'up' : difference < 0 ? 'down' : 'steady';
+  const arrow = direction === 'up' ? '↑' : direction === 'down' ? '↓' : '→';
+  const trendValue = label === 'movements'
+    ? `${current} stock movements vs ${previous} last week`
+    : `${money(Math.abs(difference))} net stock-movement value vs last week`;
+  return `<span class="inventory-trend inventory-trend-${direction}"><span aria-hidden="true">${arrow}</span> ${trendValue}</span>`;
+}
+function inventoryActivityDateLabel(value) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value || '')) return 'Date unavailable';
+  return new Intl.DateTimeFormat('en-PH', { month: 'short', day: 'numeric' })
+    .format(new Date(`${value}T12:00:00`));
 }
 function roleDashboard() {
   const ingredients = all('ingredients').filter(item => item.isActive !== false);
@@ -1903,6 +1993,51 @@ function roleDashboard() {
   const canSeeRecipeCosts = ['Administrator', 'Manager'].includes(state.role);
   const businessDate = manilaBusinessToday();
   const todayDate = businessDate;
+  const movementPeriods = inventoryMovementPeriods(businessDate);
+  const inventoryMovementValueTrend = inventoryTrendMarkup(movementPeriods.value.current, movementPeriods.value.previous, 'value');
+  const inventoryRoles = ['Administrator', 'Manager', 'Inventory Clerk'].includes(state.role);
+  const ingredientById = new Map(ingredients.map(item => [String(item.id), item]));
+  const batchesByIngredient = new Map();
+  all('inventoryBatches').forEach(batch => {
+    const productId = String(batch.productId);
+    const productBatches = batchesByIngredient.get(productId) || [];
+    productBatches.push(batch);
+    batchesByIngredient.set(productId, productBatches);
+  });
+  const nearestExpiryByIngredient = new Map();
+  ingredients.forEach(item => {
+    const productBatches = batchesByIngredient.get(String(item.id)) || [];
+    if (!productBatches.length) return;
+    const snapshot = inventoryBatchVisibility(productBatches, businessDate);
+    if (snapshot.nearestExpiry) nearestExpiryByIngredient.set(String(item.id), snapshot.nearestExpiry);
+  });
+  const expiringBatches = all('inventoryBatches')
+    .map(batch => ({
+      batch,
+      product: ingredientById.get(String(batch.productId)),
+      expiry: window.CostTrackLogic.batchStatus(batch, businessDate, 7)
+    }))
+    .filter(item => item.product && item.expiry.daysUntilExpiry != null
+      && item.expiry.daysUntilExpiry >= 0
+      && item.expiry.daysUntilExpiry <= 7
+      && item.expiry.status !== 'Expired')
+    .sort((left, right) => left.expiry.daysUntilExpiry - right.expiry.daysUntilExpiry);
+  const earliestExpiryByIngredient = new Map();
+  expiringBatches.forEach(item => {
+    const productId = String(item.product.id);
+    if (!earliestExpiryByIngredient.has(productId)) earliestExpiryByIngredient.set(productId, item);
+  });
+  const expiringIngredients = [...earliestExpiryByIngredient.values()];
+  const expiringTodayCount = new Set(expiringIngredients
+    .filter(item => item.expiry.daysUntilExpiry === 0)
+    .map(item => String(item.product.id))).size;
+  const expiringThreeDayCount = new Set(expiringIngredients
+    .filter(item => item.expiry.daysUntilExpiry <= 3)
+    .map(item => String(item.product.id))).size;
+  const expiringSevenDayCount = expiringIngredients.length;
+  const expiredBatchCount = all('inventoryBatches').filter(batch =>
+    window.CostTrackLogic.batchStatus(batch, businessDate, 7).status === 'Expired'
+  ).length;
   const productionToday = all('productionLogs').filter(item => item.date === todayDate).length;
   const wasteToday = all('wasteLogs').filter(item => item.date === todayDate).length;
   const counts = all('physicalCounts');
@@ -1991,24 +2126,95 @@ function roleDashboard() {
       ];
     })()
     : state.role === 'Inventory Clerk'
-      ? [metric('Out of stock items', out, shellIcon('alert'), 'red-icon', 'Immediate replenishment needed'), metric('Low stock items', low, shellIcon('trend-down'), 'orange-icon', 'Below minimum level'), metric('Healthy stock items', healthy, shellIcon('check'), 'green-icon', 'At safe stock level'), metric('Total ingredients', ingredients.length, shellIcon('package'), 'purple-icon', money(inventoryValue()) + ' inventory value')]
+      ? (() => {
+        const statusMovement = status => movementPeriods.forIngredients(new Set(
+          ingredients.filter(item => stockStatus(item) === status).map(item => item.id)
+        ));
+        const outTrend = statusMovement('Out of Stock');
+        const lowTrend = statusMovement('Low Stock');
+        const healthyTrend = statusMovement('Healthy');
+        return [
+          metric('Out of stock items', out, shellIcon('alert'), 'red-icon', `Immediate replenishment needed${inventoryTrendMarkup(outTrend.current, outTrend.previous, 'movements')}`),
+          metric('Low stock items', low, shellIcon('trend-down'), 'orange-icon', `Below minimum level${inventoryTrendMarkup(lowTrend.current, lowTrend.previous, 'movements')}`),
+          metric('Healthy stock items', healthy, shellIcon('check'), 'green-icon', `At safe stock level${inventoryTrendMarkup(healthyTrend.current, healthyTrend.previous, 'movements')}`),
+          metric('Total ingredients', ingredients.length, shellIcon('package'), 'purple-icon', `${money(inventoryValue())} inventory value`)
+        ];
+      })()
       : canAccessRevenue()
         ? revenueDashboardCards
         : [metric('Low stock items', low + out, shellIcon('alert'), 'red-icon', 'Needs attention')];
   const recipeCategories = [...new Set(activeRecipes.map(item => item.category))];
   const kitchenPanel = `<div class="panel"><div class="panel-header"><div><div class="panel-title">Kitchen activity</div><div class="panel-subtitle">Active recipes and production by category</div></div><button class="text-btn" data-view="production">Open production board →</button></div><div class="dashboard-list">${activeRecipes.slice(0, 5).map(item => `<div class="dashboard-list-row"><span class="recipe-icon">◇</span><div><strong>${esc(item.name)}</strong><small>${esc(item.category)} · ${item.ingredients.length} ingredients</small></div>${canSeeRecipeCosts ? `<span class="tag">${money(recipePortionCost(item))} / portion</span>` : ''}</div>`).join('') || '<p class="panel-subtitle">No active recipes are available.</p>'}</div><div class="category-chips">${recipeCategories.map(item => `<span>${esc(item)}</span>`).join('')}</div></div>`;
-  const inventoryPanel = `<div class="panel inventory-health-panel"><div class="panel-header"><div><div class="panel-title">Inventory health</div><div class="panel-subtitle">Filter stock levels for quick action</div></div><button class="text-btn" data-view="ingredients">Manage inventory</button></div><div class="quick-filters">${['All', 'Out of Stock', 'Low Stock', 'Healthy'].map(item => `<button class="${state.ingredientStatus === item ? 'active' : ''}" data-dashboard-status="${item}">${item}<b>${item === 'All' ? ingredients.length : ingredients.filter(x => stockStatus(x) === item).length}</b></button>`).join('')}</div><div class="dashboard-list">${ingredients.filter(item => state.ingredientStatus === 'All' || stockStatus(item) === state.ingredientStatus).slice(0, 6).map(item => `<div class="dashboard-list-row" data-view="ingredients"><span class="ingredient-dot">${item.name[0]}</span><div><strong>${esc(item.name)}</strong><small>${formatStockQuantity(item.stock)} ${esc(item.unit)} · minimum ${formatStockQuantity(item.minimum)} ${esc(item.unit)}</small></div><span class="status ${stockStatus(item) === 'Healthy' ? 'status-good' : 'status-low'}">${stockStatus(item)}</span></div>`).join('')}</div></div>`;
   const costAnalytics = ['Administrator', 'Manager'].includes(state.role)
-    ? `<div class="panel dashboard-cost-analytics"><div class="panel-header"><div><div class="panel-title">Cost analytics</div><div class="panel-subtitle">Current inventory and costs recorded today</div></div><button class="text-btn" data-view="reports">Open Reports</button></div><div class="analytics-stack"><div><span>Inventory value</span><strong>${money(inventoryValue())}</strong></div><div><span>Logged production cost <small> · ${productionToday} batches</small></span><strong>${money(productionCost(todayDate))}</strong></div><div><span>Logged waste cost <small> · ${wasteToday} entries</small></span><strong>${money(wasteCost(todayDate))}</strong></div></div></div>`
+    ? `<div class="panel dashboard-cost-analytics"><div class="panel-header"><div><div class="panel-title">Inventory valuation &amp; cost analytics</div><div class="panel-subtitle">Current stock value and costs recorded today</div></div><button class="text-btn" data-view="reports">Open Reports</button></div><div class="inventory-valuation-hero"><span>Inventory value</span><strong>${money(inventoryValue())}</strong><small>Current stock × unit cost</small>${inventoryMovementValueTrend}</div><div class="analytics-stack"><div><span>Logged production cost <small> · ${productionToday} batches</small></span><strong>${money(productionCost(todayDate))}</strong></div><div><span>Logged waste cost <small> · ${wasteToday} entries</small></span><strong>${money(wasteCost(todayDate))}</strong></div></div></div>`
     : state.role === 'Inventory Clerk'
-      ? `<div class="panel dashboard-cost-analytics"><div class="panel-header"><div><div class="panel-title">Inventory valuation</div><div class="panel-subtitle">Current stock multiplied by unit cost</div></div><button class="text-btn" data-view="reports">Open Reports</button></div><div class="analytics-stack"><div><span>Inventory value</span><strong>${money(inventoryValue())}</strong></div></div></div>`
+      ? `<div class="panel dashboard-cost-analytics"><div class="panel-header"><div><div class="panel-title">Inventory valuation</div><div class="panel-subtitle">Current stock multiplied by unit cost</div></div><button class="text-btn" data-view="reports">Open Reports</button></div><div class="inventory-valuation-hero"><span>Inventory value</span><strong>${money(inventoryValue())}</strong><small>Current stock × unit cost</small>${inventoryMovementValueTrend}</div></div>`
     : '';
   const reservationPanel = `<div class="panel reservation-summary-panel"><div class="panel-header"><div><div class="panel-title">Reservation service</div><div class="reservation-attention-summary" role="group" aria-label="Reservation attention summary"><span><strong>${todayReservations.length}</strong> today</span><span><strong>${pendingReservations.length}</strong> pending approval</span><span><strong>${unassignedToday}</strong> unassigned today</span><span><strong>${arrivingSoon}</strong> arriving in 2 hours</span></div></div><button class="text-btn" data-view="reservations">Manage reservations</button></div><div class="dashboard-list">${prioritizedReservations.map(item => `<div class="dashboard-list-row"><span class="ingredient-dot">${esc(item.name.charAt(0))}</span><div><strong>${esc(item.name)}</strong><small>${esc(item.time)} · ${item.guests} guests · ${esc(item.table || 'Unassigned')}</small></div><span class="status">${esc(item.status)}</span></div>`).join('') || '<p class="panel-subtitle">No reservations scheduled for today.</p>'}</div></div>`;
+  const hasPriorityAlerts = out > 0 || low > 0 || expiringSevenDayCount > 0 || expiredBatchCount > 0;
+  const priorityAlerts = inventoryRoles
+    ? `<section class="inventory-priority-panel" aria-labelledby="inventory-priority-title"><div class="inventory-priority-heading"><div><div class="eyebrow">Daily inventory focus</div><h2 id="inventory-priority-title">Priority alerts</h2></div><span class="inventory-alert-count">${hasPriorityAlerts ? 'Needs attention' : 'All clear'}</span></div><div class="inventory-priority-alerts">
+        <button type="button" class="inventory-priority-alert is-critical" data-dashboard-status="Out of Stock"><span class="inventory-alert-symbol" aria-hidden="true">!</span><span><strong>${out} out of stock</strong><small>Items at zero on-hand quantity</small></span><span class="inventory-alert-arrow" aria-hidden="true">→</span></button>
+        <button type="button" class="inventory-priority-alert is-warning" data-dashboard-status="Low Stock"><span class="inventory-alert-symbol" aria-hidden="true">!</span><span><strong>${low} low stock</strong><small>Items at or below minimum</small></span><span class="inventory-alert-arrow" aria-hidden="true">→</span></button>
+        <div class="inventory-priority-alert is-expiry"><span class="inventory-alert-symbol" aria-hidden="true">◷</span><span><strong>${expiringSevenDayCount} expiring soon</strong><small>Ingredients with dated stock in 7 days</small></span></div>
+        ${expiredBatchCount ? `<div class="inventory-priority-alert is-critical"><span class="inventory-alert-symbol" aria-hidden="true">!</span><span><strong>${expiredBatchCount} expired lots</strong><small>Review expired stock batches</small></span></div>` : ''}
+      </div></section>`
+    : '';
+  const inventoryHealthRows = ingredients
+    .map(item => ({
+      item,
+      status: stockStatus(item),
+      nearestExpiry: nearestExpiryByIngredient.get(String(item.id)) || null
+    }))
+    .filter(row => state.ingredientStatus === 'All' || row.status === state.ingredientStatus)
+    .sort((left, right) => {
+      const statusPriority = { 'Out of Stock': 0, 'Low Stock': 1, Healthy: 2 };
+      const statusDifference = statusPriority[left.status] - statusPriority[right.status];
+      if (statusDifference) return statusDifference;
+      const leftExpiry = left.nearestExpiry?.expiry.daysUntilExpiry ?? Infinity;
+      const rightExpiry = right.nearestExpiry?.expiry.daysUntilExpiry ?? Infinity;
+      return leftExpiry - rightExpiry || String(left.item.name).localeCompare(String(right.item.name));
+    })
+    .slice(0, 8);
+  const inventoryHealthPanel = `<div class="panel inventory-health-panel"><div class="panel-header"><div><div class="panel-title">Inventory health</div><div class="panel-subtitle">Current stock, nearest expiry, and status</div></div><button class="text-btn" data-view="ingredients">Manage inventory</button></div><div class="quick-filters inventory-health-filters">${['All', 'Out of Stock', 'Low Stock', 'Healthy'].map(item => `<button type="button" class="${state.ingredientStatus === item ? 'active' : ''} ${item === 'Out of Stock' ? 'filter-out' : item === 'Low Stock' ? 'filter-low' : item === 'Healthy' ? 'filter-healthy' : ''}" data-inventory-health-filter="${item}" aria-pressed="${state.ingredientStatus === item}">${item}<b>${item === 'All' ? ingredients.length : ingredients.filter(x => stockStatus(x) === item).length}</b></button>`).join('')}</div><div class="inventory-health-table-wrap"><table class="inventory-health-table"><thead><tr><th scope="col">Ingredient</th><th scope="col">Current stock</th><th scope="col">Days to expiry</th><th scope="col">Status</th></tr></thead><tbody>${inventoryHealthRows.map(({ item, status, nearestExpiry }) => {
+    const expiryDays = nearestExpiry?.expiry.daysUntilExpiry;
+    const expiryTone = !nearestExpiry ? 'is-neutral'
+      : nearestExpiry.expiry.status === 'Expired' ? 'is-expired'
+        : expiryDays <= 3 ? 'is-soon'
+          : expiryDays <= 7 ? 'is-warning'
+            : 'is-healthy';
+    const statusTone = status === 'Healthy' ? 'status-good' : status === 'Out of Stock' ? 'status-out' : 'status-low';
+    return `<tr data-view="ingredients"><td data-label="Ingredient"><strong class="inventory-health-item-name">${esc(item.name)}</strong></td><td data-label="Current stock"><span class="inventory-health-stock"><strong>${formatStockQuantity(item.stock)} ${esc(item.unit)}</strong><small>Minimum ${formatStockQuantity(item.minimum)} ${esc(item.unit)}</small></span></td><td data-label="Days to expiry"><span class="inventory-health-expiry ${expiryTone}">${esc(nearestExpiry ? inventoryExpiryLabel(expiryDays) : 'Not tracked')}</span></td><td data-label="Status"><span class="status ${statusTone}">${status}</span></td></tr>`;
+  }).join('') || '<tr><td class="inventory-health-empty" colspan="4">No ingredients match this status.</td></tr>'}</tbody></table></div></div>`;
+  const expiringSoonPanel = `<section class="panel inventory-expiring-panel" aria-labelledby="inventory-expiring-title"><div class="panel-header"><div><div class="panel-title" id="inventory-expiring-title">Expiring soon</div><div class="panel-subtitle">Prioritized by the earliest dated stock</div></div><span class="inventory-panel-icon inventory-expiry-icon" aria-hidden="true">◷</span></div><div class="inventory-expiry-summary"><div><strong>${expiringTodayCount}</strong><span>Expiring today</span></div><div><strong>${expiringThreeDayCount}</strong><span>In the next 3 days</span></div><div><strong>${expiringSevenDayCount}</strong><span>In the next 7 days</span></div></div><div class="inventory-expiring-list">${expiringIngredients.slice(0, 5).map(({ batch, product, expiry }) => `<div class="inventory-expiring-row ${expiry.daysUntilExpiry === 0 ? 'is-today' : ''}"><span class="inventory-expiry-mark ${expiry.daysUntilExpiry === 0 ? 'is-today' : expiry.daysUntilExpiry <= 3 ? 'is-soon' : ''}" aria-hidden="true">!</span><div><strong>${esc(product.name)}</strong><small>${formatStockQuantity(batch.quantityRemaining)} ${esc(product.unit)} · ${esc(inventoryBatchLabel(batch))}</small></div><span class="inventory-expiry-days">${expiry.daysUntilExpiry === 0 ? 'Today' : `${expiry.daysUntilExpiry} day${expiry.daysUntilExpiry === 1 ? '' : 's'}`}</span></div>`).join('') || '<p class="inventory-empty-state">No ingredients are due to expire in the next 7 days.</p>'}</div></section>`;
+  const recentInventoryActivities = [
+    ...all('inventoryTransactions').map(item => ({
+      date: item.date || '',
+      kind: Number(item.quantity) > 0 ? 'Received' : (item.type || 'Adjusted'),
+      name: ingredientById.get(String(item.ingredientId))?.name || 'Inventory item',
+      detail: `${Number(item.quantity) > 0 ? '+' : ''}${formatStockQuantity(item.quantity)} ${ingredientById.get(String(item.ingredientId))?.unit || ''}`.trim(),
+      time: item.date || ''
+    })),
+    ...counts.map(item => ({
+      date: item.date || '',
+      kind: 'Counted',
+      name: ingredientById.get(String(item.ingredientId))?.name || 'Inventory item',
+      detail: `Physical count · ${formatStockQuantity(item.actual)} ${ingredientById.get(String(item.ingredientId))?.unit || ''}`,
+      time: item.date || ''
+    }))
+  ].sort((left, right) => right.date.localeCompare(left.date));
+  const recentActivityPanel = `<section class="panel inventory-activity-panel" aria-labelledby="inventory-activity-title"><div class="panel-header"><div><div class="panel-title" id="inventory-activity-title">Recent activity</div><div class="panel-subtitle">Latest inventory movements and counts</div></div><span class="inventory-panel-icon" aria-hidden="true">↻</span></div><div class="inventory-activity-list">${recentInventoryActivities.slice(0, 5).map(item => `<div class="inventory-activity-row"><span class="inventory-activity-dot ${item.kind === 'Received' ? 'is-received' : item.kind === 'Counted' ? 'is-counted' : 'is-adjusted'}" aria-hidden="true">${item.kind === 'Received' ? '+' : item.kind === 'Counted' ? '✓' : '−'}</span><div><strong>${esc(item.kind)} · ${esc(item.name)}</strong><small>${esc(item.detail)}</small></div><time${item.time ? ` datetime="${esc(item.time)}"` : ''}>${esc(inventoryActivityDateLabel(item.time))}</time></div>`).join('') || '<p class="inventory-empty-state">Inventory activity will appear here when stock is received, adjusted, or counted.</p>'}</div></section>`;
   const revenueDashboardErrorPanel = canAccessRevenue() && revenueDashboardError
     ? `<div class="panel error-state" role="alert">${esc(revenueDashboardError)} <button class="ghost-btn" data-action="retry-revenue-dashboard">Retry dashboard</button></div>`
     : '';
   const fohMetrics = canAccess('reservations') ? `<div class="panel"><div class="panel-title">Front-of-house today</div><div class="metric-grid compact-metric-grid">${metric('Reservations', todayReservations.length, shellIcon('calendar'), 'orange-icon', 'Scheduled today')}${metric('Walk-ins', todayWalkIns, shellIcon('person'), 'purple-icon', 'Recorded today')}${metric('Seated covers', seatedCovers, shellIcon('check'), 'green-icon', 'Currently seated')}</div></div>` : '';
-  return `<div class="welcome-row"><div><div class="eyebrow">${eyebrow}</div><h1>${dashboardGreeting()}</h1><p>${subtitle}</p><p class="dashboard-date">Business date · <time datetime="${businessDate}">${esc(businessDateLabel)}</time></p></div>${state.role === 'Receptionist' ? '<button class="primary-btn" data-action="open-reservation">+ New reservation</button>' : state.role === 'Inventory Clerk' || state.role === 'Administrator' || state.role === 'Manager' ? '<button class="primary-btn" data-action="open-receiving">+ Receive inventory</button>' : '<button class="primary-btn" data-view="production">Open production board</button>'}</div>${revenueDashboardErrorPanel}<div class="metric-grid role-metric-grid">${cards.join('')}</div>${fohMetrics}${state.role === 'Receptionist' ? `<div class="dashboard-grid">${reservationPanel}<div class="panel"><div class="panel-title">Front-of-house checklist</div><div class="checklist"><span>✓ Confirm pending bookings</span><span>○ Check in arriving guests</span><span>○ Review table assignments</span></div></div></div>` : state.role === 'Chef / Kitchen Staff' ? `<div class="dashboard-grid">${kitchenPanel}<div class="panel"><div class="panel-title">Today’s kitchen checklist</div><div class="checklist"><span>✓ Review today’s prep targets</span><span>○ Start a batch from the production board</span><span>○ Mark each cooked batch ready</span></div></div></div>` : state.role === 'Inventory Clerk' ? inventoryPanel : state.role === 'Manager' ? `<div class="dashboard-grid">${inventoryPanel}${reservationPanel}</div>` : `<div class="dashboard-grid">${reservationPanel}${inventoryPanel}</div>`}${state.role === 'Chef / Kitchen Staff' ? '' : costAnalytics}`;
+  const inventoryDashboardPanels = `<div class="dashboard-grid inventory-control-grid">${inventoryHealthPanel}<div class="inventory-dashboard-side-rail">${expiringSoonPanel}${recentActivityPanel}</div></div>`;
+  const operationalPanels = state.role === 'Inventory Clerk'
+    ? inventoryDashboardPanels
+    : state.role === 'Manager'
+      ? `${inventoryDashboardPanels}<div class="dashboard-grid">${reservationPanel}</div>`
+      : `${inventoryDashboardPanels}<div class="dashboard-grid">${reservationPanel}</div>`;
+  return `<div class="welcome-row"><div><div class="eyebrow">${eyebrow}</div><h1>${dashboardGreeting()}</h1><p>${subtitle}</p><p class="dashboard-date">Business date · <time datetime="${businessDate}">${esc(businessDateLabel)}</time></p></div>${state.role === 'Receptionist' ? '<button class="primary-btn" data-action="open-reservation">+ New reservation</button>' : state.role === 'Inventory Clerk' || state.role === 'Administrator' || state.role === 'Manager' ? '<button class="primary-btn" data-action="open-receiving">+ Receive inventory</button>' : '<button class="primary-btn" data-view="production">Open production board</button>'}</div>${priorityAlerts}${revenueDashboardErrorPanel}<div class="metric-grid role-metric-grid">${cards.join('')}</div>${fohMetrics}${state.role === 'Receptionist' ? `<div class="dashboard-grid">${reservationPanel}<div class="panel"><div class="panel-title">Front-of-house checklist</div><div class="checklist"><span>✓ Confirm pending bookings</span><span>○ Check in arriving guests</span><span>○ Review table assignments</span></div></div></div>` : state.role === 'Chef / Kitchen Staff' ? `<div class="dashboard-grid">${kitchenPanel}<div class="panel"><div class="panel-title">Today’s kitchen checklist</div><div class="checklist"><span>✓ Review today’s prep targets</span><span>○ Start a batch from the production board</span><span>○ Mark each cooked batch ready</span></div></div></div>` : operationalPanels}${state.role === 'Chef / Kitchen Staff' ? '' : costAnalytics}`;
 }
 function inventoryBatchVisibility(productBatches, asOfDate = manilaBusinessToday()) {
   const classified = productBatches.map(batch => ({
@@ -2058,31 +2264,24 @@ function inventoryExpiryLabel(daysUntilExpiry) {
 }
 
 function inventoryCardBatchIntelligence(snapshot) {
-  if (!snapshot.classified.length) return '';
   const nearest = snapshot.nearestExpiry;
-  const urgency = snapshot.expiredCount
+  const daysUntilExpiry = nearest?.expiry.daysUntilExpiry;
+  const urgency = nearest?.expiry.status === 'Expired' || (daysUntilExpiry != null && daysUntilExpiry < 0)
     ? 'is-expired'
-    : snapshot.expiringSoonCount
+    : daysUntilExpiry != null && daysUntilExpiry <= 7
       ? 'is-warning'
-      : snapshot.fifoOrder.length && snapshot.nearestExpiry
+      : nearest
         ? 'is-healthy'
         : 'is-neutral';
-  const attention = snapshot.expiredCount && snapshot.expiringSoonCount
-    ? `${snapshot.expiredCount} expired · ${snapshot.expiringSoonCount} expiring soon`
-    : snapshot.expiredCount
-      ? `${snapshot.expiredCount} expired`
-      : snapshot.expiringSoonCount
-        ? `${snapshot.expiringSoonCount} expiring soon`
-        : snapshot.fifoOrder.length
-          ? snapshot.nearestExpiry ? 'Expiry healthy' : 'No expiry dates'
-          : 'No active lots';
-  const expiryText = nearest
-    ? `${attention} · ${esc(inventoryBatchLabel(nearest.batch))} · ${esc(inventoryExpiryLabel(nearest.expiry.daysUntilExpiry))}`
-    : attention;
+  const expiryText = nearest ? inventoryExpiryLabel(daysUntilExpiry) : 'No expiry date tracked';
   const fifoFirst = snapshot.fifoOrder[0];
+  const receivedDate = fifoFirst?.receivedDate || fifoFirst?.received_date;
+  const receivedDateLabel = receivedDate
+    ? inventoryActivityDateLabel(String(receivedDate).slice(0, 10))
+    : '';
   return `<div class="inventory-card-intelligence" aria-label="Batch priority and expiration">
-    <span class="inventory-expiry-indicator ${urgency}">${expiryText}</span>
-    ${fifoFirst ? `<span class="inventory-first-use">FIFO first: <strong>${esc(inventoryBatchLabel(fifoFirst))}</strong></span>` : ''}
+    <div class="inventory-card-expiry"><small>Expiration</small><span class="inventory-expiry-indicator ${urgency}">${esc(expiryText)}</span></div>
+    <div class="inventory-first-use"><small>FIFO batch</small><strong>${fifoFirst ? esc(inventoryBatchLabel(fifoFirst)) : 'No active batch'}</strong>${receivedDateLabel ? `<span>Received ${esc(receivedDateLabel)}</span>` : ''}</div>
   </div>`;
 }
 
@@ -2090,26 +2289,94 @@ function ingredientCardsPage() {
   const ingredients = all('ingredients');
   const batchesByProduct = new Map();
   all('inventoryBatches').forEach(batch => {
-    const productBatches = batchesByProduct.get(batch.productId) || [];
+    const productId = String(batch.productId);
+    const productBatches = batchesByProduct.get(productId) || [];
     productBatches.push(batch);
-    batchesByProduct.set(batch.productId, productBatches);
+    batchesByProduct.set(productId, productBatches);
   });
-  const categories = [...new Set(ingredients.map(item => item.category))];
+  const batchSnapshots = new Map(ingredients.map(item => [
+    String(item.id),
+    inventoryBatchVisibility(batchesByProduct.get(String(item.id)) || [])
+  ]));
+  const hasExpiryWithinSevenDays = item => batchSnapshots.get(String(item.id))?.classified.some(({ batch, expiry }) => (
+    Number(batch.quantityRemaining || 0) > 0
+    && ['Active', 'Expiring soon'].includes(expiry.status)
+    && expiry.daysUntilExpiry != null
+    && expiry.daysUntilExpiry >= 0
+    && expiry.daysUntilExpiry <= 7
+  )) || false;
+  const categories = state.productCategoryOptions;
+  const categoryIngredients = state.ingredientCategory === 'All'
+    ? ingredients
+    : ingredients.filter(item => item.category === state.ingredientCategory);
   const units = [...new Set(ingredients.map(item => item.unit))];
   const filtered = ingredients.filter(item => {
     const queryMatch = `${item.name} ${item.category}`.toLowerCase().includes(state.query.toLowerCase());
-    return queryMatch && (state.ingredientCategory === 'All' || item.category === state.ingredientCategory) && (state.ingredientUnit === 'All' || item.unit === state.ingredientUnit) && (state.ingredientStatus === 'All' || stockStatus(item) === state.ingredientStatus);
+    const stockStatusMatch = state.ingredientStatus === 'All' || stockStatus(item) === state.ingredientStatus;
+    const expiryMatch = !state.ingredientExpiryFilter || hasExpiryWithinSevenDays(item);
+    return queryMatch
+      && (state.ingredientCategory === 'All' || item.category === state.ingredientCategory)
+      && (state.ingredientUnit === 'All' || item.unit === state.ingredientUnit)
+      && stockStatusMatch
+      && expiryMatch;
   });
   const canSeeCost = ['Administrator', 'Manager', 'Inventory Clerk'].includes(state.role);
   const canManageProducts = window.CostTrackLogic.canPerformInventoryAction(state.role, 'product.manage');
-  const sorted = filtered.slice().sort((a, b) => { const key = state.ingredientSort === 'stock' ? Number(a.stock) - Number(b.stock) : state.ingredientSort === 'cost' ? Number(a.cost) - Number(b.cost) : state.ingredientSort === 'status' ? stockStatus(a).localeCompare(stockStatus(b)) : a.name.localeCompare(b.name); return state.ingredientSortDirection === 'asc' ? key : -key; });
+  const sorted = filtered.slice().sort((a, b) => {
+    if (state.ingredientExpiryFilter) {
+      const expiryA = batchSnapshots.get(String(a.id))?.nearestExpiry?.expiry.daysUntilExpiry ?? Infinity;
+      const expiryB = batchSnapshots.get(String(b.id))?.nearestExpiry?.expiry.daysUntilExpiry ?? Infinity;
+      if (expiryA !== expiryB) return expiryA - expiryB;
+    }
+    const key = state.ingredientSort === 'stock' ? Number(a.stock) - Number(b.stock) : state.ingredientSort === 'cost' ? Number(a.cost) - Number(b.cost) : state.ingredientSort === 'status' ? stockStatus(a).localeCompare(stockStatus(b)) : a.name.localeCompare(b.name);
+    return state.ingredientSortDirection === 'asc' ? key : -key;
+  });
   const toggle = `<button class="ghost-btn compact-btn" data-action="toggle-ingredient-view">${state.ingredientView === 'cards' ? 'Table view' : 'Card view'}</button>`;
   const cardMarkup = sorted.length ? sorted.map(item => {
-    const batchSnapshot = inventoryBatchVisibility(batchesByProduct.get(item.id) || []);
-    return `<article class="catalog-card"><div class="catalog-card-top"><span class="ingredient-dot large-dot">${item.name[0]}</span><div class="product-status-group"><span class="status ${stockStatus(item) === 'Healthy' ? 'status-good' : 'status-low'}">${stockStatus(item)}</span>${item.isActive === false ? '<span class="product-active-status is-inactive">Inactive</span>' : ''}</div></div><h3>${esc(item.name)}</h3><span class="tag">${esc(item.category)}</span><div class="catalog-stat"><div><small>Current stock</small><strong>${formatStockQuantity(item.stock)} <em>${item.unit}</em></strong></div>${canSeeCost ? `<div><small>Cost / unit</small><strong>${money(item.cost)}</strong></div>` : ''}</div>${inventoryCardBatchIntelligence(batchSnapshot)}<div class="catalog-card-footer"><span>Minimum ${item.minimum} ${item.unit}</span><div class="card-actions">${actions('ingredient', item.id, item)}</div></div></article>`;
-  }).join('') : `<div class="panel empty-state">No ingredients match these filters.${canManageProducts ? '<button class="primary-btn" data-action="open-ingredient">Add product</button>' : ''}</div>`;
-  const tableMarkup = `<div class="panel table-panel"><div class="table-scroll"><table data-table="inventory"><thead><tr>${[['name','Ingredient'],['stock','Stock'],...(canSeeCost ? [['cost','Cost / unit']] : []),['status','Status'],['','']].map(([key, label]) => key ? `<th${key === 'cost' ? ' class="mobile-hidden-cell"' : ''}><button class="sort-header" data-sort-ingredient="${key}">${label} ↕</button></th>` : '<th></th>').join('')}</tr></thead><tbody>${sorted.length ? sorted.map(item => `<tr><td data-label="Ingredient"><strong>${esc(item.name)}</strong><small class="sub-cell">${esc(item.category)} · ${esc(item.unit)} · ${item.isActive === false ? 'Inactive' : 'Active'}</small></td><td data-label="Stock">${formatStockQuantity(item.stock)} ${esc(item.unit)}</td>${canSeeCost ? `<td data-label="Cost / unit" data-mobile-hidden="true">${money(item.cost)}</td>` : ''}<td data-label="Status"><span class="status ${stockStatus(item) === 'Healthy' ? 'status-good' : 'status-low'}">${stockStatus(item)}</span></td><td data-label="Actions">${actions('ingredient', item.id, item)}</td></tr>`).join('') : `<tr><td colspan="${canSeeCost ? 5 : 4}" class="empty-state">No ingredients match these filters.</td></tr>`}</tbody></table></div></div>`;
-  return `${pageHeader('Inventory', 'Products', 'Review product stock and reorder thresholds.', `${toggle} ${canManageProducts ? '<button class="primary-btn" data-action="open-ingredient">+ Add product</button>' : ''}`)}<div class="catalog-toolbar"><div class="search-box">⌕<input id="tableSearch" placeholder="Search products or categories..." value="${esc(state.query)}"></div><select data-filter="ingredientCategory"><option>All categories</option>${categories.map(item => `<option ${state.ingredientCategory === item ? 'selected' : ''}>${esc(item)}</option>`).join('')}</select><label class="filter-check"><input type="checkbox" data-low-stock-filter ${state.ingredientStatus === 'Low Stock' ? 'checked' : ''}> Low stock only</label><span class="record-count">${filtered.length} products</span></div>${state.ingredientView === 'cards' ? `<div class="ingredient-card-grid">${cardMarkup}</div>` : tableMarkup}`;
+    const status = stockStatus(item);
+    const statusClass = ingredientStockStatusClass(status);
+    const progressClass = status === 'Healthy' ? 'is-healthy' : status === 'Out of Stock' ? 'is-out' : 'is-low';
+    const stock = Number(item.stock);
+    const minimum = Number(item.minimum);
+    const coverage = Number.isFinite(stock) && Number.isFinite(minimum) && minimum > 0
+      ? Math.max(0, Math.min(100, Math.round((stock / minimum) * 100)))
+      : null;
+    const coverageText = coverage == null
+      ? Number.isFinite(minimum) && minimum > 0 ? 'Stock level unavailable' : 'Minimum threshold not set'
+      : stock === minimum
+        ? 'At minimum threshold'
+        : stock > minimum
+          ? 'Minimum met'
+          : `${coverage}% of minimum`;
+    const progress = coverage == null
+      ? `<div class="product-stock-progress-note is-unavailable">${coverageText}</div>`
+      : `<div class="product-stock-progress" role="progressbar" aria-label="${esc(item.name)} stock relative to minimum" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${coverage}" aria-valuetext="${esc(coverageText)}"><span class="product-stock-progress-fill ${progressClass}" style="width:${coverage}%"></span></div><div class="product-stock-progress-note">${coverageText}</div>`;
+    const batchSnapshot = batchSnapshots.get(String(item.id));
+    return `<article class="catalog-card ingredient-product-card"><div class="catalog-card-top"><span class="ingredient-dot large-dot">${esc(item.name[0] || '?')}</span><div class="product-status-group"><span class="status ${statusClass}">${status}</span>${item.isActive === false ? '<span class="product-active-status is-inactive">Inactive</span>' : ''}</div></div><h3>${esc(item.name)}</h3><span class="tag">${esc(item.category)}</span><div class="product-stock-section"><div class="product-stock-readouts"><div><small>Current stock</small><strong>${formatStockQuantity(item.stock)} <em>${esc(item.unit)}</em></strong></div><div><small>Minimum stock</small><strong>${formatStockQuantity(item.minimum)} <em>${esc(item.unit)}</em></strong></div></div>${progress}</div>${inventoryCardBatchIntelligence(batchSnapshot)}<div class="catalog-card-footer product-card-footer"><span class="product-cost-summary">${canSeeCost ? `<small>Cost / unit</small><strong>${money(item.cost)}</strong>` : ''}</span><div class="product-card-actions"><button type="button" class="product-view-details" data-action="view-ingredient" data-id="${esc(item.id)}" aria-label="View details for ${esc(item.name)}">View details</button>${actions('ingredient', item.id, item, { includeView: false })}</div></div></article>`;
+  }).join('') : `<div class="panel empty-state">No ingredients match these filters.${canManageProducts ? '<button class="primary-btn" data-action="open-ingredient">+ New Product</button>' : ''}</div>`;
+  const tableMarkup = `<div class="panel table-panel"><div class="table-scroll"><table data-table="inventory"><thead><tr>${[['name','Ingredient'],['stock','Stock'],...(canSeeCost ? [['cost','Cost / unit']] : []),['status','Status'],['','']].map(([key, label]) => key ? `<th${key === 'cost' ? ' class="mobile-hidden-cell"' : ''}><button class="sort-header" data-sort-ingredient="${key}">${label} ↕</button></th>` : '<th></th>').join('')}</tr></thead><tbody>${sorted.length ? sorted.map(item => {
+    const status = stockStatus(item);
+    return `<tr><td data-label="Ingredient"><strong>${esc(item.name)}</strong><small class="sub-cell">${esc(item.category)} · ${esc(item.unit)} · ${item.isActive === false ? 'Inactive' : 'Active'}</small></td><td data-label="Stock">${formatStockQuantity(item.stock)} ${esc(item.unit)}</td>${canSeeCost ? `<td data-label="Cost / unit" data-mobile-hidden="true">${money(item.cost)}</td>` : ''}<td data-label="Status"><span class="status ${ingredientStockStatusClass(status)}">${status}</span></td><td data-label="Actions">${actions('ingredient', item.id, item)}</td></tr>`;
+  }).join('') : `<tr><td colspan="${canSeeCost ? 5 : 4}" class="empty-state">No ingredients match these filters.</td></tr>`}</tbody></table></div></div>`;
+  const statusFilters = [
+    { value: 'All', count: categoryIngredients.length },
+    { value: 'Out of Stock', count: categoryIngredients.filter(item => stockStatus(item) === 'Out of Stock').length },
+    { value: 'Low Stock', count: categoryIngredients.filter(item => stockStatus(item) === 'Low Stock').length },
+    { value: 'Healthy', count: categoryIngredients.filter(item => stockStatus(item) === 'Healthy').length },
+    { value: 'Expiring Soon', count: categoryIngredients.filter(hasExpiryWithinSevenDays).length }
+  ];
+  const statusFilterMarkup = statusFilters.map(filter => {
+    const selected = filter.value === 'Expiring Soon'
+      ? state.ingredientExpiryFilter
+      : !state.ingredientExpiryFilter && state.ingredientStatus === filter.value;
+    const filterClass = filter.value === 'Out of Stock' ? 'filter-out'
+      : filter.value === 'Low Stock' ? 'filter-low'
+        : filter.value === 'Healthy' ? 'filter-healthy'
+          : filter.value === 'Expiring Soon' ? 'filter-expiring'
+            : '';
+    return `<button type="button" class="ingredient-status-chip ${filterClass} ${selected ? 'active' : ''}" data-ingredient-status-filter="${filter.value}" aria-pressed="${selected}">${filter.value}<b>${filter.count}</b></button>`;
+  }).join('');
+  return `${pageHeader('Inventory', 'Products', 'Monitor ingredient stock, expiry dates, and FIFO batches.', `${toggle} ${canManageProducts ? '<button class="primary-btn" data-action="open-ingredient">+ New Product</button>' : ''}`)}<div class="catalog-toolbar"><div class="search-box">⌕<input id="tableSearch" placeholder="Search products or categories..." value="${esc(state.query)}"></div><select data-filter="ingredientCategory"><option>All categories</option>${categories.map(item => `<option ${state.ingredientCategory === item ? 'selected' : ''}>${esc(item)}</option>`).join('')}</select><span class="record-count">${filtered.length} products</span></div><div class="ingredient-status-filters" role="group" aria-label="Filter products by stock status">${statusFilterMarkup}</div>${state.ingredientView === 'cards' ? `<div class="ingredient-card-grid">${cardMarkup}</div>` : tableMarkup}`;
 }
 function recipeCardsPage() {
   const recipes = all('recipes');
@@ -3155,12 +3422,14 @@ function shiftsPage() {
   const rows = shifts.map(item => {
     const own = item.openedBy === state.user?.id;
     const canMove = item.status === 'Open';
-    const canClose = item.status === 'Open' && shiftOpenedOnDate(item, today);
-    const cannotCloseWrongDay = item.status === 'Open' && !shiftOpenedOnDate(item, today);
+    const canClose = window.CostTrackLogic.canCloseShift(item, state.role, state.user?.id);
+    const overdue = item.status === 'Open' && !shiftOpenedOnDate(item, today);
     const variance = item.cashVariance == null ? '—' : `${item.cashVariance > 0 ? '+' : ''}${money(item.cashVariance)}`;
-    const closeCell = cannotCloseWrongDay
-      ? '<span class="field-help">Close only on its opening day</span>'
-      : canClose ? '<button class="primary-btn compact-btn" data-action="close-shift" data-id="' + esc(item.id) + '">Close</button>' : '';
+    const closeCell = canClose
+      ? `${overdue ? '<span class="field-help">Overdue — reconcile and close</span>' : ''}<button class="primary-btn compact-btn" data-action="close-shift" data-id="${esc(item.id)}">Close</button>`
+      : item.status === 'Open' && state.role === 'Receptionist'
+        ? '<span class="field-help">Only the shift opener or a Manager/Admin can close</span>'
+        : '';
     return `<tr><td><strong>${own ? 'Your shift' : 'Cashier shift'}</strong><small>${esc(own ? 'Opened by you' : staffDisplayName(item.openedBy, 'Cashier'))}</small></td><td><span class="status ${item.status === 'Closed' ? 'status-good' : item.status === 'Needs review' ? 'status-out' : 'status-low'}">${esc(item.status)}</span></td><td>${esc(formatOperationalDateTime(item.openedAt))}</td><td>${money(item.openingFloat || 0)}</td><td>${item.expectedCash == null ? '—' : money(item.expectedCash)}</td><td>${variance}</td><td><div class="row-actions shift-actions"><button class="ghost-btn compact-btn" data-action="open-shift" data-id="${esc(item.id)}">View</button>${canMove ? `<button class="ghost-btn compact-btn" data-action="cash-movement" data-id="${esc(item.id)}">Paid in/out</button>` : ''}${closeCell}<button class="ghost-btn compact-btn" data-action="print-shift" data-id="${esc(item.id)}">Print</button></div></td></tr>`;
   });
   return tablePage({
@@ -5900,6 +6169,416 @@ async function refreshPreparedWasteBatches(form, serviceDate) {
     select.disabled = form.elements.wasteType.value !== 'prepared';
     toast('Ready production batches could not be loaded for this date. You can still record prepared-food waste without linking a batch.', 'error');
   }
+function newProductWizardDraft() {
+  return {
+    name: '',
+    category: '',
+    unit: '',
+    minimum: '0',
+    preferredSupplier: '',
+    trackExpiry: false,
+    shelfLifeDays: '',
+    shelfLifeMode: 'manual',
+    notes: ''
+  };
+}
+
+function productWizardProgress(step, labels) {
+  return `<ol class="product-wizard-progress" aria-label="Product setup progress">${labels.map((label, index) => {
+    const number = index + 1;
+    const current = number === step;
+    const complete = number < step;
+    return `<li class="${current ? 'is-current' : complete ? 'is-complete' : ''}"><span ${current ? 'aria-current="step"' : ''}><b>${number}</b>${esc(label)}</span></li>`;
+  }).join('')}</ol>`;
+}
+
+function productWizardChoices(items, selected, action, scope, index) {
+  return items.map(item => {
+    const value = typeof item === 'string' ? item : item.value;
+    const label = typeof item === 'string' ? item : item.label;
+    return `<button type="button" class="product-choice ${String(value) === String(selected) ? 'is-selected' : ''}" data-product-onboarding-action="${action}" data-scope="${scope}" ${index === undefined ? '' : `data-index="${index}"`} data-value="${esc(value)}" aria-pressed="${String(value) === String(selected)}">${esc(label)}</button>`;
+  }).join('');
+}
+
+function productWizardDetailsMarkup(product, scope, index, catalogs) {
+  const isDefault = scope === 'defaults';
+  const category = product.category || '';
+  const unit = product.unit || '';
+  const prefix = isDefault ? 'Defaults' : `Product ${index + 1}`;
+  const indexAttr = isDefault ? '' : `data-index="${index}"`;
+  const categoryChoices = productWizardChoices(catalogs.categories, category, 'select-category', scope, isDefault ? undefined : index);
+  const unitChoices = productWizardChoices(catalogs.units.map(item => ({
+    value: item.abbreviation,
+    label: item.abbreviation
+  })), unit, 'select-unit', scope, isDefault ? undefined : index);
+  const shelfLifeChoices = [
+    { value: '7', label: '7 days' },
+    { value: '14', label: '14 days' },
+    { value: '30', label: '30 days' },
+    { value: '60', label: '60 days' },
+    { value: '90', label: '90 days' },
+    { value: 'custom', label: 'Custom' },
+    { value: 'manual', label: 'Set date on delivery' }
+  ];
+  const shelfLifeMode = product.shelfLifeMode || 'manual';
+  const shelfLifeMarkup = product.trackExpiry
+    ? `<div class="product-wizard-field"><span class="product-wizard-label">Shelf life</span><div class="product-choice-grid product-choice-grid--compact">${productWizardChoices(shelfLifeChoices, shelfLifeMode === 'custom' ? 'custom' : shelfLifeMode === 'manual' ? 'manual' : String(product.shelfLifeDays || ''), 'select-shelf-life', scope, isDefault ? undefined : index)}</div>${shelfLifeMode === 'custom' ? `<label class="product-wizard-custom-days">Custom shelf life (days)<input type="number" min="1" max="3650" step="1" value="${esc(product.shelfLifeDays || '')}" data-product-onboarding-field="shelf-life" data-scope="${scope}" ${indexAttr}></label>` : ''}</div>`
+    : '';
+  return `<div class="product-wizard-details">
+    <div class="product-wizard-field"><span class="product-wizard-label">${prefix} category</span><div class="product-choice-grid" role="group" aria-label="${prefix} category">${categoryChoices}</div></div>
+    <div class="product-wizard-field"><span class="product-wizard-label">${prefix} unit</span><div class="product-choice-grid product-choice-grid--compact" role="group" aria-label="${prefix} unit">${unitChoices}</div></div>
+    <div class="product-wizard-field"><label class="product-wizard-label" for="product-minimum-${scope}-${index === undefined ? 'all' : index}">Minimum stock</label><div class="product-quantity-control"><div class="product-quantity-shortcuts">${[-10, -5, -1].map(delta => `<button type="button" class="ghost-btn" data-product-onboarding-action="adjust-minimum" data-scope="${scope}" ${indexAttr} data-delta="${delta}">${delta}</button>`).join('')}</div><input id="product-minimum-${scope}-${index === undefined ? 'all' : index}" type="number" min="0" step="0.0001" value="${esc(product.minimum ?? '0')}" data-product-onboarding-field="minimum" data-scope="${scope}" ${indexAttr}><div class="product-quantity-shortcuts">${[1, 5, 10, 20].map(delta => `<button type="button" class="ghost-btn" data-product-onboarding-action="adjust-minimum" data-scope="${scope}" ${indexAttr} data-delta="${delta > 0 ? `+${delta}` : delta}">+${delta}</button>`).join('')}</div></div></div>
+    <div class="product-wizard-field"><span class="product-wizard-label">Track expiration?</span><div class="product-choice-grid product-choice-grid--compact">${productWizardChoices([{ value: 'false', label: 'No' }, { value: 'true', label: 'Yes' }], String(Boolean(product.trackExpiry)), 'select-expiry', scope, isDefault ? undefined : index)}</div>${shelfLifeMarkup}</div>
+  </div>`;
+}
+
+function productWizardReviewList(product) {
+  const shelfLife = !product.trackExpiry
+    ? 'Not tracked'
+    : product.shelfLifeDays
+      ? `${product.shelfLifeDays} days`
+      : 'Set date on delivery';
+  const rows = [
+    ['Name', product.name || 'Not provided'],
+    ['Category', product.category || 'Not selected'],
+    ['Unit', product.unit || 'Not selected'],
+    ['Minimum stock', `${product.minimum || 0} ${product.unit || ''}`.trim()],
+    ['Expiration', product.trackExpiry ? `Tracked · ${shelfLife}` : 'Not tracked'],
+    ['Preferred supplier', product.preferredSupplier || 'Not specified'],
+    ['Notes', product.notes || 'None']
+  ];
+  return `<dl class="product-wizard-review-list">${rows.map(([label, value]) => `<div><dt>${esc(label)}</dt><dd>${esc(value)}</dd></div>`).join('')}</dl>`;
+}
+
+function renderProductOnboarding() {
+  const wizard = state.productOnboarding;
+  if (!wizard) return;
+  if (wizard.mode === 'choose') {
+    modal('How would you like to add inventory?', `<section class="product-entry-choice"><p class="product-wizard-intro">Choose the quickest way to add products to your inventory.</p><div class="product-entry-choice-grid"><button type="button" class="product-entry-choice-card" data-product-onboarding-action="choose-mode" data-mode="single"><span class="product-entry-choice-icon" aria-hidden="true">＋</span><strong>Single Product</strong><span>Best for adding one ingredient or product.</span></button><button type="button" class="product-entry-choice-card" data-product-onboarding-action="choose-mode" data-mode="bulk"><span class="product-entry-choice-icon" aria-hidden="true">▤</span><strong>Multiple Products</strong><span>Best for onboarding many ingredients at once.</span></button></div></section>`, '', 'product-onboarding-modal');
+    document.querySelector('#modalForm').dataset.type = 'product-onboarding';
+    return;
+  }
+
+  const singleLabels = ['Basic information', 'Stock settings', 'Expiration', 'Additional info', 'Review'];
+  const bulkLabels = ['Product names', 'Assign details', 'Review all', 'Create all'];
+  const labels = wizard.mode === 'single' ? singleLabels : bulkLabels;
+  const isSingle = wizard.mode === 'single';
+  const draft = wizard.draft;
+  let content = productWizardProgress(wizard.step, labels);
+  let submitLabel = 'Continue';
+  let formType = 'product-onboarding';
+
+  if (isSingle && wizard.step === 1) {
+    const categories = wizard.catalogs.categories;
+    const units = wizard.catalogs.units.map(unit => ({ value: unit.abbreviation, label: unit.abbreviation }));
+    content += `<section class="product-wizard-panel"><div class="product-wizard-heading"><p class="eyebrow">Step 1 of 5</p><h3>Basic information</h3><p>Start with a name, category, and unit.</p></div><label class="product-wizard-field">Product name<input name="name" value="${esc(draft.name)}" maxlength="200" autocomplete="off" placeholder="e.g. Chicken breast"></label><div class="product-wizard-field"><span class="product-wizard-label">Category</span><div class="product-choice-grid" role="group" aria-label="Category">${productWizardChoices(categories, draft.category, 'select-category', 'single')}</div></div><div class="product-wizard-field"><span class="product-wizard-label">Unit</span><div class="product-choice-grid product-choice-grid--compact" role="group" aria-label="Stocking unit">${productWizardChoices(units, draft.unit, 'select-unit', 'single')}</div></div></section>`;
+  } else if (isSingle && wizard.step === 2) {
+    content += `<section class="product-wizard-panel"><div class="product-wizard-heading"><p class="eyebrow">Step 2 of 5</p><h3>Stock settings</h3><p>Set the low-stock threshold. You can type any quantity or use quick adjustments.</p></div><label class="product-wizard-field">Minimum stock level<div class="product-quantity-control"><div class="product-quantity-shortcuts">${[-10, -5, -1].map(delta => `<button type="button" class="ghost-btn" data-product-onboarding-action="adjust-single-minimum" data-delta="${delta}">${delta}</button>`).join('')}</div><input name="minimum" type="number" min="0" step="0.0001" value="${esc(draft.minimum)}"><div class="product-quantity-shortcuts">${[1, 5, 10, 20].map(delta => `<button type="button" class="ghost-btn" data-product-onboarding-action="adjust-single-minimum" data-delta="${delta}">+${delta}</button>`).join('')}</div></div></label><div class="product-wizard-navigation"><button type="button" class="ghost-btn" data-product-onboarding-action="back">Back</button></div></section>`;
+  } else if (isSingle && wizard.step === 3) {
+    const shelfLifeChoices = [
+      { value: '7', label: '7 days' }, { value: '14', label: '14 days' },
+      { value: '30', label: '30 days' }, { value: '60', label: '60 days' },
+      { value: '90', label: '90 days' }, { value: 'custom', label: 'Custom' },
+      { value: 'manual', label: 'Set date on delivery' }
+    ];
+    const selectedShelfLife = draft.shelfLifeMode === 'custom' ? 'custom'
+      : draft.shelfLifeMode === 'manual' ? 'manual' : String(draft.shelfLifeDays || '');
+    content += `<section class="product-wizard-panel"><div class="product-wizard-heading"><p class="eyebrow">Step 3 of 5</p><h3>Expiration settings</h3><p>Choose whether this product needs expiration tracking.</p></div><div class="product-wizard-field"><span class="product-wizard-label">Track expiration?</span><div class="product-choice-grid product-choice-grid--compact" role="group" aria-label="Track expiration">${productWizardChoices([{ value: 'false', label: 'No' }, { value: 'true', label: 'Yes' }], String(Boolean(draft.trackExpiry)), 'select-expiry', 'single')}</div></div>${draft.trackExpiry ? `<div class="product-wizard-field"><span class="product-wizard-label">Shelf life</span><div class="product-choice-grid product-choice-grid--compact" role="group" aria-label="Shelf life">${productWizardChoices(shelfLifeChoices, selectedShelfLife, 'select-shelf-life', 'single')}</div>${draft.shelfLifeMode === 'custom' ? `<label class="product-wizard-custom-days">Custom shelf life (days)<input name="shelfLifeDays" type="number" min="1" max="3650" step="1" value="${esc(draft.shelfLifeDays || '')}"></label>` : ''}<small class="field-help">Choose a preset, enter a custom duration, or set the expiration date for each delivery.</small></div>` : ''}<div class="product-wizard-navigation"><button type="button" class="ghost-btn" data-product-onboarding-action="back">Back</button></div></section>`;
+  } else if (isSingle && wizard.step === 4) {
+    const suppliers = [...new Set([...(wizard.catalogs.suppliers || []), ...all('ingredients').map(product => product.preferredSupplier).filter(Boolean)])];
+    content += `<section class="product-wizard-panel"><div class="product-wizard-heading"><p class="eyebrow">Step 4 of 5</p><h3>Additional information</h3><p>These details are optional and can be changed later.</p></div><label class="product-wizard-field">Preferred supplier<input name="preferredSupplier" maxlength="200" value="${esc(draft.preferredSupplier)}" list="product-wizard-suppliers" autocomplete="organization"><datalist id="product-wizard-suppliers">${suppliers.map(supplier => `<option value="${esc(supplier)}"></option>`).join('')}</datalist></label><label class="product-wizard-field">Notes<textarea name="notes" rows="3" maxlength="1000" placeholder="Optional notes about this product">${esc(draft.notes)}</textarea></label><div class="product-wizard-navigation"><button type="button" class="ghost-btn" data-product-onboarding-action="back">Back</button></div></section>`;
+    submitLabel = 'Review product';
+  } else if (isSingle) {
+    const hiddenFields = [
+      ['name', draft.name], ['category', draft.category], ['unit', draft.unit],
+      ['minimum', draft.minimum], ['preferredSupplier', draft.preferredSupplier],
+      ['trackExpiry', String(Boolean(draft.trackExpiry))],
+      ['shelfLifeDays', draft.trackExpiry ? draft.shelfLifeDays : ''], ['notes', draft.notes]
+    ].map(([name, value]) => `<input type="hidden" name="${name}" value="${esc(value)}">`).join('');
+    content += `<section class="product-wizard-panel"><div class="product-wizard-heading"><p class="eyebrow">Step 5 of 5</p><h3>Review product</h3><p>Check the details before creating this product.</p></div>${productWizardReviewList(draft)}<div class="product-wizard-review-edit"><button type="button" class="ghost-btn" data-product-onboarding-action="goto" data-step="1">Edit basic information</button><button type="button" class="ghost-btn" data-product-onboarding-action="goto" data-step="2">Edit stock settings</button><button type="button" class="ghost-btn" data-product-onboarding-action="goto" data-step="3">Edit expiration</button><button type="button" class="ghost-btn" data-product-onboarding-action="goto" data-step="4">Edit additional information</button></div>${hiddenFields}</section>`;
+    submitLabel = 'Create product';
+    formType = 'ingredient';
+  } else if (wizard.step === 1) {
+    const rows = wizard.products.map((product, index) => `<div class="product-bulk-name-row"><label>Product ${index + 1}<input type="text" maxlength="200" value="${esc(product.name)}" placeholder="e.g. Chicken breast" data-bulk-name-index="${index}"></label><button type="button" class="ghost-btn" data-product-onboarding-action="remove-bulk-name" data-index="${index}" ${wizard.products.length === 1 ? 'disabled' : ''}>Remove</button></div>`).join('');
+    content += `<section class="product-wizard-panel"><div class="product-wizard-heading"><p class="eyebrow">Step 1 of 4</p><h3>Add product names</h3><p>Add as many products as you need. Details can be assigned together in the next step.</p></div><div class="product-bulk-name-list">${rows}</div><div class="product-wizard-navigation"><button type="button" class="ghost-btn" data-product-onboarding-action="add-bulk-name">Add another product</button></div></section>`;
+  } else if (wizard.step === 2) {
+    const defaultProduct = wizard.defaults;
+    const productRows = wizard.products.map((product, index) => {
+      const summary = `${product.category || 'Choose category'} · ${product.unit || 'Choose unit'} · min ${product.minimum || 0} · ${product.trackExpiry ? `expiration tracked${product.shelfLifeDays ? `, ${product.shelfLifeDays} days` : ''}` : 'no expiration tracking'}`;
+      return `<article class="product-bulk-detail-card"><div class="product-bulk-detail-summary"><div><strong>${esc(product.name)}</strong><small>${esc(summary)}</small></div><button type="button" class="ghost-btn" data-product-onboarding-action="toggle-customize" data-index="${index}">${product.customizing ? 'Done' : 'Customize'}</button></div>${product.customizing ? productWizardDetailsMarkup(product, 'product', index, wizard.catalogs) : ''}</article>`;
+    }).join('');
+    content += `<section class="product-wizard-panel"><div class="product-wizard-heading"><p class="eyebrow">Step 2 of 4</p><h3>Assign details</h3><p>Set shared defaults once, then customize only the products that differ.</p></div><section class="product-bulk-defaults"><div class="product-bulk-defaults-heading"><h4>Defaults for all products</h4><button type="button" class="primary-btn" data-product-onboarding-action="apply-defaults">Apply to all</button></div>${productWizardDetailsMarkup(defaultProduct, 'defaults', undefined, wizard.catalogs)}</section><div class="product-bulk-detail-list">${productRows}</div><div class="product-wizard-navigation"><button type="button" class="ghost-btn" data-product-onboarding-action="back">Back</button></div></section>`;
+    submitLabel = 'Review all';
+  } else {
+    const conflicts = productWizardDuplicateConflicts(wizard.products);
+    const conflictMarkup = wizard.saveOutcomeUnknown
+      ? '<div class="product-wizard-conflict" role="alert"><strong>Save status could not be confirmed.</strong><p>Reload inventory before trying again to avoid creating duplicates.</p></div>'
+      : conflicts.length
+        ? `<div class="product-wizard-conflict" role="alert"><strong>Some products already exist in these categories.</strong><p>${conflicts.map(conflict => esc(`${conflict.name} · ${conflict.category}`)).join('<br>')}</p><button type="button" class="ghost-btn" data-product-onboarding-action="goto" data-step="1">Edit product names</button><button type="button" class="ghost-btn" data-product-onboarding-action="goto" data-step="2">Edit assignments</button></div>`
+        : '';
+    const reviewRows = wizard.products.map(product => `<div><dt>${esc(product.name)}</dt><dd>${esc(`${product.category} · ${product.minimum || 0} ${product.unit} minimum · ${product.trackExpiry ? `expiration tracked${product.shelfLifeDays ? ` (${product.shelfLifeDays} days)` : ''}` : 'no expiration tracking'}`)}</dd></div>`).join('');
+    content += `<section class="product-wizard-panel"><div class="product-wizard-heading"><p class="eyebrow">Step 3 of 4</p><h3>${wizard.products.length} product${wizard.products.length === 1 ? '' : 's'} ready</h3><p>Review the products before creating them.</p></div>${conflictMarkup}<dl class="product-wizard-review-list product-bulk-review-list">${reviewRows}</dl><div class="product-wizard-navigation"><button type="button" class="ghost-btn" data-product-onboarding-action="back">Back</button><span>Step 4: Create all products</span></div></section>`;
+    submitLabel = 'Create all products';
+    formType = 'ingredient-bulk';
+    wizard.hasConflicts = conflicts.length > 0;
+  }
+
+  const modalClass = isSingle
+    ? 'product-onboarding-modal product-onboarding-modal--single'
+    : 'product-onboarding-modal product-onboarding-modal--bulk';
+  modal(isSingle ? 'New product' : 'Add multiple products', content, submitLabel, modalClass);
+  const form = document.querySelector('#modalForm');
+  form.dataset.type = formType;
+  form.dataset.productWizardMode = wizard.mode;
+  form.dataset.productWizardStep = String(wizard.step);
+  const submit = form.querySelector('button[type="submit"]');
+  if (submit && wizard.mode === 'bulk' && (wizard.hasConflicts || wizard.saveOutcomeUnknown)) submit.disabled = true;
+}
+
+function productWizardDuplicateConflicts(products) {
+  const keyFor = (name, category) => `${String(category || '').trim().toLowerCase()}\u0000${String(name || '').trim().toLowerCase()}`;
+  const existing = new Set(all('ingredients').map(product => keyFor(product.name, product.category)));
+  const seen = new Set();
+  const conflicts = [];
+  products.forEach(product => {
+    const key = keyFor(product.name, product.category);
+    if (existing.has(key) || seen.has(key)) conflicts.push({ name: product.name, category: product.category });
+    seen.add(key);
+  });
+  return conflicts;
+}
+
+function captureProductWizardFields(form) {
+  const wizard = state.productOnboarding;
+  if (!wizard || !form) return;
+  if (wizard.mode === 'single') {
+    const draft = wizard.draft;
+    ['name', 'minimum', 'preferredSupplier', 'notes'].forEach(name => {
+      if (form.elements[name]) draft[name] = form.elements[name].value;
+    });
+    if (form.elements.shelfLifeDays) draft.shelfLifeDays = form.elements.shelfLifeDays.value;
+    return;
+  }
+  form.querySelectorAll('[data-bulk-name-index]').forEach(input => {
+    const product = wizard.products[Number(input.dataset.bulkNameIndex)];
+    if (product) product.name = input.value;
+  });
+  form.querySelectorAll('[data-product-onboarding-field]').forEach(input => {
+    const target = input.dataset.scope === 'defaults'
+      ? wizard.defaults
+      : wizard.products[Number(input.dataset.index)];
+    if (!target) return;
+    if (input.dataset.productOnboardingField === 'minimum') target.minimum = input.value;
+    if (input.dataset.productOnboardingField === 'shelf-life') target.shelfLifeDays = input.value;
+  });
+}
+
+function newBulkProductDraft(name = '') {
+  return {
+    id: id('ING'),
+    name,
+    category: '',
+    unit: '',
+    minimum: '0',
+    trackExpiry: false,
+    shelfLifeDays: '',
+    shelfLifeMode: 'manual',
+    customizing: false
+  };
+}
+
+function adjustProductMinimum(target, delta) {
+  const current = Number(target.minimum || 0);
+  const next = Math.max(0, current + Number(delta));
+  target.minimum = String(Number(next.toFixed(4)));
+}
+
+function handleProductWizardNext(form) {
+  const wizard = state.productOnboarding;
+  if (!wizard) return;
+  captureProductWizardFields(form);
+  if (wizard.mode === 'single') {
+    if (wizard.step === 1) {
+      if (!wizard.draft.name.trim()) return toast('Enter a product name.', 'error');
+      if (!wizard.draft.category) return toast('Choose a product category.', 'error');
+      if (!wizard.draft.unit) return toast('Choose a stocking unit.', 'error');
+    } else if (wizard.step === 2) {
+      const minimum = Number(wizard.draft.minimum);
+      if (!String(wizard.draft.minimum).trim() || !Number.isFinite(minimum) || minimum < 0) return toast('Minimum stock must be zero or more.', 'error');
+    } else if (wizard.step === 3 && wizard.draft.trackExpiry && wizard.draft.shelfLifeMode === 'custom') {
+      const days = Number(wizard.draft.shelfLifeDays);
+      if (!Number.isInteger(days) || days < 1 || days > 3650) return toast('Enter a whole number from 1 to 3,650 days.', 'error');
+    }
+    if (wizard.step < 5) wizard.step += 1;
+    state.modalDirty = true;
+    renderProductOnboarding();
+    return;
+  }
+
+  if (wizard.step === 1) {
+    const products = wizard.products.filter(product => product.name.trim());
+    if (!products.length) return toast('Enter at least one product name.', 'error');
+    wizard.products = products.map(product => ({ ...product, name: product.name.trim() }));
+  } else if (wizard.step === 2) {
+    const invalid = wizard.products.find(product => {
+      const minimum = Number(product.minimum);
+      const shelfLife = Number(product.shelfLifeDays);
+      return !product.category || !product.unit || !String(product.minimum).trim() || !Number.isFinite(minimum) || minimum < 0
+        || (product.trackExpiry && product.shelfLifeMode === 'custom'
+          && (!Number.isInteger(shelfLife) || shelfLife < 1 || shelfLife > 3650));
+    });
+    if (invalid) {
+      return toast(`Complete valid category, unit, stock, and expiration details for ${invalid.name}.`, 'error');
+    }
+  }
+  if (wizard.step < 3) wizard.step += 1;
+  state.modalDirty = true;
+  renderProductOnboarding();
+}
+
+document.addEventListener('click', event => {
+  const action = event.target.closest('[data-product-onboarding-action]');
+  if (!action) return;
+  event.preventDefault();
+  const wizard = state.productOnboarding;
+  const form = document.querySelector('#modalForm');
+  if (!wizard || !form) return;
+  const name = action.dataset.productOnboardingAction;
+
+  if (name === 'choose-mode') {
+    if (action.dataset.mode === 'single') {
+      Object.assign(wizard, { mode: 'single', step: 1, draft: newProductWizardDraft() });
+    } else {
+      Object.assign(wizard, {
+        mode: 'bulk',
+        step: 1,
+        products: [newBulkProductDraft()],
+        defaults: { category: '', unit: '', minimum: '0', trackExpiry: false, shelfLifeDays: '', shelfLifeMode: 'manual' },
+        savedCount: 0
+      });
+    }
+    renderProductOnboarding();
+    return;
+  }
+
+  captureProductWizardFields(form);
+  if (name === 'next') return handleProductWizardNext(form);
+  if (name === 'back') {
+    if (wizard.step > 1) wizard.step -= 1;
+    renderProductOnboarding();
+    return;
+  }
+  if (name === 'goto') {
+    const step = Number(action.dataset.step);
+    if (Number.isInteger(step) && step >= 1 && step <= (wizard.mode === 'single' ? 5 : 3)) {
+      wizard.step = step;
+      renderProductOnboarding();
+    }
+    return;
+  }
+  if (name === 'add-bulk-name') {
+    wizard.products.push(newBulkProductDraft());
+    state.modalDirty = true;
+    renderProductOnboarding();
+    return;
+  }
+  if (name === 'remove-bulk-name') {
+    if (wizard.products.length > 1) wizard.products.splice(Number(action.dataset.index), 1);
+    state.modalDirty = true;
+    renderProductOnboarding();
+    return;
+  }
+  if (name === 'apply-defaults') {
+    if (!wizard.defaults.category || !wizard.defaults.unit) return toast('Choose a default category and unit before applying them.', 'error');
+    wizard.products.forEach(product => Object.assign(product, {
+      category: wizard.defaults.category,
+      unit: wizard.defaults.unit,
+      minimum: wizard.defaults.minimum,
+      trackExpiry: wizard.defaults.trackExpiry,
+      shelfLifeDays: wizard.defaults.shelfLifeDays,
+      shelfLifeMode: wizard.defaults.shelfLifeMode
+    }));
+    state.modalDirty = true;
+    renderProductOnboarding();
+    return;
+  }
+  if (name === 'toggle-customize') {
+    const product = wizard.products[Number(action.dataset.index)];
+    if (product) product.customizing = !product.customizing;
+    renderProductOnboarding();
+    return;
+  }
+  if (name === 'adjust-single-minimum') {
+    const input = form.elements.minimum;
+    wizard.draft.minimum = input.value;
+    adjustProductMinimum(wizard.draft, action.dataset.delta);
+    input.value = wizard.draft.minimum;
+    state.modalDirty = true;
+    return;
+  }
+  if (name === 'adjust-minimum') {
+    const target = action.dataset.scope === 'defaults'
+      ? wizard.defaults
+      : wizard.products[Number(action.dataset.index)];
+    if (!target) return;
+    adjustProductMinimum(target, action.dataset.delta);
+    const input = [...form.querySelectorAll('[data-product-onboarding-field="minimum"]')].find(field =>
+      field.dataset.scope === action.dataset.scope && field.dataset.index === action.dataset.index
+    );
+    if (input) input.value = target.minimum;
+    state.modalDirty = true;
+    return;
+  }
+  if (name === 'select-category' || name === 'select-unit') {
+    const target = action.dataset.scope === 'single'
+      ? wizard.draft
+      : action.dataset.scope === 'defaults'
+        ? wizard.defaults
+        : wizard.products[Number(action.dataset.index)];
+    if (!target) return;
+    const field = name === 'select-category' ? 'category' : 'unit';
+    target[field] = action.dataset.value;
+    const selector = `[data-product-onboarding-action="${name}"]`;
+    form.querySelectorAll(selector).forEach(button => {
+      if (button.dataset.scope !== action.dataset.scope || button.dataset.index !== action.dataset.index) return;
+      const selected = button.dataset.value === action.dataset.value;
+      button.classList.toggle('is-selected', selected);
+      button.setAttribute('aria-pressed', String(selected));
+    });
+    state.modalDirty = true;
+    return;
+  }
+  if (name === 'select-expiry') {
+    const target = action.dataset.scope === 'single'
+      ? wizard.draft
+      : action.dataset.scope === 'defaults'
+        ? wizard.defaults
+        : wizard.products[Number(action.dataset.index)];
+    if (!target) return;
+    target.trackExpiry = action.dataset.value === 'true';
+    if (!target.trackExpiry) {
+      target.shelfLifeDays = '';
+      target.shelfLifeMode = 'manual';
+    }
+    state.modalDirty = true;
+    renderProductOnboarding();
+    return;
+  }
+  if (name === 'select-shelf-life') {
+    const target = action.dataset.scope === 'single'
+      ? wizard.draft
+      : action.dataset.scope === 'defaults'
+        ? wizard.defaults
+        : wizard.products[Number(action.dataset.index)];
+    if (!target) return;
+    const value = action.dataset.value;
+    target.shelfLifeMode = value === 'custom' || value === 'manual' ? value : 'preset';
+    target.shelfLifeDays = value === 'custom' || value === 'manual' ? '' : value;
+    state.modalDirty = true;
+    renderProductOnboarding();
+  }
+});
+
 }
 async function openForm(type, item) {
   const requiredAction = {
@@ -5949,6 +6628,18 @@ async function openForm(type, item) {
     }
     const categories = catalogs.categories.map(category => `<option value="${esc(category)}" ${value('category') === category ? 'selected' : ''}>${esc(category)}</option>`).join('');
     const units = catalogs.units.map(unit => `<option value="${esc(unit.abbreviation)}" ${value('unit') === unit.abbreviation ? 'selected' : ''}>${esc(unit.name)} (${esc(unit.abbreviation)})</option>`).join('');
+    if (!edit) {
+      state.productOnboarding = {
+        mode: 'choose',
+        catalogs,
+        step: 1,
+        products: [],
+        defaults: { category: '', unit: '', minimum: '0', trackExpiry: false, shelfLifeDays: '', shelfLifeMode: 'manual' },
+        savedCount: 0
+      };
+      renderProductOnboarding();
+      return;
+    }
     state.supplierOptions = catalogs.suppliers;
     const suppliers = [...new Set([
       ...catalogs.suppliers,
@@ -6640,7 +7331,7 @@ function reservationCard(item, showRevenue = false) {
 }
 function unresolvedBookingCard(row) {
   const reservationId = row.reservation_id;
-  const reservation = all('reservations').find(item => item.id === reservationId);
+  const reservation = all('reservations').find(item => item.id === selectedReservationId);
   const openBill = all('posBills').find(bill =>
     bill.reservationId === reservationId && bill.status === 'Open'
   );
@@ -7382,7 +8073,7 @@ function reservationsPage() {
   const unresolvedList = state.unresolvedBookings.loading
     ? '<div class="empty-table" role="status" aria-live="polite">Loading unresolved bookings…</div>'
     : state.unresolvedBookings.error
-      ? `<div class="panel error-state" role="alert">Unresolved bookings could not be loaded: ${esc(state.unresolvedBookings.error)} <button type="button" class="ghost-btn compact-btn" data-action="retry-unresolved-bookings">Retry</button></div>`
+      ? ''
       : filteredUnresolvedRows.map(unresolvedBookingCard).join('')
         || '<div class="empty-table"><strong>No unresolved bookings</strong><small>Past bookings needing attention will appear here.</small></div>';
   const timeline = unresolvedMode ? unresolvedList : items.map(item => reservationCard(item, true)).join();
@@ -7552,7 +8243,6 @@ async function markTableAvailable(table, button) {
         const updated = { ...table, status: 'Available' };
         upsertLocalRecord('restaurantTables', updated);
         invalidateUnresolvedBookings();
-        invalidateReportData();
         setPostSaveSyncState();
         render();
         return updated;
@@ -7902,6 +8592,10 @@ async function handleSubmit(form, submitter = null) {
   if (form.dataset.type === 'walk-in') refreshWalkInTimestamp(form);
   const data = Object.fromEntries(new FormData(form));
   const type = form.dataset.type;
+  if (type === 'product-onboarding') {
+    handleProductWizardNext(form);
+    return;
+  }
   const editId = form.dataset.id;
   if (type === 'product-lifecycle') {
     await submitProductLifecycle(form, data);
@@ -8843,7 +9537,6 @@ async function handleSubmit(form, submitter = null) {
         id: form.dataset.requestId,
         portions
       }]);
-      invalidateReportData();
       delete form.dataset.requestId;
       await loadProductionBoard(true);
       successMessage = `Batch started: ${portions} portions of ${selectedRecipe.name}.`;
@@ -8864,6 +9557,52 @@ async function handleSubmit(form, submitter = null) {
     };
     await save('recipes', editId ? all('recipes').map(item => item.id === editId ? record : item) : [...all('recipes'), record]);
     state.recipeDraft = [];
+  } else if (type === 'ingredient-bulk') {
+    const wizard = state.productOnboarding;
+    if (!wizard || wizard.mode !== 'bulk' || wizard.step !== 3 || !wizard.products.length) {
+      return toast('The bulk product form changed. Review the products and try again.', 'error');
+    }
+    const conflicts = productWizardDuplicateConflicts(wizard.products);
+    if (conflicts.length) {
+      wizard.hasConflicts = true;
+      renderProductOnboarding();
+      return toast('Some products already exist in the selected categories. Review the highlighted names before saving.', 'error');
+    }
+    const records = wizard.products.map(product => ({
+      id: product.id,
+      name: product.name.trim(),
+      category: product.category,
+      unit: product.unit,
+      minimum: Number(product.minimum),
+      preferredSupplier: '',
+      trackExpiry: Boolean(product.trackExpiry),
+      shelfLifeDays: product.trackExpiry && product.shelfLifeDays ? Number(product.shelfLifeDays) : null,
+      notes: ''
+    }));
+    try {
+      await save('ingredients', [...all('ingredients'), ...records]);
+    } catch (error) {
+      try {
+        await refetchCollection('ingredients');
+      } catch (refreshError) {
+        console.error('Bulk product save result could not be refreshed.', refreshError);
+        wizard.saveOutcomeUnknown = true;
+        renderProductOnboarding();
+        throw new Error(`The bulk save may have partially completed, but its result could not be confirmed. Reload inventory before retrying. ${friendlyRpcError(error)}`);
+      }
+      const savedIds = new Set(all('ingredients').map(product => String(product.id)));
+      const savedRecords = records.filter(product => savedIds.has(String(product.id)));
+      wizard.savedCount += savedRecords.length;
+      wizard.products = wizard.products.filter(product => !savedIds.has(String(product.id)));
+      wizard.step = 3;
+      if (wizard.products.length) {
+        renderProductOnboarding();
+        throw new Error(`Created ${savedRecords.length} of ${records.length} products before the save stopped. Remaining products are still in the wizard. ${friendlyRpcError(error)}`);
+      }
+    }
+    wizard.savedCount += records.length;
+    successMessage = `Created ${records.length} products.`;
+    state.productOnboarding = null;
     state.recipeForm = {};
   } else if (type === 'ingredient') {
     const record = {
@@ -8873,7 +9612,9 @@ async function handleSubmit(form, submitter = null) {
       unit: data.unit,
       minimum: Number(data.minimum),
       preferredSupplier: data.preferredSupplier.trim(),
-      trackExpiry: form.elements.trackExpiry.checked,
+      trackExpiry: form.dataset.productWizardMode === 'single'
+        ? data.trackExpiry === 'true'
+        : form.elements.trackExpiry.checked,
       shelfLifeDays: data.shelfLifeDays ? Number(data.shelfLifeDays) : null,
       notes: data.notes.trim()
     };
@@ -9026,10 +9767,14 @@ async function saveReservationConfirmation(form, data) {
   render();
 }
 function staleBookingResolutionForm(reservationId) {
+  const selectedReservationId = String(reservationId || '').trim();
+  if (!selectedReservationId) {
+    return toast('This booking is missing its reservation ID. Refresh the Unresolved list and try again.', 'error');
+  }
   if (!['Administrator', 'Manager'].includes(state.role)) {
     return toast('Only Managers and Administrators can resolve stale bookings.', 'error');
   }
-  const unresolved = state.unresolvedBookings.rows.find(row => row.reservation_id === reservationId);
+  const unresolved = state.unresolvedBookings.rows.find(row => row.reservation_id === selectedReservationId);
   if (!unresolved || unresolved.resolution_label === 'Payable') {
     return toast('This booking is payable or no longer eligible for resolution. Refresh the Unresolved list.', 'error');
   }
@@ -9051,8 +9796,9 @@ function staleBookingResolutionForm(reservationId) {
   const reservation = all('reservations').find(item => item.id === reservationId);
   modal(
     'Resolve past booking',
-    `<p class="panel-subtitle">${esc(reservation?.name || unresolved.name || 'Guest')} · ${esc(unresolved.type)} · ${esc(reservationDateLabel(unresolved.reservation_date))} · ${esc(unresolved.table_id || 'Unassigned')}</p>
-      <div class="stale-resolution-warning"><strong>${closeWithoutCharge ? 'No bill, payment, or revenue will be created.' : 'This records the booking as a confirmed No-show or cancellation.'}</strong><span>${closeWithoutCharge ? 'Use Close without charge only when no meal was served or the booking is a test/error record. If a bill exists, continue through the cashier flow instead.' : 'The table is freed only after this explicit resolution; a timer never frees it.'}</span></div>
+    `<input type="hidden" name="reservationId" value="${esc(selectedReservationId)}">
+      <p class="panel-subtitle">${esc(reservation?.name || unresolved.name || 'Guest')} · ${esc(unresolved.type)} · ${esc(reservationDateLabel(unresolved.reservation_date))} · ${esc(unresolved.table_id || 'Unassigned')}</p>
+      <div class="stale-resolution-warning"><strong>${closeWithoutCharge ? 'No bill, payment, or revenue will be created.' : 'This records the booking as a confirmed No-show or cancellation.'}</strong><span>${closeWithoutCharge ? 'Use Close without charge only when no meal was served or the booking is a test/error record. If a bill exists, continue through the cashier flow instead.' : 'This explicit resolution frees the table unless it already needs cleaning; a timer never frees a table.'}</span></div>
       <label>Outcome<select name="outcome" required>${outcomes}</select></label>
       ${noMealConfirmation}
       <label>Resolution reason<textarea name="reason" minlength="10" maxlength="500" rows="3" required placeholder="Record what was checked and why this booking is being resolved."></textarea><small class="field-help">Required; 10–500 characters. Saved with your identity and timestamp.</small></label>
@@ -9062,13 +9808,17 @@ function staleBookingResolutionForm(reservationId) {
   );
   const form = document.querySelector('#modalForm');
   form.dataset.type = 'stale-booking-resolution';
-  form.dataset.reservationId = reservationId;
+  form.dataset.reservationId = selectedReservationId;
   form.dataset.idempotencyKey = id('STALE');
   form.dataset.heldDepositTotal = String(heldDepositTotal);
 }
 async function submitStaleBookingResolution(form, data) {
   const restoreSubmit = () => restoreModalSubmit(form, 'Resolve booking');
-  const reservationId = form.dataset.reservationId;
+  const reservationId = String(data.reservationId || form.dataset.reservationId || '').trim();
+  if (!reservationId) {
+    restoreSubmit();
+    return toast('This dialog is missing its reservation ID. Close it, refresh the Unresolved list, and reopen the booking.', 'error');
+  }
   const unresolved = state.unresolvedBookings.rows.find(row => row.reservation_id === reservationId);
   if (!['Administrator', 'Manager'].includes(state.role)) {
     restoreSubmit();
@@ -9913,13 +10663,20 @@ async function shiftSummaryForm(shiftId) {
 }
 async function shiftCloseForm(shift) {
   try {
-    if (!shiftOpenedOnDate(shift, manilaBusinessToday())) {
-      return toast('A cashier shift can only be closed on the same Manila business day it was opened.', 'error');
+    if (!window.CostTrackLogic.canCloseShift(shift, state.role, state.user?.id)) {
+      return toast('Only the shift opener or a Manager/Admin can close this shift.', 'error');
     }
     const summary = await window.supabaseRecord.posShiftSummary(shift.id);
     const expected = Number(summary.expected_cash || 0);
+    const overdueNotice = shiftOpenedOnDate(shift, manilaBusinessToday())
+      ? ''
+      : '<p class="field-help">This shift remained open overnight. Reconcile it before opening another shift.</p>';
+    const delegatedClose = shift.openedBy !== state.user?.id;
+    const closingNotesLabel = delegatedClose
+      ? '<label>Reason for closing on another cashier\'s behalf (required)<textarea name="notes" rows="2" maxlength="500" required></textarea></label>'
+      : '<label>Closing notes<textarea name="notes" rows="2" maxlength="500"></textarea></label>';
     modal(`Close shift · ${esc(shift.code)}`,
-      `<div class="pos-payment-summary"><div>Expected cash <strong>${money(expected)}</strong></div><div>Open bills <strong>${Number(summary.open_bill_count || 0)}</strong></div><div>Pending approvals <strong>${Number(summary.pending_approval_count || 0)}</strong></div><p class="field-help">Variance = counted cash − expected cash. Open bills block shift close.</p></div><label>Counted cash<input name="countedCash" type="number" min="0" step="0.01" value="${expected.toFixed(2)}" required></label><div class="pos-variance-preview">Variance <strong data-shift-variance>${money(0)}</strong></div><label>Closing notes<textarea name="notes" rows="2" maxlength="500"></textarea></label>`,
+      `${overdueNotice}<div class="pos-payment-summary"><div>Expected cash <strong>${money(expected)}</strong></div><div>Open bills <strong>${Number(summary.open_bill_count || 0)}</strong></div><div>Pending approvals <strong>${Number(summary.pending_approval_count || 0)}</strong></div><p class="field-help">Variance = counted cash − expected cash. Open bills block shift close.</p></div><label>Counted cash<input name="countedCash" type="number" min="0" step="0.01" value="${expected.toFixed(2)}" required></label><div class="pos-variance-preview">Variance <strong data-shift-variance>${money(0)}</strong></div>${closingNotesLabel}`,
       'Reconcile and close', 'pos-payment-modal', 'money');
     const form = document.querySelector('#modalForm');
     form.dataset.type = 'shift-close';
@@ -10279,7 +11036,6 @@ document.addEventListener('click', async event => {
     return toast('Only Held deposits can be refunded or forfeited.', 'error');
   }
   if (action === 'deposit-history') return showReservationDepositHistory(actionElement.dataset.id);
-  if (action === 'resolve-stale-booking') return staleBookingResolutionForm(actionElement.dataset.id);
   if (action === 'refresh-unresolved-bookings' || action === 'retry-unresolved-bookings') {
     if (action === 'refresh-unresolved-bookings') invalidateUnresolvedBookings();
     const restoreButton = setButtonBusy(actionElement, action === 'retry-unresolved-bookings' ? 'Retrying…' : 'Refreshing…');
@@ -10502,9 +11258,24 @@ document.addEventListener('click', event => {
     render();
     return;
   }
+  const ingredientStatusFilter = event.target.closest('[data-ingredient-status-filter]')?.dataset.ingredientStatusFilter;
+  if (ingredientStatusFilter) {
+    state.ingredientExpiryFilter = ingredientStatusFilter === 'Expiring Soon';
+    state.ingredientStatus = state.ingredientExpiryFilter ? 'All' : ingredientStatusFilter;
+    render();
+    return;
+  }
+  const inventoryHealthFilter = event.target.closest('[data-inventory-health-filter]')?.dataset.inventoryHealthFilter;
+  if (inventoryHealthFilter) {
+    state.ingredientStatus = inventoryHealthFilter;
+    state.ingredientExpiryFilter = false;
+    render();
+    return;
+  }
   const dashboardStatus = event.target.closest('[data-dashboard-status]')?.dataset.dashboardStatus;
   if (dashboardStatus) {
     state.ingredientStatus = dashboardStatus;
+    state.ingredientExpiryFilter = false;
     setView('ingredients');
     return;
   }
@@ -10880,11 +11651,10 @@ document.addEventListener('change', event => {
   }
   const filter = event.target.dataset.filter;
   if (filter) { state[filter] = event.target.value.startsWith('All ') ? 'All' : event.target.value; render(); return; }
-  if (event.target.matches('[data-low-stock-filter]')) { state.ingredientStatus = event.target.checked ? 'Low Stock' : 'All'; render(); }
+  if (event.target.matches('[data-low-stock-filter]')) { state.ingredientStatus = event.target.checked ? 'Low Stock' : 'All'; state.ingredientExpiryFilter = false; render(); }
   if (event.target.matches('[data-date-range]')) {
     state.dateRange = event.target.value;
     state.reportPage = 1;
-    reportRequestKey = '';
     if (state.dateRange === 'custom') {
       state.customDateTo ||= manilaBusinessToday();
       if (!state.customDateFrom) {
@@ -10895,9 +11665,9 @@ document.addEventListener('change', event => {
     }
     render();
   }
-  if (event.target.matches('[data-report-group]')) { state.reportGrouping = event.target.value; state.reportPage = 1; reportRequestKey = ''; render(); }
-  if (event.target.matches('[data-report-waste]')) { state.reportIncludeWaste = event.target.checked; state.reportPage = 1; reportRequestKey = ''; render(); }
-  if (event.target.matches('[data-custom-date]')) { state[`customDate${event.target.dataset.customDate === 'from' ? 'From' : 'To'}`] = event.target.value; state.reportPage = 1; reportRequestKey = ''; render(); }
+  if (event.target.matches('[data-report-group]')) { state.reportGrouping = event.target.value; state.reportPage = 1; render(); }
+  if (event.target.matches('[data-report-waste]')) { state.reportIncludeWaste = event.target.checked; state.reportPage = 1; render(); }
+  if (event.target.matches('[data-custom-date]')) { state[`customDate${event.target.dataset.customDate === 'from' ? 'From' : 'To'}`] = event.target.value; state.reportPage = 1; render(); }
   if (event.target.matches('[data-reservation-meal]')) { state.reservationMealPeriodFilter = event.target.value === 'All' ? 'All' : event.target.value; state.reservationFilterHighlightGroup = 'meal'; persistReservationFilters(); render(); }
   if (event.target.matches('[data-reservation-source-filter]')) {
     state.reservationSourceFilter = event.target.value;
@@ -11016,9 +11786,19 @@ async function syncWithSupabase() {
     state.notificationReadKeys = await window.supabaseRecord.notificationReadKeys();
   } catch (error) {
     throw new Error(`Notification state could not be loaded: ${error.message}`);
+  let productCategoryOptions = [];
+  if (collections.includes('ingredients')) {
+    try {
+      productCategoryOptions = await window.supabaseRecord.loadProductCategories();
+    } catch (error) {
+      throw new Error(`Could not load active product categories: ${error.message}`);
+    }
   }
+  }
+  state.productCategoryOptions = productCategoryOptions;
   KEYS.forEach(key => { collectionState[key] = pendingCollections[key]; });
   supabaseSyncEnabled = true;
+  realtimeNeedsResync = false;
   invalidateReportData();
   revenueDashboardData = null;
   revenueDashboardError = '';
@@ -11082,7 +11862,9 @@ async function signOutCurrentUser({ force = false } = {}) {
   closeMobileDrawer(false);
   closeShellPopovers(false);
   state.user = null;
+  state.productCategoryOptions = [];
   state.role = null;
+  realtimeNeedsResync = false;
   resetUserInviteHistory();
   state.unresolvedBookings = { rows: [], loading: false, loaded: false, error: '' };
   state.notificationReadKeys = [];
@@ -11439,6 +12221,7 @@ window.supabaseClient.auth.onAuthStateChange((event, session) => {
   if (event === 'SIGNED_OUT' && state.user) {
     stopRealtimeSubscriptions();
     state.user = null;
+    state.productCategoryOptions = [];
     state.role = null;
     resetUserInviteHistory();
     supabaseSyncEnabled = false;
@@ -11648,10 +12431,16 @@ function normaliseRenderedStatuses() {
   });
 }
 
-function render() {
+function render({ preserveReportCharts = false } = {}) {
   destroyReservationCalendar();
-  reportCharts.forEach(chart => chart.destroy());
-  reportCharts = [];
+  let reportChartsReused = false;
+  const previousReportChartGrid = preserveReportCharts && state.view === 'reports'
+    ? app.querySelector('.report-chart-grid')
+    : null;
+  if (!previousReportChartGrid) {
+    reportCharts.forEach(chart => chart.destroy());
+    reportCharts = [];
+  }
   reportChartSpecs = [];
   if (!state.user || !state.role) return;
   if (state.view === 'notifications' && !['Administrator', 'Manager'].includes(state.role)) {
@@ -11703,12 +12492,44 @@ function render() {
     ? document.querySelector('.table-panel .table-scroll')?.scrollLeft || 0
     : null;
   try {
-    app.innerHTML = renderPage();
+    const pageMarkup = renderPage();
+    if (previousReportChartGrid) {
+      const stagedPage = document.createElement('div');
+      stagedPage.innerHTML = pageMarkup;
+      const nextChartGrid = stagedPage.querySelector('.report-chart-grid');
+      const canReuseCharts = nextChartGrid
+        && reportCharts.length === reportChartSpecs.length
+        && reportChartSpecs.every((spec, index) => (
+          reportCharts[index].canvas?.id === spec.id
+          && reportCharts[index].config.type === spec.type
+        ));
+      if (canReuseCharts) {
+        nextChartGrid.replaceWith(previousReportChartGrid);
+        app.replaceChildren(...stagedPage.childNodes);
+        updateReportChartsFromSpecs();
+        reportChartsReused = true;
+      } else {
+        reportCharts.forEach(chart => chart.destroy());
+        reportCharts = [];
+        app.innerHTML = pageMarkup;
+      }
+    } else {
+      app.innerHTML = pageMarkup;
+    }
+    app.querySelectorAll('[data-action="resolve-stale-booking"]').forEach(button => {
+      button.addEventListener('click', event => {
+        event.preventDefault();
+        event.stopPropagation();
+        staleBookingResolutionForm(button.dataset.id);
+      });
+    });
     if (approvalsScrollLeft !== null) {
       const tableScroll = app.querySelector('.table-panel .table-scroll');
       if (tableScroll) tableScroll.scrollLeft = approvalsScrollLeft;
     }
   } catch (error) {
+    reportCharts.forEach(chart => chart.destroy());
+    reportCharts = [];
     console.error(`Could not render the ${state.view} module.`, error);
     app.innerHTML = `<div class="panel error-state" role="alert">Could not load ${esc(pageNames[state.view] || state.view)}. Please refresh the page. Check the browser console for details.</div>`;
     return;
@@ -11725,7 +12546,7 @@ function render() {
     }
   }
   if (state.view === 'calendar') initializeReservationCalendar();
-  if (state.view === 'reports') initializeReportCharts();
+  if (state.view === 'reports' && !reportChartsReused) initializeReportCharts();
   if (state.view === 'reports') loadReportData();
   configureRealtimeSubscriptions().catch(error => {
     console.error('Realtime subscription setup failed.', error);
@@ -11764,7 +12585,7 @@ window.setInterval(async () => {
   }
 }, 5 * 60 * 1000);
 
-function actions(type, itemId, item = null) {
+function actions(type, itemId, item = null, { includeView = true } = {}) {
   const labels = { view: 'View', edit: 'Edit', delete: 'Delete' };
   const icon = name => name === 'view' ? '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M2.5 12s3.5-6 9.5-6 9.5 6 9.5 6-3.5 6-9.5 6-9.5-6-9.5-6Z"/><circle cx="12" cy="12" r="2.5"/></svg>' : name === 'edit' ? '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m4 16.5-.8 4.3 4.3-.8L19 8.5 15.5 5 4 16.5Z"/><path d="m14 6.5 3.5 3.5"/></svg>' : '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M9 7V4h6v3m-9 0 1 13h10l1-13M10 11v5m4-5v5"/></svg>';
   const viewable = ['ingredient', 'recipe'].includes(type);
@@ -11773,7 +12594,7 @@ function actions(type, itemId, item = null) {
   const lifecycleAction = type === 'ingredient' && state.role === 'Administrator' && item?.isActive === false
     ? `<button type="button" class="product-lifecycle-action" data-action="product-lifecycle-delete-inactive" data-id="${esc(itemId)}" aria-label="Delete inactive ${esc(item?.name || 'product')}"><span class="tooltip">Delete inactive product</span>${icon('delete')}</button>`
     : '';
-  return `<div class="row-actions">${viewable ? `<button type="button" data-action="view-${type}" data-id="${itemId}" aria-label="${labels.view}"><span class="tooltip">${labels.view}</span>${icon('view')}</button>` : ''}${editable ? `<button type="button" data-action="edit-${type}" data-id="${itemId}" aria-label="${labels.edit}"><span class="tooltip">${labels.edit}</span>${icon('edit')}</button>` : ''}${lifecycleAction}</div>`;
+  return `<div class="row-actions">${viewable && includeView ? `<button type="button" data-action="view-${type}" data-id="${itemId}" aria-label="${labels.view}"><span class="tooltip">${labels.view}</span>${icon('view')}</button>` : ''}${editable ? `<button type="button" data-action="edit-${type}" data-id="${itemId}" aria-label="${labels.edit}"><span class="tooltip">${labels.edit}</span>${icon('edit')}</button>` : ''}${lifecycleAction}</div>`;
 }
 
 async function deleteRecord(type, itemId, button = null) {
@@ -11848,13 +12669,48 @@ function reportChartPanel(id, title, description, rows, valueKey, labelKey, type
   if (chartRows.length) reportChartSpecs.push({ id, title, rows: chartRows, valueKey, labelKey, type, unit });
   return `<section class="panel report-chart-panel"><h2 class="panel-title">${esc(title)}</h2><p class="panel-subtitle">${esc(description)}</p>${chartRows.length ? `<div class="report-chart-wrap"><canvas id="${id}" role="img" aria-label="${esc(title)}"></canvas></div>` : `<div class="empty-state" role="status">${esc(emptyMessage)}</div>`}</section>`;
 }
-function invalidateReportData() {
-  reportDataVersion++;
-  Object.keys(reportServerData).forEach(key => delete reportServerData[key]);
-  reportRequestKey = '';
-  revenueDashboardData = null;
-  revenueDashboardError = '';
-  if (revenueDashboardLoading) revenueDashboardRefreshAfterLoad = true;
+function reportTabsForSources(sources = null) {
+  if (sources == null) {
+    return [...new Set(Object.values(reportTabsBySource).flat())];
+  }
+  const affected = new Set();
+  sources.forEach(source => {
+    const normalized = reportSourceAliases[source] || source;
+    (reportTabsBySource[normalized] || []).forEach(tab => affected.add(tab));
+  });
+  return [...affected];
+}
+function invalidateReportData(sources = null) {
+  const affectedTabs = reportTabsForSources(sources);
+  affectedTabs.forEach(tab => {
+    reportDataVersions.set(tab, (reportDataVersions.get(tab) || 0) + 1);
+    Object.keys(reportServerData).forEach(key => {
+      if (key.startsWith(`${tab}|`)) delete reportServerData[key];
+    });
+  });
+  const normalizedSources = sources?.map(source => reportSourceAliases[source] || source);
+  const invalidatesRevenueDashboard = sources == null
+    || normalizedSources.some(source => reportRevenueSources.has(source));
+  if (invalidatesRevenueDashboard) {
+    revenueDashboardData = null;
+    revenueDashboardError = '';
+    if (revenueDashboardLoading) revenueDashboardRefreshAfterLoad = true;
+  }
+  return affectedTabs;
+}
+function updateReportChartsFromSpecs() {
+  reportChartSpecs.forEach((spec, index) => {
+    const chart = reportCharts[index];
+    const dataset = chart.data.datasets[0];
+    chart.data.labels = spec.rows.map(item => String(item[spec.labelKey] ?? ''));
+    dataset.label = spec.title;
+    dataset.data = spec.rows.map(item => Number(item[spec.valueKey]));
+    if (spec.type === 'doughnut') {
+      const palette = Array.isArray(dataset.backgroundColor) ? dataset.backgroundColor : [];
+      dataset.backgroundColor = spec.rows.map((_, colorIndex) => palette[colorIndex % palette.length]);
+    }
+    chart.update('none');
+  });
 }
 async function loadRevenueDashboard(force = false) {
   if (!canAccessRevenue() || !state.user || revenueDashboardLoading) return;
@@ -11990,22 +12846,35 @@ function reportTable(headers, rows, empty = 'No data in this range.', footer = [
   return `<div class="table-scroll report-table-scroll"><table data-table="report"><thead><tr>${headers.map(item => `<th${isNumericHeader(item) ? ' class="numeric"' : ''} data-column="${esc(item)}">${esc(item)}</th>`).join('')}</tr></thead><tbody>${rows.length ? rows.map(alignCells).join('') : `<tr><td colspan="${headers.length}" class="empty-state">${esc(empty)}</td></tr>`}</tbody>${footerHtml}</table></div>`;
 }
 function reportExport(rows, name) { const output = rows.map(row => row.map(value => `"${String(value ?? '').replace(/"/g, '""')}"`).join(',')).join('\r\n'); const blob = new Blob([output], { type: 'text/csv;charset=utf-8' }); const link = document.createElement('a'); link.href = URL.createObjectURL(blob); link.download = `costtrack-${name}.csv`; link.click(); URL.revokeObjectURL(link.href); }
-async function loadReportData() {
-  const [start, end] = dateRangeBounds(); const key = reportDataKey(state.reportTab, start, end);
-  if (!start || !end || reportRequestPending || reportRequestKey === key || reportServerData[key]) return;
-  reportRequestPending = true; reportRequestKey = key;
-  const requestVersion = reportDataVersion;
+async function loadReportData({ preserveCharts = false } = {}) {
+  const reportTab = state.reportTab;
+  const [start, end] = dateRangeBounds(); const key = reportDataKey(reportTab, start, end);
+  if (!start || !end || reportPendingRequests.has(key) || reportServerData[key]) return;
+  reportPendingRequests.add(key);
+  const requestVersion = reportDataVersions.get(reportTab) || 0;
   try {
-    const closedBillReport = ['daily_revenue', 'revenue_trend', 'customer_count', 'shift_revenue', 'closed_bill_summary', 'food_cost'].includes(state.reportTab);
+    const closedBillReport = ['daily_revenue', 'revenue_trend', 'customer_count', 'shift_revenue', 'closed_bill_summary', 'food_cost'].includes(reportTab);
     const data = closedBillReport
-      ? await window.supabaseRecord.posRevenueReport(state.reportTab, start, end, reportGroupingFor(state.reportTab), state.reportIncludeWaste, state.reportPage, 100)
-      : await window.supabaseRecord.reportAnalytics(state.reportTab, start, end, state.reportGrouping, state.reportIncludeWaste);
-    if (requestVersion === reportDataVersion) reportServerData[key] = data;
+      ? await window.supabaseRecord.posRevenueReport(reportTab, start, end, reportGroupingFor(reportTab), state.reportIncludeWaste, state.reportPage, 100)
+      : await window.supabaseRecord.reportAnalytics(reportTab, start, end, state.reportGrouping, state.reportIncludeWaste);
+    if (requestVersion === (reportDataVersions.get(reportTab) || 0)) reportServerData[key] = data;
   }
   catch (error) {
-    if (requestVersion === reportDataVersion) reportServerData[key] = { error: friendlyRpcError(error) };
+    if (requestVersion === (reportDataVersions.get(reportTab) || 0)) reportServerData[key] = { error: friendlyRpcError(error) };
   }
-  finally { reportRequestPending = false; if (state.view === 'reports') render(); }
+  finally {
+    reportPendingRequests.delete(key);
+    if (state.view === 'reports') {
+      const [currentStart, currentEnd] = dateRangeBounds();
+      if (reportDataKey(state.reportTab, currentStart, currentEnd) === key) {
+        if (requestVersion !== (reportDataVersions.get(reportTab) || 0)) {
+          void loadReportData({ preserveCharts });
+          return;
+        }
+        render({ preserveReportCharts: preserveCharts });
+      }
+    }
+  }
 }
 function reportsPage() {
   const [start, end] = dateRangeBounds();
@@ -12023,7 +12892,6 @@ function reportsPage() {
   ];
   if (!tabs.some(([tab]) => tab === state.reportTab)) {
     state.reportTab = tabs[0]?.[0] || 'waste';
-    reportRequestKey = '';
   }
   const key = reportDataKey(state.reportTab, start, end); const server = reportServerData[key]; const data = server && !server.error ? server : {};
   const rows = data.rows || data.by_ingredient || data.valuation_by_category || []; const invalidDateRange = state.dateRange === 'custom' && (!start || !end || start > end); const loading = !server && !invalidDateRange; const error = server?.error; let headers = []; let tableRows = []; let tableFooter = []; let tableEmptyMessage = 'No data in this range.'; let charts = ''; let kpis = ''; let additionalWasteReport = '';
@@ -12057,9 +12925,9 @@ function reportsPage() {
     kpis = `${metric('Bills in range', Number(data.total_rows || 0), '▤', 'purple-icon', 'Closed status only')}${metric('Page revenue', money(rows.reduce((sum, item) => sum + Number(item.net_revenue || 0), 0)), '₱', 'green-icon', `Page ${data.page || state.reportPage}`)}`;
   }
   else if (state.reportTab === 'waste') {
-    headers = ['Ingredient', 'Quantity', 'Waste cost'];
-    tableRows = (data.by_ingredient || []).map(item => `<tr><td>${esc(item.name)}</td><td>${item.quantity}</td><td>${money(item.waste_cost)}</td></tr>`);
     const monetaryChartsAllowed = canAccessRevenue();
+    headers = ['Ingredient', 'Quantity', ...(monetaryChartsAllowed ? ['Waste cost'] : [])];
+    tableRows = (data.by_ingredient || []).map(item => `<tr><td>${esc(item.name)}</td><td>${item.quantity}</td>${monetaryChartsAllowed ? `<td>${money(item.waste_cost)}</td>` : ''}</tr>`);
     const preparedWasteRecords = start && end && start <= end
       ? all('preparedFoodWasteLogs').filter(item => item.date >= start && item.date <= end)
       : [];
@@ -12102,16 +12970,17 @@ function reportsPage() {
       if (quantitySpec) quantitySpec.rows = quantitySpec.rows.map(item => ({ ...item, name: `${item.name} (${item.unit})` }));
     }
     charts += `${reportChartPanel('reportPreparedWasteTrendChart', 'Prepared food portions wasted', 'Daily portions recorded as prepared-food waste. Portion counts are not added to ingredient stock units.', preparedTrendRows, 'portions', 'period', 'line', 'portions', !preparedTrendRows.length, 'No prepared-food waste in this range.')}${reportChartPanel('reportCombinedWasteTrendChart', 'Combined waste entries', 'Daily count of waste incidents across both categories; quantities remain separate by unit.', combinedTrendRows, 'entries', 'period', 'bar', 'entries', !combinedTrendRows.length, 'No waste entries in this range.')}`;
-    kpis = `${metric('Ingredient waste cost', money((data.by_ingredient || []).reduce((sum, item) => sum + Number(item.waste_cost || 0), 0)), '◌', 'red-icon', `${ingredientEntryCount} ingredient entries`)}${metric('Prepared portions', Number(preparedPortionTotal.toFixed(4)), '♨', 'orange-icon', `${preparedWasteRecords.length} prepared-food entries`)}${metric('Combined waste entries', combinedWasteEntries, '▤', 'purple-icon', 'Incident count; quantities stay separate')}${metric('Linked to production', data.linked_count || 0, '♨', 'orange-icon', 'Ingredient waste context')}`;
+    kpis = `${monetaryChartsAllowed ? metric('Ingredient waste cost', money((data.by_ingredient || []).reduce((sum, item) => sum + Number(item.waste_cost || 0), 0)), '◌', 'red-icon', `${ingredientEntryCount} ingredient entries`) : ''}${metric('Prepared portions', Number(preparedPortionTotal.toFixed(4)), '♨', 'orange-icon', `${preparedWasteRecords.length} prepared-food entries`)}${metric('Combined waste entries', combinedWasteEntries, '▤', 'purple-icon', 'Incident count; quantities stay separate')}${metric('Linked to production', data.linked_count || 0, '♨', 'orange-icon', 'Ingredient waste context')}`;
     additionalWasteReport = `<section class="panel report-prepared-waste-panel"><h2>Prepared food / leftovers</h2><p class="panel-subtitle">Dish totals are portions recorded in the selected date range. They are reported separately from ingredient quantities and do not change inventory.</p>${reportTable(['Dish', 'Portions wasted', 'Waste entries'], preparedDishRows, 'No prepared-food waste in this range.')}</section>`;
   }
   else if (state.reportTab === 'inventory') {
-    headers = ['Category', 'Ingredients', 'Valuation'];
-    tableRows = (data.valuation_by_category || []).map(item => `<tr><td>${esc(item.category)}</td><td>${item.ingredients}</td><td>${money(item.valuation)}</td></tr>`);
-    charts = canAccessRevenue()
+    const valuationAllowed = canAccessRevenue();
+    headers = ['Category', 'Ingredients', ...(valuationAllowed ? ['Valuation'] : [])];
+    tableRows = (data.valuation_by_category || []).map(item => `<tr><td>${esc(item.category)}</td><td>${item.ingredients}</td>${valuationAllowed ? `<td>${money(item.valuation)}</td>` : ''}</tr>`);
+    charts = valuationAllowed
       ? reportChartPanel('reportInventoryChart', 'Inventory valuation by category', 'Current stock valuation using latest ingredient costs.', data.valuation_by_category || [], 'valuation', 'category', 'bar', 'currency')
       : reportChartPanel('reportInventoryChart', 'Ingredients by category', 'Ingredient counts by category.', data.valuation_by_category || [], 'ingredients', 'category', 'bar', 'ingredients');
-    kpis = `${metric('Inventory valuation', money((data.valuation_by_category || []).reduce((sum, item) => sum + Number(item.valuation || 0), 0)), '◈', 'green-icon', 'Stock × latest cost')}${metric('Low-stock items', (data.low_stock || []).length, '!', 'red-icon', 'Needs replenishment')}`;
+    kpis = `${valuationAllowed ? metric('Inventory valuation', money((data.valuation_by_category || []).reduce((sum, item) => sum + Number(item.valuation || 0), 0)), '◈', 'green-icon', 'Stock × latest cost') : ''}${metric('Low-stock items', (data.low_stock || []).length, '!', 'red-icon', 'Needs replenishment')}`;
   }
   else {
     headers = ['Recipe', 'Batches', 'Production cost', 'Covers produced'];
@@ -12128,7 +12997,9 @@ function reportsPage() {
     .slice(0, 30)
     .map(item => `<tr class="${item.status === 'Voided' ? 'is-voided' : ''}"><td><strong>${esc(item.business_date)}</strong></td><td>${esc(item.meal_period)}</td><td>${Number(item.adult_customers || 0)}</td><td>${Number(item.child_customers || 0)}</td><td>${Number(item.senior_pwd_customers || 0)}</td><td>${Number(item.total_customers || 0)}</td><td class="numeric">${money(item.total_revenue)}</td><td><span class="status">${esc(item.status || 'Archived')}</span></td></tr>`)
     .join('') || '<tr><td colspan="8" class="empty-table">No archived legacy revenue records in this range.</td></tr>';
-  const legacyArchive = `<details class="panel legacy-revenue-archive"><summary>Legacy revenue archive · excluded from closed-bill totals</summary><p class="panel-subtitle">Historical revenue_records are preserved for reference only. Use this archive only for legacy history; current sales reporting is based on closed POS bills.</p><div class="table-scroll"><table><thead><tr><th>Date</th><th>Meal period</th><th>Adults</th><th>Children</th><th>Senior/PWD</th><th>Customers</th><th>Archived amount</th><th>Legacy status</th></tr></thead><tbody>${legacyRows}</tbody></table></div></details>`;
+  const legacyArchive = canAccessRevenue()
+    ? `<details class="panel legacy-revenue-archive"><summary>Legacy revenue archive · excluded from closed-bill totals</summary><p class="panel-subtitle">Historical revenue_records are preserved for reference only. Use this archive only for legacy history; current sales reporting is based on closed POS bills.</p><div class="table-scroll"><table><thead><tr><th>Date</th><th>Meal period</th><th>Adults</th><th>Children</th><th>Senior/PWD</th><th>Customers</th><th>Archived amount</th><th>Legacy status</th></tr></thead><tbody>${legacyRows}</tbody></table></div></details>`
+    : '';
   const pageCount = Math.max(1, Math.ceil(Number(data.total_rows || 0) / Number(data.page_size || 100)));
   const pagination = state.reportTab === 'closed_bill_summary'
     ? `<div class="toolbar-inline report-pagination"><button class="ghost-btn compact-btn" data-action="report-page" data-page="${Math.max(1, state.reportPage - 1)}" ${state.reportPage <= 1 ? 'disabled' : ''}>Previous</button><span>Page ${state.reportPage} of ${pageCount} · ${Number(data.total_rows || 0)} bills</span><button class="ghost-btn compact-btn" data-action="report-page" data-page="${Math.min(pageCount, state.reportPage + 1)}" ${state.reportPage >= pageCount ? 'disabled' : ''}>Next</button></div>`
@@ -12427,11 +13298,11 @@ document.addEventListener('click', event => {
     }
   }
   const reportTab = event.target.closest('[data-report-tab]');
-  if (reportTab) { state.reportTab = reportTab.dataset.reportTab; state.reportPage = 1; reportRequestKey = ''; render(); return; }
+  if (reportTab) { state.reportTab = reportTab.dataset.reportTab; state.reportPage = 1; render(); return; }
   if (event.target.closest('[data-action="retry-revenue-dashboard"]')) { loadRevenueDashboard(true); return; }
   const reportPageButton = event.target.closest('[data-action="report-page"]');
-  if (reportPageButton && !reportPageButton.disabled) { state.reportPage = Number(reportPageButton.dataset.page); reportRequestKey = ''; render(); return; }
-  if (event.target.closest('[data-action="retry-report"]')) { const [start, end] = dateRangeBounds(); delete reportServerData[reportDataKey(state.reportTab, start, end)]; reportRequestKey = ''; render(); return; }
+  if (reportPageButton && !reportPageButton.disabled) { state.reportPage = Number(reportPageButton.dataset.page); render(); return; }
+  if (event.target.closest('[data-action="retry-report"]')) { const [start, end] = dateRangeBounds(); delete reportServerData[reportDataKey(state.reportTab, start, end)]; render(); return; }
   if (event.target.closest('[data-action="print-report"]')) { window.print(); return; }
   if (event.target.closest('[data-action="export-report"]')) {
     const table = document.querySelector('.report-table-panel table');
@@ -12450,7 +13321,7 @@ document.addEventListener('click', event => {
     return;
   }
   const clear = event.target.closest('[data-action="clear-filters"]');
-  if (clear) { state.query = ''; state.ingredientStatus = 'All'; state.ingredientCategory = 'All'; state.ingredientUnit = 'All'; render(); }
+  if (clear) { state.query = ''; state.ingredientStatus = 'All'; state.ingredientExpiryFilter = false; state.ingredientCategory = 'All'; state.ingredientUnit = 'All'; render(); }
   const exportToggle = event.target.closest('[data-action="toggle-export"]');
   if (exportToggle) document.querySelector('.export-options')?.classList.toggle('is-hidden');
   const exportButton = event.target.closest('[data-export]');
@@ -12570,7 +13441,7 @@ document.addEventListener('click', async event => {
     if (!restoreButton) return;
     try {
       const completed = await window.supabaseRecord.completeProductionBatch(ready.dataset.readyProduction);
-      invalidateReportData();
+      invalidateReportData(['productionLogs', 'ingredients']);
       try {
         await Promise.all([
           loadProductionBoard(true),

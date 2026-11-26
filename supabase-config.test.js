@@ -821,8 +821,42 @@ test('posListUnresolvedStaleBookings calls the role-guarded listing RPC', async 
     };
   });
 
-  assert.deepEqual(await record.posListUnresolvedStaleBookings(), expected);
+  assert.deepEqual(JSON.parse(JSON.stringify(await record.posListUnresolvedStaleBookings())), expected);
   assert.equal(call.name, 'pos_list_unresolved_stale_bookings');
+  assert.equal(timers.size, 0);
+});
+
+test('posListUnresolvedStaleBookings normalizes legacy reservation ID aliases', async () => {
+  const { record } = loadSupabaseRecord(() => ({
+    abortSignal() {
+      return Promise.resolve({
+        data: [{ id: 'reservation-1', resolution_label: 'Unresolved' }],
+        error: null
+      });
+    }
+  }));
+
+  assert.deepEqual(JSON.parse(JSON.stringify(await record.posListUnresolvedStaleBookings())), [{
+    id: 'reservation-1',
+    reservation_id: 'reservation-1',
+    resolution_label: 'Unresolved'
+  }]);
+});
+
+test('posListUnresolvedStaleBookings rejects rows without a reservation ID', async () => {
+  const { record, timers } = loadSupabaseRecord(() => ({
+    abortSignal() {
+      return Promise.resolve({
+        data: [{ name: 'Guest without ID' }],
+        error: null
+      });
+    }
+  }));
+
+  await assert.rejects(
+    record.posListUnresolvedStaleBookings(),
+    /Unresolved booking row 1 is missing a reservation ID/
+  );
   assert.equal(timers.size, 0);
 });
 
@@ -857,6 +891,22 @@ test('posResolveStaleBooking sends explicit outcome, confirmation, deposit, and 
     p_deposit_reason: 'Return the held customer deposit.',
     p_idempotency_key: 'same-resolution-key'
   }));
+  assert.equal(timers.size, 0);
+});
+
+test('posResolveStaleBooking rejects a missing reservation ID before calling the RPC', async () => {
+  let called = false;
+  const { record, timers } = loadSupabaseRecord(() => {
+    called = true;
+    return {};
+  });
+
+  await assert.rejects(record.posResolveStaleBooking({
+    outcome: 'no_show',
+    reason: 'Confirmed no-show after checking the booking.',
+    idempotencyKey: 'same-resolution-key'
+  }), /A reservation ID is required/);
+  assert.equal(called, false);
   assert.equal(timers.size, 0);
 });
 

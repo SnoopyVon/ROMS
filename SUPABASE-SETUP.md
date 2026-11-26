@@ -4,6 +4,8 @@
 
 Run [`supabase-schema.sql`](./supabase/supabase-schema.sql) only when initializing a new or empty Supabase project. For a database that already contains production data, do not rerun this 4,000+ line baseline to install later changes. Back up the database and apply only the incremental migration files that have not already succeeded, in order. The recent cashier-shift and Activity Log updates are documented under migrations 036 and 037 below.
 
+> **Migration-numbering conflict:** The `main` and `test` branches each use migration labels 042–047 for different SQL changes. Do not apply these numbered files to the same database until the team reconciles the sequence against migrations already applied and updates the deployment instructions. This source merge does not apply database migrations.
+
 ### Initial setup for a new project
 
 1. Back up the project before changing its database.
@@ -46,6 +48,12 @@ After it runs:
 4. Confirm the application loads product and recipe data through `costtrack_load_products()` and `costtrack_load_recipes()`, product edits use `costtrack_save_product()`, and recipe edits use `save_recipe()`. The product form uses active category, unit, and supplier suggestions; expiry-tracked products require an expiration date when received.
 5. Test all roles, especially that Chef / Kitchen Staff cannot read product or recipe costs, and that only Administrators can create or edit products.
 6. After applying the full migration or the receiving upgrade, the receiving panel saves an invoice and multiple product lines through `costtrack_receive_delivery()`. Confirm the supplier, invoice, dates, quantities, costs, lot numbers, and expiration dates are saved with their stock movements and inventory batches.
+
+To add the active **Vegetables** and **Aromatics** choices to the Add Product category dropdown, apply [`045_add_vegetables_and_aromatics_product_categories.sql`](./supabase/045_add_vegetables_and_aromatics_product_categories.sql) after the Phase 8 inventory migration. The form reads active categories from `public.product_categories`; no browser-code change is needed. Verify with [`045_add_vegetables_and_aromatics_product_categories_acceptance.sql`](./supabase/045_add_vegetables_and_aromatics_product_categories_acceptance.sql), then reopen Add Product to load the updated options.
+
+To add **Sauces, Condiments & Seasonings** as one active category, apply [`046_add_sauces_condiments_seasonings_category.sql`](./supabase/046_add_sauces_condiments_seasonings_category.sql) after migration 045. Verify with [`046_add_sauces_condiments_seasonings_category_acceptance.sql`](./supabase/046_add_sauces_condiments_seasonings_category_acceptance.sql), then reopen Add Product to load the updated options.
+
+To retire the old **Sauces** category while preserving existing product references, apply [`047_deactivate_legacy_sauces_category.sql`](./supabase/047_deactivate_legacy_sauces_category.sql) after migration 046. Verify with [`047_deactivate_legacy_sauces_category_acceptance.sql`](./supabase/047_deactivate_legacy_sauces_category_acceptance.sql). The inventory category filter now uses active categories from the same catalog as Add Product, so the combined category appears even before products are assigned to it.
 
 The new dish/version tables are a migration baseline; recipe edits still use the legacy recipe tables and RPC until those workflows are migrated. The new receiving RPC records each delivery as a batch and stock movement, while the existing inventory transaction trigger updates on-hand stock. Until Phase 9 is applied, production, waste, and physical-count writes remain on their legacy workflows. Phase 9 adds a production status queue but still uses the existing production stock trigger; FIFO/FEFO consumption is not enabled. Do not replay old inventory movements into opening batches or apply both legacy and new writes for the same receipt. The migration is designed to be rerunnable but has no automatic rollback; restore the verified backup if rollback is required.
 
@@ -121,6 +129,16 @@ The scanner's face-quality and liveness checks run in the browser and cannot gua
 ```powershell
 deno test supabase/functions/face-login/validation_test.ts supabase/functions/invite-user/validation_test.ts
 ```
+
+## Overnight cashier shift close (migration 042)
+
+After migration 041 (and the shared cashier shift migration 036), apply [`042_cashier_overnight_shift_close.sql`](./supabase/042_cashier_overnight_shift_close.sql) before deploying the matching browser files. An open shift can be reconciled and closed on a later Manila business day. Receptionists can close only the shift they opened; Managers and Administrators can close any open shift, but must enter a reason when closing another cashier's shift. The shift records the closing user and appends the note. Existing open-bill and pending-approval blockers remain in place.
+
+If a deployed database still rejects a later-day close with “A cashier shift can only be closed on the same Manila business day it was opened,” apply [`043_remove_legacy_same_day_close_guard.sql`](./supabase/043_remove_legacy_same_day_close_guard.sql). This replaces the stale close RPC while retaining its open-bill checks and the migration 042 role/reason rules. Run [`042_cashier_overnight_shift_close_acceptance.sql`](./supabase/042_cashier_overnight_shift_close_acceptance.sql) as the database owner after migration 043. It requires no current open shift and active Receptionist, Manager, and Administrator profiles without open bills; fixtures roll back. To roll back 043, run [`043_remove_legacy_same_day_close_guard_rollback.sql`](./supabase/043_remove_legacy_same_day_close_guard_rollback.sql); to roll back the added role/reason rules afterward, run [`042_cashier_overnight_shift_close_rollback.sql`](./supabase/042_cashier_overnight_shift_close_rollback.sql).
+
+## Stale-booking table-cleaning resolution (migration 044)
+
+After migration 019, apply [`044_resolve_stale_booking_preserve_cleaning.sql`](./supabase/044_resolve_stale_booking_preserve_cleaning.sql). No-show/Cancelled resolutions now proceed when a linked table already needs cleaning and preserve that status instead of failing or making the table Available. Open-bill, active-booking, date, and deposit checks remain enforced. Run [`019_resolve_stale_bookings_acceptance.sql`](./supabase/019_resolve_stale_bookings_acceptance.sql) afterward; it verifies both normal table release and preservation of an existing cleaning state, then rolls back its fixtures. To restore the old behavior, run [`044_resolve_stale_booking_preserve_cleaning_rollback.sql`](./supabase/044_resolve_stale_booking_preserve_cleaning_rollback.sql).
 
 ## Phase 14 shared notifications
 
