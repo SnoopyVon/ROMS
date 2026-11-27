@@ -17,8 +17,6 @@
     'production.log': ['Administrator', 'Manager', 'Chef / Kitchen Staff'],
     'production.override': ['Administrator', 'Manager'],
     'waste.log': ['Administrator', 'Manager', 'Chef / Kitchen Staff'],
-    'count.submit': ['Administrator', 'Inventory Clerk'],
-    'count.approve': ['Administrator', 'Manager'],
     'revenue.read': ['Administrator', 'Manager'],
     'rates.manage': ['Administrator', 'Manager'],
     'supplier.manage': ['Administrator', 'Manager'],

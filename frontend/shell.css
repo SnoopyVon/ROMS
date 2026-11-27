@@ -4421,11 +4421,6 @@ button.inventory-priority-alert:hover {
   background: var(--warning-bg);
 }
 
-.inventory-activity-dot.is-counted {
-  color: var(--info-text);
-  background: var(--info-bg);
-}
-
 .inventory-activity-row time {
   flex: 0 0 auto;
   color: var(--muted);

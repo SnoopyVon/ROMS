@@ -10,7 +10,7 @@ Browser UI
   -> Supabase PostgreSQL database
 ```
 
-There is no separate Node.js, PHP, Python, or Express API server in this repository. The Supabase client is created in `supabase-config.js` with the project URL and publishable key.
+There is no separate Node.js, PHP, Python, or Express API server in this repository. The Supabase client is created in `frontend/supabase-config.js` with the project URL and publishable key.
 
 ## Base URL and endpoint meaning
 
@@ -53,7 +53,7 @@ Tables and views used by the application include:
 - `production_logs` — production records
 - `revenue_records` — revenue records
 - `waste_logs` — waste records
-- `physical_counts` — stock-count records
+- `physical_counts` — legacy stock-count records retained for historical reference; the standalone UI module has been retired
 - `reservations` — reservation records
 - `restaurant_tables` — restaurant table records
 - `buffet_rates` — buffet-rate records
@@ -86,7 +86,7 @@ Endpoint inventory and purpose:
 | `/rest/v1/restaurant_tables` | GET, POST, PATCH, DELETE | Read and manage restaurant tables |
 | `/rest/v1/buffet_rates` | GET, POST, PATCH, DELETE | Read and manage buffet rates |
 
-Some sensitive product, recipe, waste, receiving, and production operations use RPC instead of direct table writes so the database can validate the complete transaction. The actual filters, selected columns, and version checks are defined in `supabase-config.js`.
+Some sensitive product, recipe, waste, receiving, and production operations use RPC instead of direct table writes so the database can validate the complete transaction. The actual filters, selected columns, and version checks are defined in `frontend/supabase-config.js`.
 
 Product lifecycle writes are performed through `costtrack_product_lifecycle(action_value, product_id_value, reason_value)`, not direct table DML. It is Administrator-only and supports `inspect`, `delete`, `deactivate`, and `reactivate`. Hard deletion is refused for any recorded reference; deactivation requires a reason and is refused while an active recipe uses the product. Every lifecycle change is audited with product and actor identity snapshots. Inactive products remain readable for history and reports but cannot be used in new receiving, recipe, waste, or count entries. Migration 023 adds the audit/RPC/guards without changing the existing Phase 8 `ingredients.is_active` column; migration 024 orders the waste inactive-product guard before stock deduction.
 
@@ -293,8 +293,8 @@ The frontend contains only the publishable Supabase key. A Supabase service-role
 
 ## Source locations
 
-- Client setup and REST/RPC data access: `supabase-config.js`
-- UI calls, authentication flow, and Realtime subscription: `app.js`
+- Client setup and REST/RPC data access: `frontend/supabase-config.js`
+- UI calls, authentication flow, and Realtime subscription: `frontend/app.js`
 - Database tables, functions, triggers, and security policies: `supabase/`
 - Deployment and migration instructions: `SUPABASE-SETUP.md`
 
@@ -378,7 +378,7 @@ The first reads reservation rows. The second runs the PostgreSQL function that c
 Recommended files and demonstrations:
 
 1. Open `index.html` and show that the browser loads the Supabase client.
-2. Open `supabase-config.js` and show `createClient()`, `.from()`, and `.rpc()`.
+2. Open `frontend/supabase-config.js` and show `createClient()`, `.from()`, and `.rpc()`.
 3. Show one REST example, such as loading reservations.
 4. Show one RPC example, such as `public_create_reservation` or `report_analytics`.
 5. Open the corresponding SQL function in `supabase/` and show where validation and database logic run.
@@ -392,8 +392,8 @@ The normal request flow is:
 
 ```text
 User action
-  -> app.js event handler
-  -> supabase-config.js data-access method
+  -> frontend/app.js event handler
+  -> frontend/supabase-config.js data-access method
   -> Supabase API endpoint
   -> Auth and row-level security checks
   -> PostgreSQL table or function
@@ -429,7 +429,7 @@ They can be demonstrated through the application, Supabase Dashboard API documen
 
 ### Short answer for a professor
 
-> "Our system uses Supabase as a backend-as-a-service. We use its REST API for table operations, its RPC API to execute validated PostgreSQL functions for complex transactions, Supabase Auth for authentication, and Realtime WebSockets for live updates. The frontend calls these services through `supabase-config.js`, while the database tables, functions, triggers, and row-level security policies are defined in the `supabase` SQL files."
+> "Our system uses Supabase as a backend-as-a-service. We use its REST API for table operations, its RPC API to execute validated PostgreSQL functions for complex transactions, Supabase Auth for authentication, and Realtime WebSockets for live updates. The frontend calls these services through `frontend/supabase-config.js`, while the database tables, functions, triggers, and row-level security policies are defined in the `supabase` SQL files."
 
 ## User Management (migration 032)
 
@@ -473,8 +473,8 @@ The invitation form validates name, email, and role before sending. It warns whe
 
 ### Verification records (migration 041)
 
-Apply [`041_verification_records.sql`](./supabase/041_verification_records.sql) after migration 040 and deploy the updated `invite-user` Edge Function. An onboarding invite may include a `verification_record` payload containing the applicant name, ID type, a last-four-only masked ID, whitelisted OCR summary fields, local face-match result/heuristic score, any explicit override reason, and private image paths. The Edge Function derives the actor, role, invitation, and Auth profile IDs server-side. The `costtrack_create_verification_record` SECURITY DEFINER RPC inserts the Pending profile and its verification record in one PostgreSQL transaction; direct table writes are denied and Administrator reads are RLS protected. Corrections are new records linked by `supersedes_id`; existing records cannot be updated or deleted.
+Apply [`041_verification_records.sql`](../supabase/041_verification_records.sql) after migration 040 and deploy the updated `invite-user` Edge Function. An onboarding invite may include a `verification_record` payload containing the applicant name, ID type, a last-four-only masked ID, whitelisted OCR summary fields, local face-match result/heuristic score, any explicit override reason, and private image paths. The Edge Function derives the actor, role, invitation, and Auth profile IDs server-side. The `costtrack_create_verification_record` SECURITY DEFINER RPC inserts the Pending profile and its verification record in one PostgreSQL transaction; direct table writes are denied and Administrator reads are RLS protected. Corrections are new records linked by `supersedes_id`; existing records cannot be updated or deleted.
 
 The `verification-evidence` Storage bucket is private and Administrator-only for reads/writes. It stores ID/selfie objects, while the database stores paths only. `retention_until` defaults to 90 days after the record is written; automatic deletion is future work and no scheduler is configured. No onboarding consent capture exists yet, so current records store `consent_given = false` and `consent_at = null`. Face scores are local heuristic similarity indicators, not calibrated probabilities.
 
-Supabase Auth user creation and invitation email are external to PostgreSQL. If the record/profile RPC fails, the Edge Function attempts to delete the Auth user, cancel the invitation, and remove uploaded evidence; this is compensating cleanup, not a distributed transaction. An onboarding record failure returns an explicit error and does not leave a profile created by the RPC. The Administrator User Management workspace adds a read-only Verification Records tab with applicant-name search and a detail timeline. Run [`041_verification_records_acceptance.sql`](./supabase/041_verification_records_acceptance.sql) after provisioning its documented temporary Auth-only test user; it ends with `ROLLBACK`. Rollback is intentionally non-destructive: deploy the previous Edge Function first, then run [`041_verification_records_rollback.sql`](./supabase/041_verification_records_rollback.sql); audit rows and the private bucket remain.
+Supabase Auth user creation and invitation email are external to PostgreSQL. If the record/profile RPC fails, the Edge Function attempts to delete the Auth user, cancel the invitation, and remove uploaded evidence; this is compensating cleanup, not a distributed transaction. An onboarding record failure returns an explicit error and does not leave a profile created by the RPC. The Administrator User Management workspace adds a read-only Verification Records tab with applicant-name search and a detail timeline. Run [`041_verification_records_acceptance.sql`](../supabase/041_verification_records_acceptance.sql) after provisioning its documented temporary Auth-only test user; it ends with `ROLLBACK`. Rollback is intentionally non-destructive: deploy the previous Edge Function first, then run [`041_verification_records_rollback.sql`](../supabase/041_verification_records_rollback.sql); audit rows and the private bucket remain.

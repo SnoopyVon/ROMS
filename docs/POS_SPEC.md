@@ -47,10 +47,10 @@ Walk-ins remain a single-screen workflow. The visual table cards show capacity a
 - The current bill status must be `Closed` and `closed_at` must be present. Its business date is derived from `closed_at` in `Asia/Manila`. The net amount is `max(0, subtotal + service_charge - discount_total)`.
 - Voided bills never contribute to net revenue. Voided bills are reported separately; their amount represents reversed sales only when the bill had previously closed.
 - The database views are read models only; the database does not create a revenue ledger or copy bill totals into another editable table.
-- `revenue_records` remains intact as a historical archive. The Phase 4 migration revokes application-role insert/update/delete permissions. Revenue Tracking and Reports use the closed-bill report; legacy rows appear only in a separate, read-only Revenue Tracking archive and are excluded from all Phase 4 revenue and food-cost denominators.
+- `revenue_records` remains intact as a historical archive. The Phase 4 migration revokes application-role insert/update/delete permissions. Reports & Analytics uses the closed-bill report; legacy rows appear only in a separate, read-only archive section and are excluded from all Phase 4 revenue and food-cost denominators.
 - Deposits are payments/operational cash, not revenue. Shift and closed-bill reports may show deposit receipts or bill deposits applied in separate columns, never in sales totals.
 - The Manager dashboard shows today's closed-bill revenue, closed bill count, actual customers served, average check, discounts, void count, and voided amount. Reports include daily revenue, revenue trend, customer counts by adult/Senior-PWD/kids/comped, shift revenue and cash/deposit movements, and paginated closed-bill summary.
-- Report date ranges default to Last 7 days, with Last 30 days available. Daily revenue is shown as a bar chart with a totals row and muted zero-revenue days. Revenue Tracking uses the same daily closed-bill report; CSV export and print use the currently displayed report table.
+- Report date ranges default to Last 7 days, with Last 30 days available. Daily revenue is shown as a bar chart with a totals row and muted zero-revenue days; CSV export and print use the currently displayed report table.
 - Food-cost reports use closed-bill net revenue as the denominator. New production logs store a cost snapshot when production completes; historical logs without snapshots remain estimates using current ingredient costs. Waste is valued at current ingredient cost.
 - `pos_revenue_report` is a Manager/Administrator-only `SECURITY DEFINER` read RPC. The UI calls it with a 15-second timeout and shows an error rather than falling back to legacy revenue.
 - `supabase/020_closed_bill_revenue_reporting_acceptance.sql` covers closed/open/voided bills, legacy exclusion, actual guest counts, Manila business dates, deposits, role checks, and report outputs. Run it only after migration 020; it ends with `ROLLBACK`.
@@ -185,7 +185,7 @@ As Receptionist, open a shift and record 4 adults, 1 Senior/PWD, and 2 kids at a
 
 | Phase B/C verification | Result | Evidence |
 | --- | --- | --- |
-| JavaScript syntax and focused tests | PASS | `node --check app.js`, `node --check supabase-config.js`, and `node --test business-logic.test.js supabase-config.test.js`: 29/29 tests passed, including RPC payload/idempotency and 15-second save, walk-in, and bill-close timeout tests. |
+| JavaScript syntax and focused tests | PASS | `node --check frontend/app.js`, `node --check frontend/supabase-config.js`, and `node --test business-logic.test.js supabase-config.test.js`: 29/29 tests passed, including RPC payload/idempotency and 15-second save, walk-in, and bill-close timeout tests. |
 | Whitespace/diff check | PASS | `git diff --check` completed successfully. |
 | Migration and transactional database acceptance | NOT RUN after latest fixes | Migration 014 fixed the package-free Walk-in guard. Supabase later reported `Past reservations are read-only for this role` while closing a bill linked to a past reservation; migration 015 now narrowly permits that settled bill-close transition. Run both acceptance scripts after applying 015. |
 | Browser workflow and visual checks | NOT RUN | Apply migrations 013–015 and deploy the browser files, then retry bill close and the manual steps above. |
@@ -257,7 +257,7 @@ The user reported that the original 007/008 acceptance run succeeded. The databa
 | Existing Phase 2 and non-POS features | NOT RUN | No Supabase migration or browser regression run has been performed. |
 | SQL INSERT column/value arity | PASS | Migrations 010 and 011 contain no data INSERTs. The Phase A acceptance fixture INSERTs were statically checked for matching target columns and values; PostgreSQL execution remains pending. |
 | PostgreSQL migration/acceptance execution | NOT RUN | The database client reports “Connection not found”; no migration or acceptance SQL was executed here. |
-| JavaScript syntax and test suite | PASS | `node --check app.js`, `node --check business-logic.js`, `node --check supabase-config.js`, and `node --test business-logic.test.js supabase-config.test.js` completed successfully; 25/25 tests passed. |
+| JavaScript syntax and test suite | PASS | `node --check frontend/app.js`, `node --check frontend/business-logic.js`, `node --check frontend/supabase-config.js`, and `node --test business-logic.test.js supabase-config.test.js` completed successfully; 25/25 tests passed. |
 
 ### Manual verification still required
 

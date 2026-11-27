@@ -98,6 +98,7 @@ function mapDatabaseRecord(collection, row) {
   if (collection === 'recipes') {
     return {
       id: row.id, name: row.name, category: row.category,
+      menuPrice: Number(row.menu_price || 0),
       wastage: row.wastage == null ? null : Number(row.wastage),
       batchYield: Number(row.batch_yield || 30),
       prepTarget: Number(row.prep_target || 30),
@@ -345,6 +346,7 @@ function mapApplicationRecord(collection, record) {
   };
   if (collection === 'recipes') return {
     id: record.id, name: record.name, category: record.category,
+    menu_price: record.menuPrice ?? 0,
     wastage: record.wastage,
     batch_yield: record.batchYield, prep_target: record.prepTarget,
     prep_notes: record.prepNotes || '', is_active: record.isActive !== false,
@@ -1062,6 +1064,29 @@ window.supabaseRecord = {
     }
     throwIfError(result.error);
     return (result.data || []).map(row => mapDatabaseRecord(collection, row));
+  },
+  async loadPricingHistory() {
+    const tableNames = [
+      'buffet_rates', 'pos_charge_items', 'pos_charge_item_variants',
+      'pos_package_tiers', 'pos_package_inclusions', 'pos_discounts', 'pos_settings'
+    ];
+    const { data, error } = await window.supabaseClient
+      .from('audit_logs')
+      .select('id,actor_id,table_name,record_id,action,old_data,new_data,occurred_at')
+      .in('table_name', tableNames)
+      .order('occurred_at', { ascending: false })
+      .limit(100);
+    throwIfError(error);
+    return (data || []).map(row => ({
+      id: row.id,
+      actorId: row.actor_id,
+      tableName: row.table_name,
+      recordId: row.record_id,
+      action: row.action,
+      oldData: row.old_data || null,
+      newData: row.new_data || null,
+      occurredAt: row.occurred_at
+    }));
   },
   async loadRecord(collection, recordId) {
     const table = tableForCollection[collection];

@@ -244,7 +244,7 @@ begin
   insert into public.recipe_ingredients (recipe_id, ingredient_id, quantity)
   select recipe_id_value, rows.ingredient_id, rows.quantity
   from jsonb_to_recordset(payload -> 'ingredients')
-    as rows(ingredient_id, quantity);
+    as rows(ingredient_id text, quantity numeric);
   return to_jsonb(saved_recipe);
 end;
 $$;

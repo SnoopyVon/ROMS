@@ -1,8 +1,8 @@
 const assert = require('node:assert/strict');
 const test = require('node:test');
-const logic = require('./business-logic.js');
-const ocr = require('./ivs-ocr.js');
-const faceMatching = require('./face-matching.js');
+const logic = require('./frontend/business-logic.js');
+const ocr = require('./frontend/ivs-ocr.js');
+const faceMatching = require('./frontend/face-matching.js');
 
 const kg = { name: 'Kilogram', abbreviation: 'kg', dimension: 'weight', conversionToBase: 1000 };
 const g = { name: 'Gram', abbreviation: 'g', dimension: 'weight', conversionToBase: 1 };
@@ -1814,6 +1814,8 @@ test('enforces role actions and validates signed ledger movements', () => {
   assert.equal(logic.canPerformInventoryAction('Manager', 'inventory.receive'), true);
   assert.equal(logic.canPerformInventoryAction('Chef / Kitchen Staff', 'rates.manage'), false);
   assert.equal(logic.canPerformInventoryAction('Chef / Kitchen Staff', 'revenue.read'), false);
+  assert.equal(logic.canPerformInventoryAction('Inventory Clerk', 'count.submit'), false);
+  assert.equal(logic.canPerformInventoryAction('Manager', 'count.approve'), false);
   assert.throws(() => logic.assertInventoryRole('Chef / Kitchen Staff', 'revenue.read'), { code: 'FORBIDDEN' });
   assert.throws(() => logic.createStockMovement({
     type: 'Production', quantity: 2, unitCost: 10, productId: 'p', batchId: 'b', referenceType: 'production', referenceId: '1'

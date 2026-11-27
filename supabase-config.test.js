@@ -4,7 +4,7 @@ const path = require('node:path');
 const test = require('node:test');
 const vm = require('node:vm');
 
-const configSource = fs.readFileSync(path.join(__dirname, 'supabase-config.js'), 'utf8');
+const configSource = fs.readFileSync(path.join(__dirname, 'frontend', 'supabase-config.js'), 'utf8');
 
 function loadSupabaseRecord(rpc, clientOverrides = {}, hash = '') {
   const timers = new Map();
@@ -665,11 +665,12 @@ test('posSaveBill returns a successful RPC response without waiting for its time
   assert.equal(timers.size, 0);
 });
 
-test('recipe mapping preserves active state and saves without legacy menu price', async () => {
+test('recipe mapping preserves the legacy price for older save RPCs', async () => {
   const savedRow = {
     id: 'REC-1',
     name: 'Test Stew',
     category: 'Main Course',
+    menu_price: 12,
     wastage: 5,
     batch_yield: 4,
     prep_target: 12,
@@ -692,6 +693,7 @@ test('recipe mapping preserves active state and saves without legacy menu price'
     id: 'REC-1',
     name: 'Test Stew',
     category: 'Main Course',
+    menuPrice: 12,
     wastage: 5,
     batchYield: 4,
     prepTarget: 12,
@@ -701,13 +703,41 @@ test('recipe mapping preserves active state and saves without legacy menu price'
   });
 
   assert.equal(rpcCall.name, 'save_recipe');
-  assert.equal(Object.hasOwn(rpcCall.args.payload, 'menu_price'), false);
+  assert.equal(rpcCall.args.payload.menu_price, 12);
   assert.equal(rpcCall.args.payload.is_active, false);
   assert.equal(JSON.stringify(rpcCall.args.payload.ingredients), JSON.stringify([{ ingredient_id: 'ING-1', quantity: 2 }]));
   assert.equal(saved.isActive, false);
+  assert.equal(saved.menuPrice, 12);
   assert.equal(Object.hasOwn(saved, 'price'), false);
   assert.equal(JSON.stringify(saved.ingredients), JSON.stringify([{ ingredientId: 'ING-1', quantity: 2 }]));
   assert.equal(timers.size, 0);
+});
+
+test('recipe insert defaults the hidden legacy price to zero', async () => {
+  let payload;
+  const { record } = loadSupabaseRecord((name, args) => {
+    assert.equal(name, 'save_recipe');
+    payload = args.payload;
+    return {
+      abortSignal() {
+        return Promise.resolve({ data: { id: 'REC-2' }, error: null });
+      }
+    };
+  });
+
+  await record.upsert('recipes', {
+    id: 'REC-2',
+    name: 'New Stew',
+    category: 'Main Course',
+    wastage: 5,
+    batchYield: 4,
+    prepTarget: 12,
+    prepNotes: '',
+    isActive: true,
+    ingredients: [{ ingredientId: 'ING-1', quantity: 2 }]
+  });
+
+  assert.equal(payload.menu_price, 0);
 });
 
 test('product lifecycle RPC uses the guarded timeout and product mapping retains inactive state', async () => {

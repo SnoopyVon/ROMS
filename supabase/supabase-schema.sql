@@ -2792,6 +2792,7 @@ set search_path = pg_catalog
 as $$
 declare
   recipe_id_value text;
+  menu_price_value numeric;
   ingredient_item jsonb;
   saved_recipe public.recipes%rowtype;
 begin
@@ -2809,9 +2810,8 @@ begin
   if recipe_id_value is null
      or nullif(btrim(payload ->> 'name'), '') is null
      or nullif(btrim(payload ->> 'category'), '') is null
-     or payload ->> 'menu_price' is null
      or payload ->> 'wastage' is null then
-    raise exception 'Recipe id, name, category, menu_price, and wastage are required';
+    raise exception 'Recipe id, name, category, and wastage are required';
   end if;
 
   for ingredient_item in
@@ -2853,10 +2853,14 @@ begin
       raise exception 'Recipe was changed by another user; reload before saving'
         using errcode = '40001';
     end if;
+    menu_price_value := coalesce(
+      nullif(btrim(payload ->> 'menu_price'), '')::numeric,
+      saved_recipe.menu_price
+    );
     update public.recipes
     set name = btrim(payload ->> 'name'),
         category = btrim(payload ->> 'category'),
-        menu_price = (payload ->> 'menu_price')::numeric,
+        menu_price = menu_price_value,
         wastage = (payload ->> 'wastage')::numeric
     where id = recipe_id_value
     returning * into saved_recipe;
@@ -2865,13 +2869,17 @@ begin
       raise exception 'Recipe no longer exists; reload before saving'
         using errcode = '40001';
     end if;
+    menu_price_value := coalesce(
+      nullif(btrim(payload ->> 'menu_price'), '')::numeric,
+      0
+    );
     begin
       insert into public.recipes (id, name, category, menu_price, wastage)
       values (
         recipe_id_value,
         btrim(payload ->> 'name'),
         btrim(payload ->> 'category'),
-        (payload ->> 'menu_price')::numeric,
+        menu_price_value,
         (payload ->> 'wastage')::numeric
       )
       returning * into saved_recipe;

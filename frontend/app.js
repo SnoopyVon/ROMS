@@ -53,6 +53,7 @@ state.productionHistory = {
   from: '', to: '', timeFrom: '', timeTo: '', dish: 'All', status: 'All',
   rows: [], loading: false, loaded: false, error: ''
 };
+state.pricingHistory = { rows: [], loading: false, loaded: false, error: '' };
 state.wasteFilters = {
   from: '', to: '', timeFrom: '', timeTo: '', ingredient: 'All', reason: 'All', staff: 'All'
 };
@@ -195,15 +196,24 @@ function persistReservationFilters() {
   }));
 }
 const roleAccess = {
-  'Administrator': ['dashboard', 'notifications', 'activity-logs', 'ingredients', 'receiving', 'recipes', 'production', 'waste', 'counts', 'reports', 'revenue', 'rates', 'users', 'reservations', 'calendar', 'tables', 'cashier', 'shifts', 'approvals', 'charge-catalog'],
-  'Manager': ['dashboard', 'notifications', 'activity-logs', 'ingredients', 'receiving', 'recipes', 'production', 'waste', 'counts', 'reports', 'revenue', 'rates', 'reservations', 'calendar', 'tables', 'cashier', 'shifts', 'approvals', 'charge-catalog'],
-  'Inventory Clerk': ['dashboard', 'notifications', 'activity-logs', 'ingredients', 'receiving', 'counts', 'reports'],
+  'Administrator': ['dashboard', 'notifications', 'activity-logs', 'ingredients', 'receiving', 'recipes', 'production', 'waste', 'reports', 'rates', 'users', 'reservations', 'calendar', 'tables', 'cashier', 'shifts', 'approvals', 'charge-catalog'],
+  'Manager': ['dashboard', 'notifications', 'activity-logs', 'ingredients', 'receiving', 'recipes', 'production', 'waste', 'reports', 'rates', 'reservations', 'calendar', 'tables', 'cashier', 'shifts', 'approvals', 'charge-catalog'],
+  'Inventory Clerk': ['dashboard', 'notifications', 'activity-logs', 'ingredients', 'receiving', 'reports'],
   'Chef / Kitchen Staff': ['dashboard', 'notifications', 'activity-logs', 'recipes', 'production', 'waste', 'reports'],
   'Receptionist': ['dashboard', 'notifications', 'activity-logs', 'reservations', 'calendar', 'tables', 'cashier', 'shifts', 'approvals']
 };
 const canAccess = view => Boolean(roleAccess[state.role]?.includes(view));
 const canAccessRevenue = () => ['Administrator', 'Manager'].includes(state.role);
-const canManageRates = () => ['Administrator', 'Manager'].includes(state.role);
+const canManageRates = () => state.role === 'Administrator';
+const canManagePricing = () => state.role === 'Administrator';
+const pricingCollections = new Set([
+  'buffetRates', 'chargeItems', 'chargeItemVariants', 'packageTiers',
+  'packageInclusions', 'discounts', 'posSettings'
+]);
+const editablePosSettingKeys = Object.freeze([
+  'pos_max_shift_hours', 'pos_extra_pax_rate', 'pos_service_charge_mode',
+  'pos_service_charge_percent', 'pos_service_charge_per_head'
+]);
 const app = document.querySelector('#app');
 const money = value => `₱${Number(value || 0).toLocaleString('en-PH', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 const today = () => { const date = new Date(); return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`; };
@@ -301,6 +311,33 @@ function dashboardGreeting() {
   const firstName = currentUserName().split(/[\s@._-]+/).filter(Boolean)[0];
   return firstName ? `Good morning, ${esc(firstName)}.` : 'Welcome to ROMS.';
 }
+function managerDiscountToggleOnly(previousRecords, nextRecords) {
+  if (!Array.isArray(previousRecords) || !Array.isArray(nextRecords)
+    || previousRecords.length !== nextRecords.length) return false;
+  const previousById = new Map(previousRecords.map(record => [String(record.id), record]));
+  let changedCount = 0;
+  for (const next of nextRecords) {
+    const previous = previousById.get(String(next.id));
+    if (!previous) return false;
+    const { isActive: previousActive, ...previousConfiguration } = previous;
+    const { isActive: nextActive, ...nextConfiguration } = next;
+    if (JSON.stringify(previousConfiguration) !== JSON.stringify(nextConfiguration)) return false;
+    if (Boolean(previousActive) !== Boolean(nextActive)) changedCount += 1;
+  }
+  return changedCount === 1;
+}
+function assertPricingMutation(collection, nextRecords, previousRecords) {
+  if (!pricingCollections.has(collection)) return;
+  const previous = previousRecords || read(collection);
+  const nextIds = new Set(nextRecords.map(record => String(record.id)));
+  if (previous.some(record => !nextIds.has(String(record.id)))) {
+    throw new Error('Pricing records cannot be deleted. Mark them inactive instead.');
+  }
+  if (canManagePricing()) return;
+  if (state.role === 'Manager' && collection === 'discounts'
+    && managerDiscountToggleOnly(previous, nextRecords)) return;
+  throw new Error('Only Administrators can edit pricing and billing rules. Managers may only enable or disable approved promotions.');
+}
 async function save(key, value) {
   if (key === 'users') {
     toast('User accounts must be managed through Supabase Auth.', 'error');
@@ -313,6 +350,7 @@ async function saveCollections(changes) {
   if (!navigator.onLine) throw new Error('You are offline. Reconnect to save.');
   const previous = Object.fromEntries(Object.keys(changes).map(key => [key, read(key)]));
   const touched = Object.keys(changes);
+  for (const key of touched) assertPricingMutation(key, changes[key], previous[key]);
   setSyncState('syncing');
   try {
     const refreshCollections = touched.includes('wasteLogs')
@@ -351,6 +389,12 @@ async function saveCollections(changes) {
 async function saveRecord(key, record) {
   if (!state.user || !supabaseSyncEnabled) throw new Error('Cloud data is not ready. Please wait for the initial load.');
   if (!navigator.onLine) throw new Error('You are offline. Reconnect to save.');
+  const previous = read(key);
+  if (pricingCollections.has(key)) {
+    assertPricingMutation(key, previous.some(item => item.id === record.id)
+      ? previous.map(item => item.id === record.id ? record : item)
+      : [...previous, record], previous);
+  }
   setSyncState('syncing');
   rememberLocalChange(key, record.id);
   try {
@@ -372,6 +416,9 @@ async function saveRecord(key, record) {
 async function removeRecord(key, recordId) {
   if (!state.user || !supabaseSyncEnabled) throw new Error('Cloud data is not ready. Please wait for the initial load.');
   if (!navigator.onLine) throw new Error('You are offline. Reconnect to save.');
+  if (pricingCollections.has(key)) {
+    throw new Error('Pricing records cannot be deleted. Mark them inactive instead.');
+  }
   setSyncState('syncing');
   rememberLocalChange(key, recordId);
   try {
@@ -472,10 +519,10 @@ function activeBuffetRate(item, date = item?.date || today()) {
   return window.CostTrackLogic.activeBuffetRate(all('buffetRates'), mealPeriod, date, dayType);
 }
 function friendlyRpcError(error) {
+  const message = String(error?.message || error || '');
   if (/a product with this name already exists in the selected category/i.test(message)) {
     return 'A product with this name already exists in the selected category. Please choose another name or category.';
   }
-  const message = String(error?.message || error || '');
   if (/users cannot change their own role/i.test(message)) return 'You cannot change your own role. Ask another Administrator.';
   if (/cannot remove or demote the last administrator/i.test(message)) return 'At least one Administrator must remain in the system.';
   if (/profile deletion is not supported/i.test(message)) return 'Active and deactivated staff profiles cannot be deleted. Cancel an unaccepted invitation to remove its pending account.';
@@ -594,7 +641,6 @@ function realtimeCollectionsForView() {
     recipes: ['ingredients', 'inventory_batches', 'recipes', 'recipe_ingredients', 'production_logs', 'production_batches'],
     production: ['ingredients', 'inventory_batches', 'recipes', 'production_logs', 'production_batches', 'reservations'],
     waste: ['ingredients', 'waste_logs', 'prepared_food_waste_logs', 'production_logs'],
-    counts: ['ingredients', 'physical_counts'],
     reservations: ['reservations', 'restaurant_tables', 'pos_bills', 'pos_reservation_deposits'],
     calendar: ['reservations', 'restaurant_tables'],
     tables: ['reservations', 'restaurant_tables'],
@@ -603,7 +649,6 @@ function realtimeCollectionsForView() {
     approvals: ['pos_bills', 'pos_bill_approvals'],
     'charge-catalog': ['pos_charge_items', 'pos_package_tiers', 'pos_discounts', 'pos_settings'],
     rates: ['buffet_rates'],
-    revenue: ['revenue_records'],
     reports: ['ingredients', 'recipes', 'recipe_ingredients', 'production_logs', 'waste_logs', 'prepared_food_waste_logs', 'revenue_records', 'pos_bills', 'pos_bill_lines', 'pos_bill_payments', 'pos_shifts', 'pos_cash_movements', 'pos_reservation_deposits']
   };
   const alertTablesByRole = {
@@ -616,7 +661,7 @@ function realtimeCollectionsForView() {
   if (state.view === 'dashboard') {
     const dashboardTables = {
       Receptionist: ['reservations', 'restaurant_tables'],
-      'Inventory Clerk': ['ingredients', 'inventory_transactions', 'physical_counts'],
+      'Inventory Clerk': ['ingredients', 'inventory_transactions'],
       'Chef / Kitchen Staff': ['ingredients', 'inventory_batches', 'recipes', 'production_logs', 'prepared_food_waste_logs', 'waste_logs', 'reservations'],
       default: ['ingredients', 'recipes', 'production_logs', 'waste_logs', 'reservations', 'restaurant_tables', 'pos_bills', 'buffet_rates']
     };
@@ -634,7 +679,7 @@ function realtimeTablesForRole(tables) {
     Manager: ['ingredients', 'recipes', 'recipe_ingredients', 'inventory_transactions', 'inventory_batches', 'production_logs', 'production_batches', 'waste_logs', 'prepared_food_waste_logs', 'physical_counts', 'reservations', 'restaurant_tables', 'revenue_records', 'buffet_rates', 'pos_charge_items', 'pos_charge_item_variants', 'pos_package_tiers', 'pos_package_inclusions', 'pos_discounts', 'pos_settings', 'pos_shifts', 'pos_cash_movements', 'pos_bills', 'pos_bill_lines', 'pos_bill_payments', 'pos_reservation_deposits', 'pos_bill_approvals', 'pos_notifications', 'notifications', 'notification_read_states'],
     'Chef / Kitchen Staff': ['ingredients', 'inventory_batches', 'recipes', 'recipe_ingredients', 'production_logs', 'production_batches', 'waste_logs', 'prepared_food_waste_logs', 'notifications', 'notification_read_states'],
     Receptionist: ['reservations', 'restaurant_tables', 'buffet_rates', 'pos_bills', 'pos_bill_lines', 'pos_bill_payments', 'pos_reservation_deposits', 'pos_bill_approvals', 'pos_shifts', 'pos_cash_movements', 'notifications', 'notification_read_states'],
-    'Inventory Clerk': ['ingredients', 'recipes', 'recipe_ingredients', 'inventory_transactions', 'inventory_batches', 'physical_counts', 'waste_logs', 'prepared_food_waste_logs', 'notifications', 'notification_read_states']
+    'Inventory Clerk': ['ingredients', 'recipes', 'recipe_ingredients', 'inventory_transactions', 'inventory_batches', 'waste_logs', 'prepared_food_waste_logs', 'notifications', 'notification_read_states']
   };
   const permitted = new Set(allowed[state.role] || []);
   return [...new Set([
@@ -968,9 +1013,9 @@ function configureRealtimeSubscriptions() {
 }
 const sidebarGroups = [
   { id: 'front-of-house', label: 'Front of House', icon: 'calendar', items: [['cashier', 'dashboard', 'Cashier'], ['shifts', 'calendar-days', 'Shifts'], ['approvals', 'shield', 'Approvals'], ['reservations', 'calendar-plus', 'Reservations'], ['calendar', 'calendar-days', 'Tables / Calendar'], ['tables', 'table', 'Table Management']] },
-  { id: 'inventory', label: 'Inventory', icon: 'boxes', items: [['ingredients', 'package', 'Ingredients'], ['receiving', 'package-plus', 'Ingredients + Receiving'], ['counts', 'clipboard-check', 'Physical Count']] },
+  { id: 'inventory', label: 'Inventory', icon: 'boxes', items: [['ingredients', 'package', 'Ingredients'], ['receiving', 'package-plus', 'Ingredients + Receiving']] },
   { id: 'production', label: 'Kitchen Operations', icon: 'chef-hat', items: [['recipes', 'book', 'Recipes'], ['production', 'chef-hat', 'Production Board'], ['waste', 'trash', 'Waste Logs']] },
-  { id: 'revenue-management', label: 'Revenue Management', icon: 'chart', items: [['revenue', 'chart', 'Revenue Tracking'], ['charge-catalog', 'package', 'Charge Catalog']] },
+  { id: 'revenue-management', label: 'Revenue Management', icon: 'chart', items: [['charge-catalog', 'package', 'Pricing & Billing Setup']] },
   { id: 'analytics', label: 'Analytics & Reports', icon: 'chart', items: [['reports', 'chart', 'Reports & analytics']] },
   { id: 'system', label: 'System Management', icon: 'users', items: [['activity-logs', 'clipboard-check', 'Activity Log'], ['users', 'users', 'User Management']] }
 ];
@@ -1098,8 +1143,7 @@ function createActions() {
     { id: 'cashier', label: 'Open cashier', icon: 'dashboard', view: 'cashier' },
     { id: 'production', label: 'Log production', icon: 'chef-hat', view: 'production' },
     { id: 'waste', label: 'Log waste', icon: 'trash', view: 'waste' },
-    { id: 'receiving', label: 'Receive supplies', icon: 'package-plus', view: 'receiving' },
-    { id: 'count', label: 'Start physical count', icon: 'clipboard-check', view: 'counts' }
+    { id: 'receiving', label: 'Receive supplies', icon: 'package-plus', view: 'receiving' }
   ].filter(action => canAccess(action.view));
 }
 
@@ -1632,7 +1676,7 @@ function nav() {
   return `<div class="sidebar-top">
       <button class="drawer-close" type="button" data-shell-action="close-drawer" aria-label="Close navigation"><span aria-hidden="true">×</span></button>
       <div class="brand">
-        <img class="brand-logo" src="images/isobel_logo.jpg" alt="Isobel Buffet Restaurant">
+        <img class="brand-logo" src="frontend/images/isobel_logo.jpg" alt="Isobel Buffet Restaurant">
         <button class="sidebar-collapse" type="button" data-shell-action="toggle-sidebar" aria-label="${collapseLabel}" title="${collapseLabel}">${shellIcon('panel')}</button>
       </div>
       <div class="workspace-switcher" aria-label="Workspace">WORKSPACE</div>
@@ -1893,7 +1937,7 @@ function login(message = '') {
         <button class="primary-btn" id="faceLoginStartButton" type="button">Start Face Scan</button>
         <button class="link-button" id="loginUsingPasswordButton" type="button">Login using a password</button>
       </div>`;
-  document.querySelector('#loginScreen').innerHTML = `<section class="login-card"><div class="login-card-content"><div class="eyebrow">${recovering ? 'ACCOUNT SECURITY' : 'STAFF SIGN IN'}</div><h1>${recovering ? 'Create a new password' : 'Sign in to your workspace'}</h1>${message ? `<p class="auth-message" role="alert">${esc(message)}</p>` : ''}${formMarkup}</div></section><section class="login-art" aria-label="Welcome to Isobel Buffet Restaurant"><div class="login-art-content"><img class="login-art-logo" src="images/isobel_logo.jpg" alt="Isobel Buffet Restaurant"><h2>Welcome back to isobel</h2><p>Buffet Restaurant Operations</p></div></section>`;
+  document.querySelector('#loginScreen').innerHTML = `<section class="login-card"><div class="login-card-content"><div class="eyebrow">${recovering ? 'ACCOUNT SECURITY' : 'STAFF SIGN IN'}</div><h1>${recovering ? 'Create a new password' : 'Sign in to your workspace'}</h1>${message ? `<p class="auth-message" role="alert">${esc(message)}</p>` : ''}${formMarkup}</div></section><section class="login-art" aria-label="Welcome to Isobel Buffet Restaurant"><div class="login-art-content"><img class="login-art-logo" src="frontend/images/isobel_logo.jpg" alt="Isobel Buffet Restaurant"><h2>Welcome back to isobel</h2><p>Buffet Restaurant Operations</p></div></section>`;
 }
 function metric(label, value, icon, tone, foot) { return `<div class="metric-card"><div class="metric-top"><span>${label}</span><i class="metric-icon ${tone}">${icon}</i></div><div class="metric-value">${value}</div><div class="metric-foot">${foot}</div></div>`; }
 function pageHeader(eyebrow, title, subtitle, action = '') { return `<div class="page-header"><div><div class="eyebrow">${eyebrow}</div><h1>${title}</h1><p>${subtitle}</p></div>${action}</div>`; }
@@ -2040,8 +2084,6 @@ function roleDashboard() {
   ).length;
   const productionToday = all('productionLogs').filter(item => item.date === todayDate).length;
   const wasteToday = all('wasteLogs').filter(item => item.date === todayDate).length;
-  const counts = all('physicalCounts');
-  const shortages = counts.filter(item => item.actual < item.expected).length;
   const roleCopy = {
     Administrator: ['Overview', 'Here’s what is happening across Isobel today.'],
     Manager: ['Operational summary', 'Monitor cost, stock health, waste, and variance.'],
@@ -2187,23 +2229,14 @@ function roleDashboard() {
     return `<tr data-view="ingredients"><td data-label="Ingredient"><strong class="inventory-health-item-name">${esc(item.name)}</strong></td><td data-label="Current stock"><span class="inventory-health-stock"><strong>${formatStockQuantity(item.stock)} ${esc(item.unit)}</strong><small>Minimum ${formatStockQuantity(item.minimum)} ${esc(item.unit)}</small></span></td><td data-label="Days to expiry"><span class="inventory-health-expiry ${expiryTone}">${esc(nearestExpiry ? inventoryExpiryLabel(expiryDays) : 'Not tracked')}</span></td><td data-label="Status"><span class="status ${statusTone}">${status}</span></td></tr>`;
   }).join('') || '<tr><td class="inventory-health-empty" colspan="4">No ingredients match this status.</td></tr>'}</tbody></table></div></div>`;
   const expiringSoonPanel = `<section class="panel inventory-expiring-panel" aria-labelledby="inventory-expiring-title"><div class="panel-header"><div><div class="panel-title" id="inventory-expiring-title">Expiring soon</div><div class="panel-subtitle">Prioritized by the earliest dated stock</div></div><span class="inventory-panel-icon inventory-expiry-icon" aria-hidden="true">◷</span></div><div class="inventory-expiry-summary"><div><strong>${expiringTodayCount}</strong><span>Expiring today</span></div><div><strong>${expiringThreeDayCount}</strong><span>In the next 3 days</span></div><div><strong>${expiringSevenDayCount}</strong><span>In the next 7 days</span></div></div><div class="inventory-expiring-list">${expiringIngredients.slice(0, 5).map(({ batch, product, expiry }) => `<div class="inventory-expiring-row ${expiry.daysUntilExpiry === 0 ? 'is-today' : ''}"><span class="inventory-expiry-mark ${expiry.daysUntilExpiry === 0 ? 'is-today' : expiry.daysUntilExpiry <= 3 ? 'is-soon' : ''}" aria-hidden="true">!</span><div><strong>${esc(product.name)}</strong><small>${formatStockQuantity(batch.quantityRemaining)} ${esc(product.unit)} · ${esc(inventoryBatchLabel(batch))}</small></div><span class="inventory-expiry-days">${expiry.daysUntilExpiry === 0 ? 'Today' : `${expiry.daysUntilExpiry} day${expiry.daysUntilExpiry === 1 ? '' : 's'}`}</span></div>`).join('') || '<p class="inventory-empty-state">No ingredients are due to expire in the next 7 days.</p>'}</div></section>`;
-  const recentInventoryActivities = [
-    ...all('inventoryTransactions').map(item => ({
-      date: item.date || '',
-      kind: Number(item.quantity) > 0 ? 'Received' : (item.type || 'Adjusted'),
-      name: ingredientById.get(String(item.ingredientId))?.name || 'Inventory item',
-      detail: `${Number(item.quantity) > 0 ? '+' : ''}${formatStockQuantity(item.quantity)} ${ingredientById.get(String(item.ingredientId))?.unit || ''}`.trim(),
-      time: item.date || ''
-    })),
-    ...counts.map(item => ({
-      date: item.date || '',
-      kind: 'Counted',
-      name: ingredientById.get(String(item.ingredientId))?.name || 'Inventory item',
-      detail: `Physical count · ${formatStockQuantity(item.actual)} ${ingredientById.get(String(item.ingredientId))?.unit || ''}`,
-      time: item.date || ''
-    }))
-  ].sort((left, right) => right.date.localeCompare(left.date));
-  const recentActivityPanel = `<section class="panel inventory-activity-panel" aria-labelledby="inventory-activity-title"><div class="panel-header"><div><div class="panel-title" id="inventory-activity-title">Recent activity</div><div class="panel-subtitle">Latest inventory movements and counts</div></div><span class="inventory-panel-icon" aria-hidden="true">↻</span></div><div class="inventory-activity-list">${recentInventoryActivities.slice(0, 5).map(item => `<div class="inventory-activity-row"><span class="inventory-activity-dot ${item.kind === 'Received' ? 'is-received' : item.kind === 'Counted' ? 'is-counted' : 'is-adjusted'}" aria-hidden="true">${item.kind === 'Received' ? '+' : item.kind === 'Counted' ? '✓' : '−'}</span><div><strong>${esc(item.kind)} · ${esc(item.name)}</strong><small>${esc(item.detail)}</small></div><time${item.time ? ` datetime="${esc(item.time)}"` : ''}>${esc(inventoryActivityDateLabel(item.time))}</time></div>`).join('') || '<p class="inventory-empty-state">Inventory activity will appear here when stock is received, adjusted, or counted.</p>'}</div></section>`;
+  const recentInventoryActivities = all('inventoryTransactions').map(item => ({
+    date: item.date || '',
+    kind: Number(item.quantity) > 0 ? 'Received' : (item.type || 'Adjusted'),
+    name: ingredientById.get(String(item.ingredientId))?.name || 'Inventory item',
+    detail: `${Number(item.quantity) > 0 ? '+' : ''}${formatStockQuantity(item.quantity)} ${ingredientById.get(String(item.ingredientId))?.unit || ''}`.trim(),
+    time: item.date || ''
+  })).sort((left, right) => right.date.localeCompare(left.date));
+  const recentActivityPanel = `<section class="panel inventory-activity-panel" aria-labelledby="inventory-activity-title"><div class="panel-header"><div><div class="panel-title" id="inventory-activity-title">Recent activity</div><div class="panel-subtitle">Latest inventory movements</div></div><span class="inventory-panel-icon" aria-hidden="true">↻</span></div><div class="inventory-activity-list">${recentInventoryActivities.slice(0, 5).map(item => `<div class="inventory-activity-row"><span class="inventory-activity-dot ${item.kind === 'Received' ? 'is-received' : 'is-adjusted'}" aria-hidden="true">${item.kind === 'Received' ? '+' : '−'}</span><div><strong>${esc(item.kind)} · ${esc(item.name)}</strong><small>${esc(item.detail)}</small></div><time${item.time ? ` datetime="${esc(item.time)}"` : ''}>${esc(inventoryActivityDateLabel(item.time))}</time></div>`).join('') || '<p class="inventory-empty-state">Inventory activity will appear here when stock is received or adjusted.</p>'}</div></section>`;
   const revenueDashboardErrorPanel = canAccessRevenue() && revenueDashboardError
     ? `<div class="panel error-state" role="alert">${esc(revenueDashboardError)} <button class="ghost-btn" data-action="retry-revenue-dashboard">Retry dashboard</button></div>`
     : '';
@@ -3440,6 +3473,27 @@ function productionHistoryPanel() {
     <div class="table-scroll"><table><thead><tr><th>Service date</th><th>Activity time</th><th>Batch</th><th>Dish</th><th>Portions</th><th>Status</th></tr></thead><tbody>${!history.loading && !rows.length ? '<tr><td colspan="6" class="empty-state">No production batches match these filters.</td></tr>' : rows.join('')}</tbody></table></div>
   </section>`;
 }
+async function loadPricingHistory(force = false) {
+  const history = state.pricingHistory;
+  if (!state.user || state.role !== 'Administrator'
+    || history.loading || (!force && history.loaded)) return false;
+  history.loading = true;
+  history.error = '';
+  if (state.view === 'charge-catalog') render();
+  try {
+    history.rows = await window.supabaseRecord.loadPricingHistory();
+    history.loaded = true;
+    return true;
+  } catch (error) {
+    console.error('Pricing history could not be loaded.', error);
+    history.error = friendlyRpcError(error);
+    history.loaded = true;
+    return false;
+  } finally {
+    history.loading = false;
+    if (state.view === 'charge-catalog' && state.role === 'Administrator') render();
+  }
+}
 async function loadProductionHistory(force = false) {
   const history = state.productionHistory;
   const from = history.from || today();
@@ -3464,112 +3518,294 @@ async function loadProductionHistory(force = false) {
     if (state.view === 'production') render();
   }
 }
-function countsPage() {
-  const canSubmitCount = window.CostTrackLogic.canPerformInventoryAction(state.role, 'count.submit');
-  const rows = all('physicalCounts').slice().reverse().map(item => {
-    const stockItem = ingredient(item.ingredientId);
-    const difference = item.actual - item.expected;
-    const formattedDifference = new Intl.NumberFormat('en-PH', { maximumFractionDigits: 4 }).format(difference);
-    return `<tr><td><strong>${esc(stockItem?.name || 'Unknown')}</strong></td><td>${item.expected} ${esc(stockItem?.unit || '')}</td><td>${item.actual} ${esc(stockItem?.unit || '')}</td><td class="${difference < 0 ? 'negative' : 'positive'}">${difference > 0 ? '+' : ''}${formattedDifference}</td><td><span class="status ${difference < 0 ? 'status-low' : 'status-good'}">${difference < 0 ? 'Shortage' : difference > 0 ? 'Overage' : 'Matched'}</span></td><td>${esc(item.date || '')}</td><td>${actions('count', item.id)}</td></tr>`;
-  });
-  return tablePage({
-    eyebrow: 'Reconciliation',
-    title: 'Physical inventory count',
-    subtitle: 'Expected stock is loaded from inventory. Review the variance before recording a count and adjusting stock.',
-    action: canSubmitCount ? '<button class="primary-btn" data-action="open-count">+ Record count</button>' : '',
-    search: 'counts',
-    tableClass: 'physical-count-table',
-    tableId: 'physical-count',
-    headers: ['Ingredient', 'Expected', 'Actual count', 'Variance', 'Result', 'Count date', ''],
-    rows
-  });
-}
-function updatePhysicalCountPreview(form) {
-  const preview = form.querySelector('[data-count-variance]');
-  const expected = form.elements.expected.value;
-  const actual = form.elements.actual.value;
-  if (!preview) return;
-  if (expected === '' || actual === '') {
-    preview.textContent = 'Select an ingredient and enter the actual quantity to preview variance.';
-    preview.dataset.state = 'empty';
-    return;
-  }
-  const variance = Number(actual) - Number(expected);
-  const unit = ingredient(form.elements.ingredientId.value)?.unit || '';
-  const formattedVariance = new Intl.NumberFormat('en-PH', { maximumFractionDigits: 4 }).format(variance);
-  preview.textContent = `${variance < 0 ? 'Shortage' : variance > 0 ? 'Overage' : 'Matched'} · ${variance > 0 ? '+' : ''}${formattedVariance} ${unit}`;
-  preview.dataset.state = variance < 0 ? 'shortage' : variance > 0 ? 'overage' : 'matched';
-}
 function ratesPage() {
+  const canEdit = canManageRates();
   const rows = all('buffetRates').slice().sort((a, b) => b.effectiveFrom.localeCompare(a.effectiveFrom)).map(item =>
-    `<tr><td><strong>${esc(item.mealPeriod)}</strong></td><td>${esc(item.dayType)}</td><td>${money(item.adultRate)}</td><td>${money(item.childRate)}</td><td>${money(item.seniorPwdRate)}</td><td>${esc(item.effectiveFrom)}${item.effectiveTo ? ` – ${esc(item.effectiveTo)}` : ' onward'}</td><td><span class="status ${item.isActive ? 'status-good' : 'status-low'}">${item.isActive ? 'Active' : 'Inactive'}</span></td><td><button class="ghost-btn compact-btn" data-action="edit-rate" data-id="${esc(item.id)}">Edit</button>${item.isActive ? ` <button class="ghost-btn compact-btn" data-action="deactivate-rate" data-id="${esc(item.id)}">Deactivate</button>` : ''}</td></tr>`
+    `<tr><td><strong>${esc(item.mealPeriod)}</strong></td><td>${esc(item.dayType)}</td><td>${money(item.adultRate)}</td><td>${money(item.childRate)}</td><td>${money(item.seniorPwdRate)}</td><td>${esc(item.effectiveFrom)}${item.effectiveTo ? ` – ${esc(item.effectiveTo)}` : ' onward'}</td><td><span class="status ${item.isActive ? 'status-good' : 'status-low'}">${item.isActive ? 'Active' : 'Inactive'}</span></td><td>${canEdit ? `<button class="ghost-btn compact-btn" data-action="edit-rate" data-id="${esc(item.id)}">Edit</button>${item.isActive ? ` <button class="ghost-btn compact-btn" data-action="deactivate-rate" data-id="${esc(item.id)}">Deactivate</button>` : ''}` : 'View only'}</td></tr>`
   );
   return tablePage({
     eyebrow: 'Revenue management',
     title: 'Buffet rates',
-    subtitle: 'Manage effective adult, child, and senior/PWD rates by meal period and day type.',
-    action: '<button class="primary-btn" data-action="open-rate">+ Add rate</button>',
+    subtitle: canEdit
+      ? 'Manage effective adult, child, and senior/PWD rates by meal period and day type.'
+      : 'View the approved adult, child, and senior/PWD rates. Only Administrators can change pricing.',
+    action: canEdit ? '<button class="primary-btn" data-action="open-rate">+ Add rate</button>' : '',
     search: 'rates',
     tableId: 'buffet-rates',
     headers: ['Meal period', 'Day type', 'Adult', 'Child', 'Senior/PWD', 'Effective dates', 'Status', ''],
     rows
   });
 }
+function pricingHistoryValue(value, field) {
+  if (value === null || value === undefined || value === '') return '—';
+  if (field === 'is_active') return value ? 'Active' : 'Inactive';
+  if (typeof value === 'boolean') return value ? 'Yes' : 'No';
+  if (typeof value === 'object') return JSON.stringify(value);
+  return String(value);
+}
+function pricingHistorySection(history) {
+  const fieldLabels = {
+    base_price: 'Package price',
+    unit_price: 'Unit price',
+    value: 'Discount value',
+    minimum_amount: 'Minimum bill',
+    is_active: 'Status',
+    setting_value: 'Setting value',
+    adult_rate: 'Adult rate',
+    child_rate: 'Child rate',
+    senior_pwd_rate: 'Senior/PWD rate'
+  };
+  const tableLabels = {
+    pos_charge_items: 'Additional charge',
+    pos_charge_item_variants: 'Charge option',
+    pos_package_tiers: 'Buffet package',
+    pos_package_inclusions: 'Package inclusion',
+    pos_discounts: 'Discount or promotion',
+    pos_settings: 'POS rule',
+    buffet_rates: 'Buffet rate'
+  };
+  const rows = history.rows.map(entry => {
+    const oldData = entry.oldData || {};
+    const newData = entry.newData || {};
+    const changed = [...new Set([...Object.keys(oldData), ...Object.keys(newData)])]
+      .filter(key => !['created_at', 'updated_at', 'created_by'].includes(key)
+        && JSON.stringify(oldData[key]) !== JSON.stringify(newData[key]));
+    const details = changed.length ? `<ul class="pricing-history-changes">${changed.map(key =>
+      `<li><strong>${esc(fieldLabels[key] || key.replace(/_/g, ' '))}</strong><span>${esc(pricingHistoryValue(oldData[key], key))} → ${esc(pricingHistoryValue(newData[key], key))}</span></li>`
+    ).join('')}</ul>` : '<span>Record created</span>';
+    const actor = all('users').find(user => user.id === entry.actorId);
+    const action = entry.action === 'INSERT' ? 'Created' : 'Updated';
+    return `<tr><td>${esc(formatOperationalDateTime(entry.occurredAt))}</td><td>${esc(actor?.name || actor?.email || entry.actorId || 'System')}</td><td>${esc(tableLabels[entry.tableName] || entry.tableName)}<small>${esc(entry.recordId)}</small></td><td><span class="status ${entry.action === 'INSERT' ? 'status-good' : 'status-low'}">${action}</span>${details}</td></tr>`;
+  }).join('');
+  const content = history.error
+    ? `<div class="pricing-history-error" role="alert">${esc(history.error)}</div>`
+    : history.loading
+      ? '<p class="pricing-empty" role="status">Loading pricing history…</p>'
+      : rows || '<p class="pricing-empty">No pricing changes have been recorded yet.</p>';
+  return `<section class="panel pricing-section" aria-labelledby="pricing-history-title">
+    <div class="pricing-section-heading">
+      <span class="pricing-section-number">05</span>
+      <div><h2 id="pricing-history-title">Pricing change history</h2><p>Administrator-only history begins after the governance migration is installed; earlier pricing changes are not backfilled.</p></div>
+      <button type="button" class="ghost-btn compact-btn" data-action="refresh-pricing-history" ${history.loading ? 'disabled' : ''}>Refresh history</button>
+    </div>
+    ${history.error || history.loading ? content : `<div class="pricing-table-scroll"><table class="data-table pricing-table pricing-history-table"><thead><tr><th>Date and time</th><th>Changed by</th><th>Rule</th><th>Changes</th></tr></thead><tbody>${rows || '<tr><td colspan="4" class="pricing-empty">No pricing changes have been recorded yet.</td></tr>'}</tbody></table></div>`}
+  </section>`;
+}
 function chargeCatalogPage() {
   const chargeItems = all('chargeItems');
   const packageTiers = all('packageTiers');
   const discounts = all('discounts');
   const settings = all('posSettings');
-  const displayCode = value => {
-    const code = String(value || '').trim();
-    return /^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i.test(code) ? '—' : code || '—';
+  const isAdministrator = canManagePricing();
+  const canTogglePromotions = state.role === 'Manager';
+  const active = item => item.isActive !== false;
+  const packageName = item => ({
+    ADULT: 'Adult',
+    SENIOR: 'Senior / PWD',
+    KIDS: 'Kids',
+    COMPED: 'Complimentary Guest'
+  }[String(item.code || '').toUpperCase()] || item.name || 'Buffet package');
+  const packageOrder = { ADULT: 0, SENIOR: 1, KIDS: 2, COMPED: 3 };
+  const orderedPackages = packageTiers.slice().sort((a, b) =>
+    (packageOrder[String(a.code || '').toUpperCase()] ?? 99)
+    - (packageOrder[String(b.code || '').toUpperCase()] ?? 99)
+    || packageName(a).localeCompare(packageName(b))
+  );
+  const packageCards = orderedPackages.length ? orderedPackages.map(item => {
+    const available = active(item);
+    return `<article class="pricing-package-card${available ? '' : ' is-inactive'}">
+      <div class="pricing-package-top"><span class="pricing-status ${available ? 'is-active' : 'is-inactive'}">${available ? 'Active' : 'Inactive'}</span><span class="pricing-meal-period">${esc(item.defaultMealPeriod || 'All Day')}</span></div>
+      <h3>${esc(packageName(item))}</h3>
+      <div class="pricing-package-price">${money(item.basePrice || 0)}<span>per guest</span></div>
+      <div class="pricing-package-availability"><span>Availability</span><strong>${available ? 'Available for bookings' : 'Not offered to staff'}</strong></div>
+      ${isAdministrator ? `<button type="button" class="ghost-btn compact-btn pricing-package-edit" data-action="edit-package-tier" data-id="${esc(item.id)}">Edit package</button>` : ''}
+    </article>`;
+  }).join('') : '<p class="pricing-empty">No buffet packages are configured yet.</p>';
+
+  const chargeTypeLabels = {
+    food: 'Food item',
+    non_food: 'Add-on service',
+    service_charge: 'Service charge',
+    deposit: 'Reservation deposit',
+    discount: 'Discount',
+    other: 'Other charge'
   };
-  const rows = chargeItems.length ? chargeItems.map(item => `<tr><td><strong>${esc(displayCode(item.code))}</strong></td><td>${esc(item.name)}</td><td><span class="tag">${esc(item.type)}</span></td><td>${item.isFoodRevenue ? 'Food' : 'Non-food'}</td><td>${money(item.unitPrice || 0)}</td><td><button class="ghost-btn compact-btn" data-action="edit-charge-item" data-id="${esc(item.id)}">Edit</button></td></tr>`).join('') : '<tr><td colspan="6" class="empty-state">No catalog entries yet. Use the migration seed data or add a charge item from the catalog editor.</td></tr>';
-  const packageRows = packageTiers.length ? packageTiers.map(item => `<tr><td><strong>${esc(displayCode(item.code))}</strong></td><td>${esc(item.name)}</td><td>${esc(item.defaultMealPeriod || 'All Day')}</td><td>${money(item.basePrice || 0)}</td><td><span class="status ${item.isActive ? 'status-good' : 'status-low'}">${item.isActive ? 'Active' : 'Inactive'}</span></td></tr>`).join('') : '<tr><td colspan="5" class="empty-state">No package tiers defined.</td></tr>';
-  const discountRows = discounts.length ? discounts.map(item => `<tr><td><strong>${esc(displayCode(item.code))}</strong></td><td>${esc(item.name)}</td><td>${esc(item.discountType)}</td><td>${esc(item.appliesTo || 'bill')}</td><td>${item.discountType === 'percent' ? `${Number(item.value || 0).toFixed(2)}%` : money(item.value || 0)}</td></tr>`).join('') : '<tr><td colspan="5" class="empty-state">No discount presets defined.</td></tr>';
-  const settingLabels = {
-    pos_max_shift_hours: 'Maximum shift duration',
-    pos_extra_pax_rate: 'Additional guest rate'
+  const additionalCharges = chargeItems.filter(item =>
+    item.type !== 'package' && item.type !== 'discount' && !item.isPackage
+  );
+  const chargeRows = additionalCharges.length ? additionalCharges.map(item => {
+    const available = active(item);
+    const typeLabel = chargeTypeLabels[item.type] || 'Additional charge';
+    const revenueType = item.isFoodRevenue ? 'Food revenue' : 'Non-food revenue';
+    return `<tr>
+      <td data-label="Charge"><strong>${esc(item.name || typeLabel)}</strong><small>${esc(item.category || 'General')} · ${esc(typeLabel)}</small></td>
+      <td data-label="Revenue category"><span class="pricing-revenue-tag ${item.isFoodRevenue ? 'is-food' : 'is-non-food'}">${revenueType}</span></td>
+      <td data-label="Price"><strong class="pricing-price">${money(item.unitPrice || 0)}</strong></td>
+      <td data-label="Status"><span class="pricing-status ${available ? 'is-active' : 'is-inactive'}">${available ? 'Active' : 'Inactive'}</span></td>
+      <td data-label="Actions">${isAdministrator ? `<button class="ghost-btn compact-btn" data-action="edit-charge-item" data-id="${esc(item.id)}" aria-label="Edit ${esc(item.name || typeLabel)}">Edit</button>` : '—'}</td>
+    </tr>`;
+  }).join('') : '<tr><td colspan="5" class="pricing-empty">No additional charges are configured.</td></tr>';
+
+  const discountTypeLabels = { percent: 'Percentage off', fixed: 'Fixed amount', waive: 'Full bill waiver' };
+  const appliesToLabels = { bill: 'Entire bill', line: 'Selected item', service_charge: 'Service charge', package: 'Package' };
+  const discountRows = discounts.length ? discounts.map(item => {
+    const available = active(item);
+    const type = discountTypeLabels[item.discountType] || 'Discount';
+    const discountName = String(item.code || '').toUpperCase() === 'COMPLIMENTARY'
+      ? 'Complimentary guest waiver'
+      : item.name || 'Promotion';
+    const value = item.discountType === 'percent'
+      ? `${Number(item.value || 0).toFixed(2)}%`
+      : item.discountType === 'waive'
+        ? 'Full bill'
+        : money(item.value || 0);
+    return `<tr>
+      <td data-label="Promotion"><strong>${esc(discountName)}</strong><small>${esc(type)}</small></td>
+      <td data-label="Value"><strong class="pricing-price">${value}</strong></td>
+      <td data-label="Applies to">${esc(appliesToLabels[item.appliesTo] || 'Entire bill')}</td>
+      <td data-label="Status"><span class="pricing-status ${available ? 'is-active' : 'is-inactive'}">${available ? 'Active' : 'Inactive'}</span></td>
+      <td data-label="Actions">${isAdministrator
+        ? `<button type="button" class="ghost-btn compact-btn" data-action="edit-discount" data-id="${esc(item.id)}">Edit</button>`
+        : canTogglePromotions
+          ? `<button type="button" class="ghost-btn compact-btn" data-action="toggle-approved-promotion" data-id="${esc(item.id)}">${available ? 'Disable' : 'Enable'}</button>`
+          : '—'}</td>
+    </tr>`;
+  }).join('') : '<tr><td colspan="5" class="pricing-empty">No promotions are configured yet.</td></tr>';
+
+  const settingDefinitions = {
+    pos_max_shift_hours: {
+      label: 'Maximum shift duration',
+      description: 'Notify managers when a cashier shift remains open beyond this limit.',
+      appliedInWorkflow: true
+    },
+    pos_extra_pax_rate: {
+      label: 'Additional guest rate',
+      description: 'Price used when a seated party exceeds its booked package guest count.',
+      appliedInWorkflow: true
+    },
+    pos_service_charge_mode: {
+      label: 'Service charge calculation',
+      description: 'Choose whether service charges are off, percentage-based, or charged per guest.',
+      appliedInWorkflow: true
+    },
+    pos_service_charge_percent: {
+      label: 'Service charge percentage',
+      description: 'Percentage used when the service charge calculation is set to percentage.',
+      appliedInWorkflow: true
+    },
+    pos_service_charge_per_head: {
+      label: 'Service charge per guest',
+      description: 'Amount added per paying guest when the service charge is set per guest.',
+      appliedInWorkflow: true
+    },
+    pos_print_title: {
+      label: 'Saved billing statement heading',
+      description: 'Stored preference only; printed statements currently use the built-in heading.',
+      appliedInWorkflow: false
+    },
+    pos_default_currency: {
+      label: 'Saved currency preference',
+      description: 'Stored preference only; POS amounts are currently formatted in Philippine pesos.',
+      appliedInWorkflow: false
+    },
+    pos_requires_approval_for_manual_charge: {
+      label: 'Manual charge approval preference',
+      description: 'Stored preference only; current bill approvals follow the active billing workflow rules.',
+      appliedInWorkflow: false
+    }
   };
-  const settingsRows = settings.length ? settings.map(item => {
-    const label = settingLabels[item.key] || 'Additional POS setting';
-    const value = item.key === 'pos_max_shift_hours'
-      ? `${esc(String(item.value || ''))} hours`
-      : item.key === 'pos_extra_pax_rate'
-        ? money(item.value)
-        : esc(String(item.value || ''));
-    return `<tr><td>${esc(label)}</td><td>${value}</td><td>${state.role === 'Administrator' && ['pos_max_shift_hours', 'pos_extra_pax_rate'].includes(item.key) ? `<button type="button" class="ghost-btn compact-btn" data-action="edit-pos-setting" data-id="${esc(item.id)}">Edit</button>` : ''}</td></tr>`;
-  }).join('') : '<tr><td colspan="3" class="empty-state">No operating settings saved yet.</td></tr>';
+  const settingOrder = Object.keys(settingDefinitions);
+  const settingLabel = key => settingDefinitions[key]?.label
+    || String(key || 'Pricing setting').replace(/^pos_/, '').split(/[_\s]+/).filter(Boolean)
+      .map(word => word.charAt(0).toUpperCase() + word.slice(1)).join(' ');
+  const settingDescription = item => settingDefinitions[item.key]?.description
+    || 'Stored setting; confirm its operational use before relying on it.';
+  const settingValue = item => {
+    if (item.key === 'pos_max_shift_hours') return `${esc(String(item.value || ''))} hours`;
+    if (['pos_extra_pax_rate', 'pos_service_charge_per_head'].includes(item.key)) return money(item.value || 0);
+    if (item.key === 'pos_service_charge_percent') return `${Number(item.value || 0).toFixed(2)}%`;
+    if (item.key === 'pos_service_charge_mode') {
+      return ({ none: 'Off', percent: 'Percentage', per_head: 'Per guest' })[item.value] || esc(String(item.value || 'Not set'));
+    }
+    if (item.key === 'pos_requires_approval_for_manual_charge') {
+      return String(item.value).toLowerCase() === 'true' ? 'Required' : 'Not required';
+    }
+    if (item.type === 'boolean') return String(item.value).toLowerCase() === 'true' ? 'Enabled' : 'Disabled';
+    return esc(String(item.value || 'Not set'));
+  };
+  const orderedSettings = settings.slice().sort((a, b) =>
+    (settingOrder.indexOf(a.key) < 0 ? settingOrder.length : settingOrder.indexOf(a.key))
+    - (settingOrder.indexOf(b.key) < 0 ? settingOrder.length : settingOrder.indexOf(b.key))
+    || settingLabel(a.key).localeCompare(settingLabel(b.key))
+  );
+  const settingCards = orderedSettings.length ? orderedSettings.map(item => {
+    const canEdit = isAdministrator && editablePosSettingKeys.includes(item.key);
+    const appliedInWorkflow = settingDefinitions[item.key]?.appliedInWorkflow === true;
+    return `<article class="pricing-rule-card">
+      <div class="pricing-rule-title"><h3>${esc(settingLabel(item.key))}</h3><span class="pricing-rule-scope${appliedInWorkflow ? '' : ' is-reference'}">${appliedInWorkflow ? 'Used by workflow' : 'Saved only'}</span></div>
+      <strong class="pricing-rule-value">${settingValue(item)}</strong>
+      <p>${esc(settingDescription(item))}</p>
+      ${canEdit ? `<button type="button" class="ghost-btn compact-btn" data-action="edit-pos-setting" data-id="${esc(item.id)}">Edit setting</button>` : ''}
+    </article>`;
+  }).join('') : '<p class="pricing-empty">No POS rules are configured yet.</p>';
+
   return `
-    <section class="panel charge-catalog-panel">
-      <div class="panel-header">
+    <div class="pricing-config">
+      <header class="pricing-config-hero">
         <div>
-          <div class="panel-title">Charge catalog</div>
-          <div class="panel-subtitle">Service charges, package tiers, discounts, and POS settings for the cashier workflow.</div>
+          <div class="eyebrow">Revenue management</div>
+          <h1>Pricing &amp; Billing Setup</h1>
+          <p>Manage the prices and billing rules used by reservations, cashier bills, and reports.</p>
+          <div class="pricing-context-links"><span>Reservations</span><span>Cashier billing</span><span>Revenue reports</span></div>
         </div>
-        <button class="primary-btn" data-action="new-charge-item">+ New charge</button>
+      </header>
+      <div class="pricing-governance-note" role="note">
+        <strong>Change controls</strong>
+        <span>${isAdministrator
+          ? 'Administrators manage pricing and POS rules. Managers may only enable or disable catalogued promotions. Active reservations and open bills can lock related rules. Pricing history starts after the governance migration is installed.'
+          : 'View approved pricing and billing rules. Managers may enable or disable catalogued promotions; all other changes are Administrator-only. Active bookings and open bills can lock related rules.'}</span>
       </div>
-      <div class="two-column-grid">
-        <div class="panel">
-          <div class="sub-panel-header"><strong>Charge items</strong></div>
-          <div class="table-scroll"><table class="charge-items-table"><thead><tr><th>Code</th><th>Name</th><th>Type</th><th>Revenue</th><th>Price</th><th>Actions</th></tr></thead><tbody>${rows}</tbody></table></div>
+      <section class="panel pricing-section" aria-labelledby="pricing-packages-title">
+        <div class="pricing-section-heading">
+          <span class="pricing-section-number">01</span>
+          <div><h2 id="pricing-packages-title">Buffet packages</h2><p>Guest rates used when reservations are priced and cashier bills are prepared.</p></div>
+          <span class="pricing-section-count">${packageTiers.filter(active).length} active</span>
+          ${isAdministrator ? '<button type="button" class="ghost-btn compact-btn" data-action="new-package-tier">+ Add package</button>' : ''}
         </div>
-        <div class="panel">
-          <div class="sub-panel-header"><strong>Package tiers</strong></div>
-          <div class="table-scroll"><table class="package-tiers-table"><thead><tr><th>Code</th><th>Name</th><th>Meal</th><th>Base</th><th>Status</th></tr></thead><tbody>${packageRows}</tbody></table></div>
+        <div class="pricing-package-grid">${packageCards}</div>
+      </section>
+      <section class="panel pricing-section" aria-labelledby="pricing-charges-title">
+        <div class="pricing-section-heading">
+          <span class="pricing-section-number">02</span>
+          <div><h2 id="pricing-charges-title">Additional charges</h2><p>Optional services and charges available to staff during customer billing.</p></div>
+          ${isAdministrator ? '<button type="button" class="ghost-btn compact-btn" data-action="new-charge-item">+ Add charge</button>' : ''}
         </div>
-      </div>
-      <div class="two-column-grid">
-        <div class="panel">
-          <div class="sub-panel-header"><strong>Discount presets</strong></div>
-          <div class="table-scroll"><table class="discount-presets-table"><thead><tr><th>Code</th><th>Name</th><th>Type</th><th>Applies</th><th>Value</th></tr></thead><tbody>${discountRows}</tbody></table></div>
+        <div class="pricing-table-scroll"><table class="data-table pricing-table">
+          <thead><tr><th>Charge</th><th>Revenue category</th><th>Price</th><th>Status</th><th>Actions</th></tr></thead>
+          <tbody>${chargeRows}</tbody>
+        </table></div>
+      </section>
+      <section class="panel pricing-section" aria-labelledby="pricing-discounts-title">
+        <div class="pricing-section-heading">
+          <span class="pricing-section-number">03</span>
+          <div><h2 id="pricing-discounts-title">Discounts &amp; promotions</h2><p>Eligible promotions staff can apply during billing. Full bill waivers and 100% bill discounts require separate approval.</p></div>
+          <span class="pricing-section-count">${discounts.filter(active).length} active</span>
+          ${isAdministrator ? '<button type="button" class="ghost-btn compact-btn" data-action="new-discount">+ Add promotion</button>' : ''}
         </div>
-        <div class="panel">
-          <div class="sub-panel-header"><strong>POS settings</strong></div>
-          <div class="table-scroll"><table class="pos-settings-table"><thead><tr><th>Setting</th><th>Value</th><th>Actions</th></tr></thead><tbody>${settingsRows}</tbody></table></div>
+        <div class="pricing-table-scroll"><table class="data-table pricing-table">
+          <thead><tr><th>Promotion</th><th>Value</th><th>Applies to</th><th>Status</th><th>Actions</th></tr></thead>
+          <tbody>${discountRows}</tbody>
+        </table></div>
+      </section>
+      <section class="panel pricing-section" aria-labelledby="pricing-rules-title">
+        <div class="pricing-section-heading">
+          <span class="pricing-section-number">04</span>
+          <div><h2 id="pricing-rules-title">POS rules</h2><p>Operational settings that guide charges, printed statements, and shift monitoring.</p></div>
         </div>
-      </div>
-    </section>
+        <div class="pricing-rules-grid">${settingCards}</div>
+      </section>
+      ${isAdministrator ? pricingHistorySection(state.pricingHistory) : ''}
+    </div>
   `;
 }
 function cashierPage() {
@@ -3661,7 +3897,7 @@ function approvalsPage() {
 const USER_MANAGEMENT_ROLES = ['Administrator', 'Manager', 'Receptionist', 'Inventory Clerk', 'Chef / Kitchen Staff'];
 const USER_ONBOARDING_ROLE_CARDS = [
   { label: 'Cashier / Receptionist', value: 'Receptionist', description: 'Handles reservations, payments, and guest transactions.' },
-  { label: 'Inventory Clerk', value: 'Inventory Clerk', description: 'Manages inventory, receiving, and stock counts.' },
+  { label: 'Inventory Clerk', value: 'Inventory Clerk', description: 'Manages inventory and receiving workflows.' },
   { label: 'Chef / Kitchen Staff', value: 'Chef / Kitchen Staff', description: 'Manages food preparation and kitchen operations.' },
   { label: 'Manager', value: 'Manager', description: 'Oversees restaurant operations, staff, and reports.' },
   { label: 'Administrator', value: 'Administrator', description: 'Manages users, system settings, and all operational modules.' }
@@ -3722,7 +3958,7 @@ const USER_ROLE_ACCESS_NOTES = {
   Administrator: 'Can manage users, system settings, and all operational modules.',
   Manager: 'Can oversee restaurant operations, inventory, and management reports.',
   Receptionist: 'Can manage reservations, guest seating, and cashier workflows.',
-  'Inventory Clerk': 'Can manage inventory, receiving, and stock counts.',
+  'Inventory Clerk': 'Can manage inventory and receiving workflows.',
   'Chef / Kitchen Staff': 'Can manage kitchen production and record waste.'
 };
 
@@ -6780,35 +7016,15 @@ async function openForm(type, item) {
     recipe: 'recipe.manage',
     production: 'production.log',
     waste: 'waste.log',
-    count: 'count.submit',
     user: 'user.manage'
   }[type];
   if (requiredAction && !window.CostTrackLogic.canPerformInventoryAction(state.role, requiredAction)) {
     return toast('You do not have permission to perform this action.', 'error');
   }
   if (type === 'pos-setting') {
-    const setting = all('posSettings').find(item => item.id === editId);
-    if (state.role !== 'Administrator' || !setting
-      || !['pos_max_shift_hours', 'pos_extra_pax_rate'].includes(setting.key)) {
-      return toast('Only an Administrator can change this POS setting.', 'error');
-    }
-    const value = Number(data.value);
-    if (!Number.isFinite(value) || (setting.key === 'pos_max_shift_hours' && (!Number.isInteger(value) || value < 1 || value > 72))
-      || (setting.key === 'pos_extra_pax_rate' && value < 0)) {
-      return toast(setting.key === 'pos_max_shift_hours'
-        ? 'Set the alert threshold to a whole number from 1 to 72 hours.'
-        : 'Set a non-negative extra-pax rate.', 'error');
-    }
-    try {
-      await save('posSettings', all('posSettings').map(item => item.id === setting.id ? { ...item, value: String(value) } : item));
-      state.modalDirty = false;
-      closeModal(true);
-      toast('POS setting saved.');
-    } catch (error) {
-      console.error('POS setting could not be saved.', error);
-      toast(friendlyRpcError(error), 'error');
-    }
-    return;
+    const setting = all('posSettings').find(record => record.id === item?.id);
+    if (!setting) return toast('This POS setting is no longer available.', 'error');
+    return posSettingForm(setting);
   }
   const edit = item ? true : false; const value = key => item?.[key] ?? '';
   if (type === 'ingredient') {
@@ -6945,16 +7161,6 @@ async function openForm(type, item) {
     return;
   }
   else if (type === 'production') modal('Log production batch', `<div class="form-grid"><label>Recipe<select name="recipeId" required>${options(all('recipes'))}</select></label><label>Batches<input name="quantity" type="number" min="1" step="1" required></label><label>Covers produced <small class="field-help">Optional</small><input name="coversProduced" type="number" min="0" step="1"></label><label>Mode<select name="mode"><option>Batch production</option><option>End-of-day sales summary</option></select></label><label>Date<input name="date" type="date" value="${today()}" required></label></div>`);
-  else if (type === 'count') modal('Record physical count', `<div class="physical-count-form">
-    <p class="physical-count-guidance">Expected quantity is loaded from current system stock and locked. Saving this count immediately adjusts stock to the recorded actual quantity.</p>
-    <div class="form-grid">
-      <label>Ingredient<select name="ingredientId" required><option value="" selected disabled>Choose an ingredient</option>${options(all('ingredients').filter(item => item.isActive !== false))}</select></label>
-      <label>Expected quantity<input name="expected" type="number" min="0" step=".0001" placeholder="Select an ingredient" readonly required></label>
-      <label>Actual count<input name="actual" type="number" min="0" step=".0001" required></label>
-      <label>Count date<input name="date" type="date" value="${today()}" required></label>
-    </div>
-    <output class="physical-count-preview" data-count-variance data-state="empty" aria-live="polite">Select an ingredient and enter the actual quantity to preview variance.</output>
-  </div>`, 'Save record', 'physical-count-modal');
   else if (type === 'user') {
     if (!item) return toast('Select a user to view their details.', 'error');
     modal('User Details', `<section class="user-details-section">
@@ -7425,7 +7631,7 @@ function openProductDeactivationForm(product, activeRecipes = []) {
   const recipeNotice = activeRecipes.length
     ? `<div class="product-lifecycle-recipes"><strong>Active recipes that use this product</strong><ul>${activeRecipes.map(recipe => `<li>${esc(recipe.name)} <small>(${esc(recipe.source)})</small></li>`).join('')}</ul><small>These recipes will remain active.</small></div>`
     : '';
-  modal(`Deactivate ${esc(product.name)}`, `<p class="confirmation-message">Historical records remain available, but this product will no longer be offered for new receiving, recipes, waste, or counts.</p>
+  modal(`Deactivate ${esc(product.name)}`, `<p class="confirmation-message">Historical records remain available, but this product will no longer be offered for new receiving, recipes, or waste entries.</p>
     ${recipeNotice}
     <p class="product-lifecycle-blocker" role="alert" data-product-lifecycle-error hidden></p>
     <label class="full">Reason for deactivation<textarea name="reason" rows="3" maxlength="500" required placeholder="Explain why this product is being deactivated"></textarea></label>`, 'Deactivate product', 'product-lifecycle-modal');
@@ -8302,13 +8508,10 @@ function refreshWalkInTimestamp(form) {
   return { now, date, time };
 }
 function rateForm(item = {}) {
-  if (!canManageRates()) return toast('Only Administrator and Manager roles can manage buffet rates.', 'error');
+  if (!canManageRates()) return toast('Only Administrators can manage buffet rates.', 'error');
   modal(item.id ? 'Edit buffet rate' : 'Add buffet rate', `<div class="form-grid"><label>Meal period<select name="mealPeriod"><option ${item.mealPeriod === 'All Day' ? 'selected' : ''}>All Day</option><option ${item.mealPeriod === 'Lunch' ? 'selected' : ''}>Lunch</option><option ${item.mealPeriod === 'Dinner' ? 'selected' : ''}>Dinner</option></select></label><label>Day type<select name="dayType"><option ${item.dayType === 'weekday' ? 'selected' : ''}>weekday</option><option ${item.dayType === 'weekend' ? 'selected' : ''}>weekend</option><option ${item.dayType === 'holiday' ? 'selected' : ''}>holiday</option></select></label><label>Adult rate<input name="adultRate" type="number" min="0" step=".01" value="${item.adultRate ?? ''}" required></label><label>Child rate<input name="childRate" type="number" min="0" step=".01" value="${item.childRate ?? ''}" required></label><label>Senior/PWD rate<input name="seniorPwdRate" type="number" min="0" step=".01" value="${item.seniorPwdRate ?? ''}" required></label><label>Effective from<input name="effectiveFrom" type="date" value="${item.effectiveFrom || today()}" required></label><label>Effective to<input name="effectiveTo" type="date" value="${item.effectiveTo || ''}"></label><label>Active<select name="isActive"><option value="true" ${item.isActive !== false ? 'selected' : ''}>Active</option><option value="false" ${item.isActive === false ? 'selected' : ''}>Inactive</option></select></label></div>`, item.id ? 'Save changes' : 'Add rate');
   document.querySelector('#modalForm').dataset.type = 'rate';
   document.querySelector('#modalForm').dataset.id = item.id || '';
-}
-function revenueAccessDenied() {
-  return `${pageHeader('Restricted module', 'Access denied', 'Revenue and profitability data is limited to Administrator and Manager roles.', '')}<div class="panel empty-state"><span class="large-icon">!</span><h2>Revenue Tracking is restricted</h2><p>Your role does not have permission to view revenue, profit, or food cost information.</p></div>`;
 }
 function reportHasClosedBills(rows) {
   return rows.some(item =>
@@ -8329,25 +8532,6 @@ function dailyRevenueChart(rows) {
     !reportHasClosedBills(rows),
     'No closed bills in this range.'
   );
-}
-function revenuePage() {
-  if (!canAccessRevenue()) return revenueAccessDenied();
-  const data = revenueDashboardData || {};
-  const loadingLabel = revenueDashboardError
-    ? 'Unavailable'
-    : revenueDashboardLoading || !revenueDashboardData ? 'Loading…' : null;
-  const errorPanel = revenueDashboardError
-    ? `<div class="panel error-state" role="alert">${esc(revenueDashboardError)} <button class="ghost-btn" data-action="retry-revenue-dashboard">Retry</button></div>`
-    : '';
-  return `${pageHeader('Revenue management', 'Management Revenue Dashboard', 'Today’s operating revenue snapshot from closed POS bills.', '<button class="ghost-btn" data-action="retry-revenue-dashboard">Refresh</button> <button class="primary-btn" data-view="reports">Open Reports & Analytics</button>')}
-    ${errorPanel}
-    <div class="metric-grid revenue-dashboard-kpis">
-      ${metric("Today's Revenue", loadingLabel || money(data.today_revenue), '₱', 'green-icon', 'Closed bills · Manila business date')}
-      ${metric('Closed Bills', loadingLabel || Number(data.closed_bill_count || 0).toLocaleString(), '▤', 'purple-icon', 'Today only')}
-      ${metric('Average Check', loadingLabel || money(data.average_check), '↗', 'orange-icon', 'Net revenue per closed bill')}
-      ${metric('Voided Amount', loadingLabel || money(data.voided_bill_amount), '!', 'red-icon', `${Number(data.voided_bill_count || 0).toLocaleString()} voided bills · excluded from revenue`)}
-    </div>
-    <div class="panel revenue-dashboard-guidance"><strong>Reporting workspace</strong><p>Use Reports & Analytics for date ranges, revenue trends, daily breakdowns, customer and shift analysis, and bill-level detail. This dashboard is a current-day summary, not a second reporting view.</p><button class="text-btn" data-view="reports">View detailed reports →</button></div>`;
 }
 function reservationsPage() {
   const reservations = all('reservations');
@@ -9158,36 +9342,11 @@ async function handleSubmit(form, submitter = null) {
     recipe: 'recipe.manage',
     production: 'production.log',
     waste: 'waste.log',
-    count: 'count.submit',
     rate: 'rates.manage',
     user: 'user.manage'
   }[type];
   if (requiredAction && !window.CostTrackLogic.canPerformInventoryAction(state.role, requiredAction)) {
     return toast('You do not have permission to perform this action.', 'error');
-  }
-  if (type === 'count') {
-    const stockItem = ingredient(data.ingredientId);
-    if (!stockItem) return toast('Select an available ingredient before recording a count.', 'error');
-    const expected = Number(form.elements.expected.value);
-    const currentStock = Number(stockItem.stock);
-    const actual = Number(data.actual);
-    if (!Number.isFinite(expected) || expected !== currentStock) {
-      return toast('Expected stock has changed. Select the ingredient again before recording the count.', 'error');
-    }
-    if (!Number.isFinite(actual) || actual < 0) {
-      return toast('Enter a valid actual quantity of zero or more.', 'error');
-    }
-    const variance = actual - expected;
-    if (variance !== 0) {
-      const quantityLabel = value => `${new Intl.NumberFormat('en-PH', { maximumFractionDigits: 4 }).format(value)} ${stockItem.unit}`;
-      const direction = variance < 0 ? 'shortage' : 'overage';
-      const confirmed = await confirmInApp(
-        `Expected stock is ${quantityLabel(expected)} and the counted quantity is ${quantityLabel(actual)} (${direction} of ${quantityLabel(Math.abs(variance))}). Recording this count immediately adjusts system stock to the counted quantity.`,
-        { title: 'Confirm count variance', confirmLabel: 'Record and adjust stock' }
-      );
-      if (!confirmed) return;
-    }
-    data.expected = expected;
   }
   if (['shift', 'shift-close', 'cash-movement', 'reservation-deposit', 'deposit-decision'].includes(type)) {
     try {
@@ -9560,9 +9719,92 @@ async function handleSubmit(form, submitter = null) {
   }
   const collections = {
     ingredient: 'ingredients', receiving: 'inventoryTransactions',
-    production: 'productionLogs', count: 'physicalCounts'
+    production: 'productionLogs'
   };
-  if (type === 'charge-item') {
+  if (type === 'pos-setting') {
+    if (!canManagePricing()) return toast('Only Administrators can configure POS rules.', 'error');
+    const setting = all('posSettings').find(item => item.id === editId);
+    if (!setting || !editablePosSettingKeys.includes(setting.key)) {
+      return toast('This POS setting is no longer available for editing.', 'error');
+    }
+    let value = String(data.value || '').trim();
+    const numericValue = Number(value);
+    if (setting.key === 'pos_service_charge_mode') {
+      if (!['none', 'percent', 'per_head'].includes(value)) {
+        return toast('Choose Off, Percentage, or Per guest for the service-charge mode.', 'error');
+      }
+    } else if (!Number.isFinite(numericValue) || numericValue < 0
+      || (setting.key === 'pos_max_shift_hours' && (!Number.isInteger(numericValue) || numericValue < 1 || numericValue > 72))
+      || (setting.key === 'pos_service_charge_percent' && numericValue > 100)
+      || (setting.key === 'pos_service_charge_per_head' && numericValue > 10000)) {
+      return toast('Enter a valid non-negative value within the allowed range for this POS rule.', 'error');
+    }
+    if (setting.key !== 'pos_service_charge_mode') value = String(numericValue);
+    await save('posSettings', all('posSettings').map(item =>
+      item.id === setting.id ? { ...item, value } : item
+    ));
+    successMessage = 'POS setting saved.';
+  } else if (type === 'package-tier') {
+    if (!canManagePricing()) return toast('Only Administrators can create or edit buffet packages.', 'error');
+    const code = String(data.code || '').trim().toUpperCase();
+    const name = String(data.name || '').trim();
+    const basePrice = Number(data.basePrice);
+    if (!/^[A-Z0-9][A-Z0-9_-]{0,39}$/.test(code) || !name
+      || !Number.isFinite(basePrice) || basePrice < 0 || basePrice > 1000000) {
+      return toast('Enter a valid package code, name, and price from ₱0 to ₱1,000,000.', 'error');
+    }
+    if (all('packageTiers').some(item => item.id !== editId && String(item.code || '').toUpperCase() === code)) {
+      return toast('That package code is already in use.', 'error');
+    }
+    const record = {
+      id: editId || id('PKG'),
+      code,
+      name,
+      defaultMealPeriod: ['All Day', 'Lunch', 'Dinner'].includes(data.defaultMealPeriod) ? data.defaultMealPeriod : 'All Day',
+      basePrice,
+      isActive: data.isActive === 'on',
+      notes: String(data.notes || '').trim()
+    };
+    await save('packageTiers', editId
+      ? all('packageTiers').map(item => item.id === editId ? { ...item, ...record } : item)
+      : [record, ...all('packageTiers')]);
+    successMessage = editId ? 'Buffet package updated.' : 'Buffet package created.';
+  } else if (type === 'discount') {
+    if (!canManagePricing()) return toast('Only Administrators can create or edit discounts.', 'error');
+    const code = String(data.code || '').trim().toUpperCase();
+    const name = String(data.name || '').trim();
+    const discountType = data.discountType;
+    const value = Number(data.value);
+    const minimumAmount = Number(data.minimumAmount);
+    const appliesTo = data.appliesTo;
+    if (!/^[A-Z0-9][A-Z0-9_-]{0,39}$/.test(code) || !name
+      || !['percent', 'fixed', 'waive'].includes(discountType)
+      || !Number.isFinite(value) || value < 0 || value > 1000000
+      || (discountType === 'percent' && value > 100)
+      || !Number.isFinite(minimumAmount) || minimumAmount < 0 || minimumAmount > 1000000
+      || !['bill', 'line', 'service_charge', 'package'].includes(appliesTo)) {
+      return toast('Enter valid promotion details. Percentage discounts cannot exceed 100%.', 'error');
+    }
+    if (all('discounts').some(item => item.id !== editId && String(item.code || '').toUpperCase() === code)) {
+      return toast('That promotion code is already in use.', 'error');
+    }
+    const record = {
+      id: editId || id('DISC'),
+      code,
+      name,
+      discountType,
+      value,
+      minimumAmount,
+      appliesTo,
+      isActive: data.isActive === 'on',
+      notes: String(data.notes || '').trim()
+    };
+    await save('discounts', editId
+      ? all('discounts').map(item => item.id === editId ? { ...item, ...record } : item)
+      : [record, ...all('discounts')]);
+    successMessage = editId ? 'Promotion updated.' : 'Promotion created.';
+  } else if (type === 'charge-item') {
+    if (!canManagePricing()) return toast('Only Administrators can create or edit additional charges.', 'error');
     const record = {
       id: editId || id('POSC'),
       code: String(data.code || '').trim(),
@@ -9581,6 +9823,7 @@ async function handleSubmit(form, submitter = null) {
     await save('chargeItems', editId ? all('chargeItems').map(item => item.id === editId ? { ...item, ...record } : item) : [record, ...all('chargeItems')]);
     successMessage = editId ? 'Charge item updated.' : 'Charge item created.';
   } else if (type === 'rate') {
+    if (!canManageRates()) return toast('Only Administrators can change buffet rates.', 'error');
     const record = { id: editId || id('RATE'), mealPeriod: data.mealPeriod, dayType: data.dayType, adultRate: Number(data.adultRate), childRate: Number(data.childRate), seniorPwdRate: Number(data.seniorPwdRate), effectiveFrom: data.effectiveFrom, effectiveTo: data.effectiveTo || null, isActive: data.isActive === 'true' };
     await save('buffetRates', editId ? all('buffetRates').map(item => item.id === editId ? { ...item, ...record } : item) : [record, ...all('buffetRates')]);
   } else if (type === 'walk-in') {
@@ -9891,6 +10134,7 @@ async function handleSubmit(form, submitter = null) {
     if (!ingredients.length) return toast('Add at least one inventory ingredient.', 'error');
     const record = {
       id: editId || id('rec'), name: recipeName, category: recipeCategory,
+      menuPrice: recipe(editId)?.menuPrice ?? 0,
       wastage: Number(data.wastage),
       batchYield: Number(data.batchYield), prepTarget: Number(data.prepTarget),
       prepNotes: data.prepNotes.trim(), isActive: form.elements.isActive.checked, ingredients
@@ -10250,6 +10494,7 @@ async function openUnresolvedBookingBill(reservationId) {
   billForm(bill);
 }
 function chargeItemForm(item = {}) {
+  if (!canManagePricing()) return toast('Only Administrators can create or edit additional charges.', 'error');
   const value = key => item?.[key] ?? '';
   const content = `<div class="form-grid"><label>Charge code<input name="code" value="${esc(value('code'))}" required></label><label>Charge name<input name="name" value="${esc(value('name'))}" required></label><label>Type<select name="type"><option value="food" ${value('type') === 'food' ? 'selected' : ''}>Food</option><option value="non_food" ${value('type') === 'non_food' ? 'selected' : ''}>Non-food</option><option value="service_charge" ${value('type') === 'service_charge' ? 'selected' : ''}>Service charge</option><option value="package" ${value('type') === 'package' ? 'selected' : ''}>Package</option><option value="deposit" ${value('type') === 'deposit' ? 'selected' : ''}>Deposit</option><option value="discount" ${value('type') === 'discount' ? 'selected' : ''}>Discount</option><option value="other" ${value('type') === 'other' || !value('type') ? 'selected' : ''}>Other</option></select></label><label>Category<input name="category" value="${esc(value('category') || 'General')}" required></label><label>Unit price<input name="unitPrice" type="number" min="0" step="0.01" value="${Number(value('unitPrice') || 0).toFixed(2)}" required></label><label>Default qty<input name="defaultQuantity" type="number" min="0.01" step="0.01" value="${Number(value('defaultQuantity') || 1).toFixed(2)}" required></label><label>Active<input name="isActive" type="checkbox" ${value('isActive') === false ? '' : 'checked'}></label><label>Food revenue<input name="isFoodRevenue" type="checkbox" ${value('isFoodRevenue') === false ? '' : 'checked'}></label><label>Package<input name="isPackage" type="checkbox" ${value('isPackage') ? 'checked' : ''}></label><label>Approval needed<input name="requiresApproval" type="checkbox" ${value('requiresApproval') ? 'checked' : ''}></label><label class="full">Notes<textarea name="notes" rows="3">${esc(value('notes'))}</textarea></label></div>`;
   modal(item.id ? 'Edit charge item' : 'Create charge item', content, item.id ? 'Save charge' : 'Create charge');
@@ -10259,6 +10504,79 @@ function chargeItemForm(item = {}) {
     input.closest('label').classList.add('checkbox-field');
   });
   if (item.id) form.dataset.id = item.id;
+}
+function packageTierForm(item = {}) {
+  if (!canManagePricing()) return toast('Only Administrators can create or edit buffet packages.', 'error');
+  const isEdit = Boolean(item.id);
+  const mealPeriods = ['All Day', 'Lunch', 'Dinner'];
+  modal(isEdit ? 'Edit buffet package' : 'Create buffet package',
+    `<div class="form-grid">
+      <label>Package code<input name="code" maxlength="40" pattern="[A-Za-z0-9][A-Za-z0-9_-]*" value="${esc(item.code || '')}" ${isEdit ? 'readonly' : ''} required><small class="field-help">Use a unique code. Existing reservations prevent changes to the package they reference.</small></label>
+      <label>Package name<input name="name" maxlength="100" value="${esc(item.name || '')}" required></label>
+      <label>Meal period<select name="defaultMealPeriod">${mealPeriods.map(period => `<option value="${period}" ${item.defaultMealPeriod === period || (!item.defaultMealPeriod && period === 'All Day') ? 'selected' : ''}>${period}</option>`).join('')}</select></label>
+      <label>Price per guest<input name="basePrice" type="number" min="0" max="1000000" step="0.01" value="${item.basePrice ?? ''}" required></label>
+      <label class="checkbox-field"><input name="isActive" type="checkbox" ${item.isActive === false ? '' : 'checked'}> Available for new bookings</label>
+      <label class="full">Notes<textarea name="notes" rows="2" maxlength="500">${esc(item.notes || '')}</textarea></label>
+    </div>`,
+    isEdit ? 'Save package' : 'Create package');
+  const form = document.querySelector('#modalForm');
+  form.dataset.type = 'package-tier';
+  if (isEdit) form.dataset.id = item.id;
+}
+function discountForm(item = {}) {
+  if (!canManagePricing()) return toast('Only Administrators can create or edit discounts.', 'error');
+  const isEdit = Boolean(item.id);
+  const discountTypes = [
+    ['percent', 'Percentage off'],
+    ['fixed', 'Fixed amount'],
+    ['waive', 'Full bill waiver']
+  ];
+  const applyTargets = [
+    ['bill', 'Entire bill'],
+    ['line', 'Selected item'],
+    ['service_charge', 'Service charge'],
+    ['package', 'Package']
+  ];
+  modal(isEdit ? 'Edit promotion' : 'Create promotion',
+    `<div class="form-grid">
+      <label>Promotion code<input name="code" maxlength="40" pattern="[A-Za-z0-9][A-Za-z0-9_-]*" value="${esc(item.code || '')}" ${isEdit ? 'readonly' : ''} required></label>
+      <label>Promotion name<input name="name" maxlength="100" value="${esc(item.name || '')}" required></label>
+      <label>Discount type<select name="discountType">${discountTypes.map(([value, label]) => `<option value="${value}" ${item.discountType === value || (!item.discountType && value === 'percent') ? 'selected' : ''}>${label}</option>`).join('')}</select></label>
+      <label>Value<input name="value" type="number" min="0" max="1000000" step="0.01" value="${item.value ?? ''}" required></label>
+      <label>Minimum bill amount<input name="minimumAmount" type="number" min="0" max="1000000" step="0.01" value="${item.minimumAmount ?? 0}" required></label>
+      <label>Applies to<select name="appliesTo">${applyTargets.map(([value, label]) => `<option value="${value}" ${item.appliesTo === value || (!item.appliesTo && value === 'bill') ? 'selected' : ''}>${label}</option>`).join('')}</select></label>
+      <label class="checkbox-field"><input name="isActive" type="checkbox" ${item.isActive === false ? '' : 'checked'}> Available to staff</label>
+      <label class="full">Notes<textarea name="notes" rows="2" maxlength="500">${esc(item.notes || '')}</textarea></label>
+      <p class="field-help full">Full bill waivers and 100% bill discounts enter the existing approval workflow when applied to a bill.</p>
+    </div>`,
+    isEdit ? 'Save promotion' : 'Create promotion');
+  const form = document.querySelector('#modalForm');
+  form.dataset.type = 'discount';
+  if (isEdit) form.dataset.id = item.id;
+}
+async function toggleApprovedPromotion(discountId, button) {
+  if (state.role !== 'Manager') return toast('Only Managers can enable or disable approved promotions.', 'error');
+  const discount = all('discounts').find(item => item.id === discountId);
+  if (!discount) return toast('This promotion is no longer available.', 'error');
+  const nextActive = discount.isActive === false;
+  if (!await confirmInApp(`${nextActive ? 'Enable' : 'Disable'} ${discount.name}?`, {
+    title: `${nextActive ? 'Enable' : 'Disable'} promotion`,
+    confirmLabel: nextActive ? 'Enable promotion' : 'Disable promotion'
+  })) return;
+  const restoreButton = setButtonBusy(button, nextActive ? 'Enabling…' : 'Disabling…');
+  if (!restoreButton) return;
+  try {
+    await save('discounts', all('discounts').map(item =>
+      item.id === discount.id ? { ...item, isActive: nextActive } : item
+    ));
+    toast(`Promotion ${nextActive ? 'enabled' : 'disabled'}.`);
+    render();
+  } catch (error) {
+    console.error('Promotion status could not be changed.', error);
+    toast(friendlyRpcError(error), 'error');
+  } finally {
+    restoreButton();
+  }
 }
 function billExtraLineMarkup(line = {}, disabled = false) {
   const allowedTypes = new Set(['food', 'non_food', 'other']);
@@ -10978,12 +11296,22 @@ async function showReservationDepositHistory(reservationId) {
 }
 function posSettingForm(setting) {
   if (state.role !== 'Administrator'
-    || !['pos_max_shift_hours', 'pos_extra_pax_rate'].includes(setting.key)) {
+    || !editablePosSettingKeys.includes(setting.key)) {
     return toast('Only an Administrator can change this POS setting.', 'error');
   }
-  const isHours = setting.key === 'pos_max_shift_hours';
-  modal(`Configure ${isHours ? 'maximum shift hours' : 'extra-pax rate'}`,
-    `<label>${isHours ? 'Hours before a long-shift alert' : 'Cash price per extra pax'}<input name="value" type="number" min="${isHours ? '1' : '0'}" ${isHours ? 'max="72"' : ''} step="${isHours ? '1' : '0.01'}" value="${esc(setting.value)}" required></label>`,
+  const settingLabels = {
+    pos_max_shift_hours: ['maximum shift duration', 'Hours before a long-shift alert'],
+    pos_extra_pax_rate: ['additional guest rate', 'Cash price per extra guest'],
+    pos_service_charge_mode: ['service charge calculation', 'Calculation mode'],
+    pos_service_charge_percent: ['service charge percentage', 'Percentage rate'],
+    pos_service_charge_per_head: ['service charge per guest', 'Amount per guest']
+  };
+  const [title, label] = settingLabels[setting.key];
+  const input = setting.key === 'pos_service_charge_mode'
+    ? `<select name="value"><option value="none" ${setting.value === 'none' ? 'selected' : ''}>Off</option><option value="percent" ${setting.value === 'percent' ? 'selected' : ''}>Percentage</option><option value="per_head" ${setting.value === 'per_head' ? 'selected' : ''}>Per guest</option></select>`
+    : `<input name="value" type="number" min="0" max="${setting.key === 'pos_max_shift_hours' ? '72' : setting.key === 'pos_service_charge_percent' ? '100' : setting.key === 'pos_service_charge_per_head' ? '10000' : '1000000'}" step="${setting.key === 'pos_max_shift_hours' ? '1' : '0.01'}" value="${esc(setting.value)}" required>`;
+  modal(`Configure ${title}`,
+    `<label>${label}${input}</label>`,
     'Save setting');
   const form = document.querySelector('#modalForm');
   form.dataset.type = 'pos-setting';
@@ -11361,6 +11689,11 @@ document.addEventListener('click', async event => {
     }
     return;
   }
+  if (action === 'refresh-pricing-history') {
+    if (state.role !== 'Administrator') return toast('Only Administrators can view pricing history.', 'error');
+    await loadPricingHistory(true);
+    return;
+  }
   if (action === 'record-deposit') {
     const reservation = all('reservations').find(item => item.id === actionElement.dataset.id);
     if (!all('shifts').some(shift => shift.status === 'Open')) {
@@ -11420,12 +11753,31 @@ document.addEventListener('click', async event => {
     });
   }
   if (action === 'new-charge-item') return chargeItemForm();
+  if (action === 'new-package-tier') return packageTierForm();
+  if (action === 'edit-package-tier') {
+    const packageTier = all('packageTiers').find(item => item.id === actionElement.dataset.id);
+    if (packageTier) return packageTierForm(packageTier);
+    return toast('This buffet package is no longer available.', 'error');
+  }
+  if (action === 'new-discount') return discountForm();
+  if (action === 'edit-discount') {
+    const discount = all('discounts').find(item => item.id === actionElement.dataset.id);
+    if (discount) return discountForm(discount);
+    return toast('This promotion is no longer available.', 'error');
+  }
+  if (action === 'toggle-approved-promotion') {
+    return toggleApprovedPromotion(actionElement.dataset.id, actionElement);
+  }
   if (action === 'edit-pos-setting') {
     const setting = all('posSettings').find(item => item.id === actionElement.dataset.id);
     if (setting) return posSettingForm(setting);
     return toast('This POS setting is no longer available.', 'error');
   }
-  if (action === 'edit-charge-item') return chargeItemForm(all('chargeItems').find(item => item.id === event.target.closest('[data-action]').dataset.id));
+  if (action === 'edit-charge-item') {
+    const chargeItem = all('chargeItems').find(item => item.id === actionElement.dataset.id);
+    if (chargeItem) return chargeItemForm(chargeItem);
+    return toast('This additional charge is no longer available.', 'error');
+  }
   if (action === 'open-rate') return rateForm();
   if (action === 'edit-rate') return rateForm(all('buffetRates').find(item => item.id === event.target.closest('[data-action]').dataset.id));
   if (action === 'deactivate-rate') {
@@ -12136,19 +12488,6 @@ document.addEventListener('change', event => {
     state.modalDirty = true;
     return;
   }
-  const form = event.target.closest('#modalForm[data-type="count"]');
-  if (!form || !event.target.matches('[name="ingredientId"]')) return;
-  const selectedProduct = ingredient(event.target.value);
-  const expectedStock = Number(selectedProduct?.stock);
-  form.elements.expected.value = Number.isFinite(expectedStock) ? String(expectedStock) : '';
-  form.elements.actual.value = '';
-  updatePhysicalCountPreview(form);
-});
-document.addEventListener('input', event => {
-  const form = event.target.closest('#modalForm[data-type="count"]');
-  if (form && event.target.matches('[name="actual"]')) updatePhysicalCountPreview(form);
-});
-document.addEventListener('change', event => {
   const form = event.target.closest('#modalForm[data-type="reservation"]');
   if (form && event.target.matches('[name="date"],[name="time"],[name="adults"],[name="seniorPwdCount"],[name="children"]')) {
     if (event.target.matches('[name="date"]')) refreshReservationTimeOptions(form);
@@ -12198,7 +12537,7 @@ async function syncWithSupabase() {
   const collectionsByRole = {
     Administrator: KEYS,
     Manager: KEYS.filter(key => key !== 'users'),
-    'Inventory Clerk': ['ingredients', 'inventoryTransactions', 'inventoryBatches', 'physicalCounts', 'wasteLogs', 'preparedFoodWasteLogs', 'notifications', 'auditLogs'],
+    'Inventory Clerk': ['ingredients', 'inventoryTransactions', 'inventoryBatches', 'wasteLogs', 'preparedFoodWasteLogs', 'notifications', 'auditLogs'],
     'Chef / Kitchen Staff': ['ingredients', 'inventoryBatches', 'recipes', 'productionLogs', 'wasteLogs', 'preparedFoodWasteLogs', 'notifications', 'auditLogs'],
     Receptionist: ['reservations', 'restaurantTables', 'buffetRates', 'chargeItems', 'packageTiers', 'discounts', 'posSettings', 'shifts', 'cashMovements', 'posBills', 'billLines', 'billPayments', 'reservationDeposits', 'billApprovals', 'notifications', 'auditLogs']
   };
@@ -12908,15 +13247,9 @@ function render({ preserveReportCharts = false } = {}) {
     app.innerHTML = '<section class="user-management-page"><div class="panel error-state" role="alert"><strong>Access denied.</strong><p>User Management is available to Administrators only.</p></div></section>';
     return;
   }
-  if (state.view === 'revenue' && !canAccessRevenue()) {
-    document.querySelector('#sidebar').innerHTML = nav();
-    renderShellChrome();
-    document.querySelector('#pageCrumb').textContent = 'Access denied';
-    app.innerHTML = revenueAccessDenied();
-    return;
-  }
   if (!canAccess(state.view)) {
     state.view = roleAccess[state.role][0];
+    window.history.replaceState(null, '', `#${state.view}`);
     syncActiveSidebarGroup(state.view);
   }
   if (['reservations', 'tables'].includes(state.view)
@@ -12926,13 +13259,13 @@ function render({ preserveReportCharts = false } = {}) {
   }
   document.querySelector('#sidebar').innerHTML = nav();
   renderShellChrome();
-  const moduleNames = { dashboard: 'Overview', notifications: 'System Management', 'activity-logs': 'System Management', ingredients: 'Inventory Management', receiving: 'Inventory Management', counts: 'Inventory Management', recipes: 'Kitchen Operations', production: 'Kitchen Operations', waste: 'Kitchen Operations', reservations: 'Front of House', calendar: 'Front of House', tables: 'Front of House', cashier: 'Front of House', shifts: 'Front of House', approvals: 'Front of House', revenue: 'Revenue Management', rates: 'Revenue Management', 'charge-catalog': 'Revenue Management', reports: 'Analytics & Reports', users: 'System Management' };
-  const pageNames = { dashboard: 'Dashboard', notifications: 'Notifications', 'activity-logs': 'Activity Log', ingredients: 'Ingredients', receiving: 'Receiving', recipes: 'Recipes', production: 'Buffet production', waste: 'Waste logs', counts: 'Physical count', reports: 'Reports & analytics', revenue: 'Revenue Tracking', rates: 'Buffet rates', 'charge-catalog': 'Charge catalog', users: 'User Management', reservations: 'Reservations', calendar: 'Tables / Calendar', tables: 'Table management', cashier: 'Cashier', shifts: 'Shifts', approvals: 'Approvals' };
+  const moduleNames = { dashboard: 'Overview', notifications: 'System Management', 'activity-logs': 'System Management', ingredients: 'Inventory Management', receiving: 'Inventory Management', recipes: 'Kitchen Operations', production: 'Kitchen Operations', waste: 'Kitchen Operations', reservations: 'Front of House', calendar: 'Front of House', tables: 'Front of House', cashier: 'Front of House', shifts: 'Front of House', approvals: 'Front of House', rates: 'Revenue Management', 'charge-catalog': 'Revenue Management', reports: 'Analytics & Reports', users: 'System Management' };
+  const pageNames = { dashboard: 'Dashboard', notifications: 'Notifications', 'activity-logs': 'Activity Log', ingredients: 'Ingredients', receiving: 'Receiving', recipes: 'Recipes', production: 'Buffet production', waste: 'Waste logs', reports: 'Reports & analytics', rates: 'Buffet rates', 'charge-catalog': 'Pricing & Billing Setup', users: 'User Management', reservations: 'Reservations', calendar: 'Tables / Calendar', tables: 'Table management', cashier: 'Cashier', shifts: 'Shifts', approvals: 'Approvals' };
   const activeGroup = sidebarGroups.find(group => group.items.some(([view]) => view === state.view));
   const crumbLabel = state.view === 'dashboard' ? 'Overview' : (moduleNames[state.view] || 'Workspace');
   const crumbTarget = activeGroup?.items.find(([view]) => canAccess(view))?.[0] || 'dashboard';
   document.querySelector('.breadcrumb').innerHTML = `<a class="crumb-parent" href="#${crumbTarget}" data-view="${crumbTarget}">${esc(crumbLabel)}</a><span aria-hidden="true">›</span><strong id="pageCrumb" tabindex="-1">${esc(pageNames[state.view] || state.view)}</strong>`;
-  const pages = { dashboard: roleDashboard, notifications: notificationCenterPage, 'activity-logs': activityLogsPage, ingredients: ingredientCardsPage, receiving: () => receivingPage(), recipes: recipeCardsPage, production: productionBoardPage, waste: () => logsPage('waste'), counts: () => countsPage(), reports: reportsPage, revenue: revenuePage, rates: () => ratesPage(), 'charge-catalog': chargeCatalogPage, cashier: cashierPage, shifts: shiftsPage, approvals: approvalsPage, users: () => usersPage(), reservations: reservationsPage, calendar: calendarPage, tables: tableManagementPage };
+  const pages = { dashboard: roleDashboard, notifications: notificationCenterPage, 'activity-logs': activityLogsPage, ingredients: ingredientCardsPage, receiving: () => receivingPage(), recipes: recipeCardsPage, production: productionBoardPage, waste: () => logsPage('waste'), reports: reportsPage, rates: () => ratesPage(), 'charge-catalog': chargeCatalogPage, cashier: cashierPage, shifts: shiftsPage, approvals: approvalsPage, users: () => usersPage(), reservations: reservationsPage, calendar: calendarPage, tables: tableManagementPage };
   const renderPage = pages[state.view];
   if (!renderPage) {
     console.error(`No page renderer is registered for "${state.view}".`);
@@ -12985,7 +13318,9 @@ function render({ preserveReportCharts = false } = {}) {
     app.innerHTML = `<div class="panel error-state" role="alert">Could not load ${esc(pageNames[state.view] || state.view)}. Please refresh the page. Check the browser console for details.</div>`;
     return;
   }
-  if (['dashboard', 'revenue'].includes(state.view) && canAccessRevenue()) loadRevenueDashboard();
+  if (state.view === 'dashboard' && canAccessRevenue()) loadRevenueDashboard();
+  if (state.view === 'charge-catalog' && state.role === 'Administrator'
+    && !state.pricingHistory.loaded && !state.pricingHistory.loading) loadPricingHistory();
   if (state.view === 'reservations' && state.unresolvedFocusId) {
     const target = [...app.querySelectorAll('[data-unresolved-reservation]')]
       .find(element => element.dataset.id === state.unresolvedFocusId);
@@ -13049,7 +13384,7 @@ function actions(type, itemId, item = null, { includeView = true } = {}) {
 
 async function deleteRecord(type, itemId, button = null) {
   if (type === 'ingredient') return manageProductLifecycle(itemId);
-  const mapping = { ingredient: 'ingredients', recipe: 'recipes', reservation: 'reservations', table: 'restaurantTables', transaction: 'inventoryTransactions', production: 'productionLogs', waste: 'wasteLogs', count: 'physicalCounts', user: 'users' };
+  const mapping = { ingredient: 'ingredients', recipe: 'recipes', reservation: 'reservations', table: 'restaurantTables', transaction: 'inventoryTransactions', production: 'productionLogs', waste: 'wasteLogs', user: 'users' };
   const key = mapping[type]; if (!key) return;
   if (!['Administrator', 'Manager'].includes(state.role)) return toast('Only Administrators and Managers can delete records.', 'error');
   const record = all(key).find(item => item.id === itemId);
@@ -13168,7 +13503,7 @@ async function loadRevenueDashboard(force = false) {
   const requestId = ++revenueDashboardRequest;
   revenueDashboardLoading = true;
   revenueDashboardError = '';
-  if (force && ['dashboard', 'revenue'].includes(state.view)) render();
+  if (force && state.view === 'dashboard') render();
   try {
     const data = await window.supabaseRecord.posRevenueReport('dashboard');
     if (requestId === revenueDashboardRequest) revenueDashboardData = data;
@@ -13187,7 +13522,7 @@ async function loadRevenueDashboard(force = false) {
         loadRevenueDashboard(true);
         return;
       }
-      if (['dashboard', 'revenue'].includes(state.view)) render();
+      if (state.view === 'dashboard') render();
     }
   }
 }
