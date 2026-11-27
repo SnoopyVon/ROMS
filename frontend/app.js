@@ -6621,6 +6621,7 @@ async function refreshPreparedWasteBatches(form, serviceDate) {
     select.disabled = form.elements.wasteType.value !== 'prepared';
     toast('Ready production batches could not be loaded for this date. You can still record prepared-food waste without linking a batch.', 'error');
   }
+}
 function newProductWizardDraft() {
   return {
     name: '',
@@ -7031,7 +7032,6 @@ document.addEventListener('click', event => {
   }
 });
 
-}
 async function openForm(type, item) {
   const requiredAction = {
     ingredient: 'product.manage',
