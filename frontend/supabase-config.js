@@ -1223,6 +1223,8 @@ window.supabaseRecord = {
         ...payload,
         reservation_date: payload.date,
         reservation_time: payload.time,
+        package_charge_item_id: payload.packageChargeItemId || null,
+        package_unit_price: payload.packageUnitPrice ?? null,
         adults: payload.adults ?? payload.guests,
         senior_pwd_count: payload.seniorPwdCount ?? payload.senior_pwd_count ?? 0,
         children: payload.children ?? 0
@@ -1230,6 +1232,23 @@ window.supabaseRecord = {
     });
     throwIfError(error);
     return data;
+  },
+  async listPublicReservationPackages() {
+    const { data, error } = await window.supabaseClient.rpc('public_list_reservation_packages');
+    throwIfError(error);
+    if (!Array.isArray(data)) throw new Error('The public reservation package service returned an invalid response.');
+    return data.map(item => {
+      if (item?.unit_price == null) {
+        throw new Error('The public reservation package service returned an invalid package.');
+      }
+      const unitPrice = Number(item?.unit_price);
+      if (typeof item?.id !== 'string' || !item.id.trim()
+        || typeof item?.name !== 'string' || !item.name.trim()
+        || !Number.isFinite(unitPrice) || unitPrice < 0) {
+        throw new Error('The public reservation package service returned an invalid package.');
+      }
+      return { id: item.id.trim(), name: item.name.trim(), unitPrice };
+    });
   },
   async sendPublicReservationReference(reference, email) {
     const { data, error } = await window.supabaseClient.functions.invoke(

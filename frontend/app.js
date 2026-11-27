@@ -3594,6 +3594,7 @@ function pricingHistorySection(history) {
 function chargeCatalogPage() {
   const chargeItems = all('chargeItems');
   const packageTiers = all('packageTiers');
+  const reservationPackageItems = chargeItems.filter(isReservationPackageCharge);
   const discounts = all('discounts');
   const settings = all('posSettings');
   const isAdministrator = canManagePricing();
@@ -3618,9 +3619,20 @@ function chargeCatalogPage() {
       <h3>${esc(packageName(item))}</h3>
       <div class="pricing-package-price">${money(item.basePrice || 0)}<span>per guest</span></div>
       <div class="pricing-package-availability"><span>Availability</span><strong>${available ? 'Available for bookings' : 'Not offered to staff'}</strong></div>
-      ${isAdministrator ? `<button type="button" class="ghost-btn compact-btn pricing-package-edit" data-action="edit-package-tier" data-id="${esc(item.id)}">Edit package</button>` : ''}
+      ${isAdministrator ? `<button type="button" class="ghost-btn compact-btn pricing-package-edit" data-action="edit-package-tier" data-id="${esc(item.id)}">Edit rate</button>` : ''}
     </article>`;
   }).join('') : '<p class="pricing-empty">No buffet packages are configured yet.</p>';
+  const reservationPackageRows = reservationPackageItems.length
+    ? reservationPackageItems.map(item => {
+      const available = active(item);
+      return `<tr>
+        <td data-label="Package item"><strong>${esc(item.name || 'Reservation package')}</strong><small>Used as the reservation bill item</small></td>
+        <td data-label="Price">${money(item.unitPrice || 0)}<small>per guest</small></td>
+        <td data-label="Status"><span class="pricing-status ${available ? 'is-active' : 'is-inactive'}">${available ? 'Active' : 'Inactive'}</span></td>
+        <td data-label="Actions">${isAdministrator ? `<button type="button" class="ghost-btn compact-btn" data-action="edit-charge-item" data-id="${esc(item.id)}" aria-label="Edit ${esc(item.name || 'reservation package')}">Edit</button>` : '—'}</td>
+      </tr>`;
+    }).join('')
+    : '<tr><td colspan="4" class="pricing-empty">No reservation package items are configured. Add one with Type set to Package and the Package option enabled.</td></tr>';
 
   const chargeTypeLabels = {
     food: 'Food item',
@@ -3768,11 +3780,19 @@ function chargeCatalogPage() {
       <section class="panel pricing-section" aria-labelledby="pricing-packages-title">
         <div class="pricing-section-heading">
           <span class="pricing-section-number">01</span>
-          <div><h2 id="pricing-packages-title">Buffet packages</h2><p>Guest rates used when reservations are priced and cashier bills are prepared.</p></div>
+          <div><h2 id="pricing-packages-title">Buffet rates</h2><p>These rates apply to cashier bills that do not use a reservation package.</p></div>
           <span class="pricing-section-count">${packageTiers.filter(active).length} active</span>
-          ${isAdministrator ? '<button type="button" class="ghost-btn compact-btn" data-action="new-package-tier">+ Add package</button>' : ''}
+          ${isAdministrator ? '<button type="button" class="ghost-btn compact-btn" data-action="new-package-tier">+ Add rate</button>' : ''}
         </div>
         <div class="pricing-package-grid">${packageCards}</div>
+        <div class="pricing-section-heading pricing-subsection-heading">
+          <div><h3>Reservation package items</h3><p>Each item’s catalog price is charged per guest; the guest counts on the reservation set the quantity.</p></div>
+          ${isAdministrator ? '<button type="button" class="ghost-btn compact-btn" data-action="new-charge-item">+ Add package item</button>' : ''}
+        </div>
+        <div class="pricing-table-scroll"><table class="data-table pricing-table">
+          <thead><tr><th>Package item</th><th>Price</th><th>Status</th><th>Actions</th></tr></thead>
+          <tbody>${reservationPackageRows}</tbody>
+        </table></div>
       </section>
       <section class="panel pricing-section" aria-labelledby="pricing-charges-title">
         <div class="pricing-section-heading">
@@ -3807,6 +3827,9 @@ function chargeCatalogPage() {
       ${isAdministrator ? pricingHistorySection(state.pricingHistory) : ''}
     </div>
   `;
+}
+function isReservationPackageCharge(charge) {
+  return charge.type === 'package' && charge.isPackage === true;
 }
 function cashierPage() {
   const bills = all('posBills')
@@ -7827,7 +7850,6 @@ function reservationCard(item, showRevenue = false) {
   const openBill = all('posBills').find(bill => bill.reservationId === item.id && bill.status === 'Open');
   const hasOpenShift = all('shifts').some(shift => shift.status === 'Open');
   const packageItem = all('chargeItems').find(charge => charge.id === item.packageChargeItemId);
-  const packageTier = all('packageTiers').find(tier => tier.id === item.packageTierId);
   const depositHistory = reservationDeposits.map(deposit => {
     const receipt = Number(deposit.receiptAmount || 0);
     const amount = Number(deposit.amount || 0);
@@ -7844,7 +7866,7 @@ function reservationCard(item, showRevenue = false) {
     ? `${money(revenueEstimate)} estimated buffet revenue`
     : 'No rate set';
   const primaryGuestSummary = `${totalGuests} guest${totalGuests === 1 ? '' : 's'}${item.actualCovers == null ? '' : ` · ${guestCount} actual`}${item.table ? ` · ${esc(item.table)}` : ''}`;
-  const details = `<small class="reservation-card-time"><strong>${esc(item.time || 'Time not set')}${endTime ? `–${esc(endTime)}` : ''}</strong> · ${esc(reservationMealPeriod(item))}</small><span class="status ${reservationStatusClass(item.status)}">${esc(item.status)}</span><span class="tag">${item.type === 'Walk-in' ? 'Walk-in' : 'Reservation'}</span>${historyLabel}<b>${esc(reservationDisplayName(item))}</b><small class="reservation-card-primary-summary">${primaryGuestSummary}</small><span class="reservation-card-secondary-details">${packageItem && packageTier ? `<small>Package: ${esc(packageItem.name)} · ${esc(packageTier.name)} × ${Number(item.packagePaxCount || 0)} pax</small>` : ''}${heldTotal ? `<small>Held deposit: ${money(heldTotal)}</small>` : ''}${depositHistory}${item.seatedAt ? `<small>Seated ${new Date(item.seatedAt).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}</small>` : ''}${stayLimitReached ? '<small class="reservation-stay-warning" role="status">Two-hour limit reached</small>' : ''}${item.completedAt ? `<small>Completed ${new Date(item.completedAt).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}</small>` : ''}${shiftHint}${canAccessRevenue() && item.status === 'Completed' && !hasRevenue ? '<small class="report-disclaimer">No revenue entry yet</small>' : ''}${showRevenue && canAccessRevenue() ? `<em>${esc(rateLabel)}</em>` : ''}</span>`;
+  const details = `<small class="reservation-card-time"><strong>${esc(item.time || 'Time not set')}${endTime ? `–${esc(endTime)}` : ''}</strong> · ${esc(reservationMealPeriod(item))}</small><span class="status ${reservationStatusClass(item.status)}">${esc(item.status)}</span><span class="tag">${item.type === 'Walk-in' ? 'Walk-in' : 'Reservation'}</span>${historyLabel}<b>${esc(reservationDisplayName(item))}</b><small class="reservation-card-primary-summary">${primaryGuestSummary}</small><span class="reservation-card-secondary-details">${packageItem ? `<small>Package: ${esc(packageItem.name)} · ${Number(item.packagePaxCount || 0)} guests × ${money(packageItem.unitPrice || 0)}</small>` : ''}${heldTotal ? `<small>Held deposit: ${money(heldTotal)}</small>` : ''}${depositHistory}${item.seatedAt ? `<small>Seated ${new Date(item.seatedAt).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}</small>` : ''}${stayLimitReached ? '<small class="reservation-stay-warning" role="status">Two-hour limit reached</small>' : ''}${item.completedAt ? `<small>Completed ${new Date(item.completedAt).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}</small>` : ''}${shiftHint}${canAccessRevenue() && item.status === 'Completed' && !hasRevenue ? '<small class="report-disclaimer">No revenue entry yet</small>' : ''}${showRevenue && canAccessRevenue() ? `<em>${esc(rateLabel)}</em>` : ''}</span>`;
   const lifecycleActions = isPastReservation
     ? item.status === 'Seated'
       ? `${openBill
@@ -7980,7 +8002,7 @@ function refreshReservationTimeOptions(form) {
 function reservationForm(item = {}, defaults = {}) {
   const isPastReservation = Boolean(item.id && item.date && item.date < today());
   if (!isPastReservation) {
-    const packageItems = all('chargeItems').filter(charge => charge.type === 'package' && charge.isPackage && charge.isActive !== false);
+    const packageItems = all('chargeItems').filter(charge => isReservationPackageCharge(charge) && charge.isActive !== false);
     state.reservationWizard = {
       step: 1,
       item,
@@ -7999,8 +8021,6 @@ function reservationForm(item = {}, defaults = {}) {
         table: item.table || '',
         occasion: item.occasion || '',
         packageChargeItemId: item.packageChargeItemId || '',
-        packageTierId: item.packageTierId || '',
-        packagePaxCount: item.packagePaxCount || '',
         packageOverrideReason: item.packageOverrideReason || '',
         source: item.source || '',
         preference: item.preference || 'Any available table',
@@ -8028,10 +8048,8 @@ function reservationForm(item = {}, defaults = {}) {
     reservationId: item.id
   });
   const timeOptions = reservationTimeOptionsMarkup(reservationDate, selectedTime, item);
-  const packageItems = all('chargeItems').filter(charge => charge.type === 'package' && charge.isPackage && charge.isActive !== false);
-  const packageTiers = all('packageTiers').filter(tier => tier.isActive !== false);
-  const packageOptions = packageItems.map(charge => `<option value="${esc(charge.id)}" ${item.packageChargeItemId === charge.id ? 'selected' : ''}>${esc(charge.name)}</option>`).join('');
-  const tierOptions = packageTiers.map(tier => `<option value="${esc(tier.id)}" ${item.packageTierId === tier.id ? 'selected' : ''}>${esc(tier.name)} · ${money(tier.basePrice)} / pax</option>`).join('');
+  const packageItems = all('chargeItems').filter(charge => isReservationPackageCharge(charge) && charge.isActive !== false);
+  const packageOptions = packageItems.map(charge => `<option value="${esc(charge.id)}" ${item.packageChargeItemId === charge.id ? 'selected' : ''}>${esc(charge.name)} · ${money(charge.unitPrice || 0)} / guest</option>`).join('');
   const receptionistWalkIn = item.type === 'Walk-in' && state.role === 'Receptionist';
   const packageDisabled = isPastReservation || receptionistWalkIn ? 'disabled' : '';
   const packageOverrideField = item.type === 'Walk-in' && ['Manager', 'Administrator'].includes(state.role)
@@ -8039,8 +8057,8 @@ function reservationForm(item = {}, defaults = {}) {
     : '';
   const packageRuleHelp = receptionistWalkIn
     ? 'Event packages cannot be added to Walk-ins by Receptionists. A Manager or Administrator must enter an override reason.'
-    : 'Package price is charged as food revenue. Additional guests are suggested on the bill.';
-  const packageSection = `<fieldset class="product-form-section"><legend>Package booking (optional)</legend><div class="form-grid"><label>Package<select name="packageChargeItemId" ${packageDisabled}><option value="">No package</option>${packageOptions}</select></label><label>Package tier<select name="packageTierId" ${packageDisabled}><option value="">Choose a tier</option>${tierOptions}</select></label><label>Booked pax<input name="packagePaxCount" type="number" min="1" max="1000" step="1" value="${esc(item.packagePaxCount || '')}" ${packageDisabled}></label>${packageOverrideField}</div><small class="field-help">${packageRuleHelp}</small></fieldset>`;
+    : 'Choose a package from Pricing & Billing Setup. Its catalog price is charged per guest; the guest counts above set the quantity.';
+  const packageSection = `<fieldset class="product-form-section"><legend>Package booking (optional)</legend><div class="form-grid"><label>Package<select name="packageChargeItemId" ${packageDisabled}><option value="">No package</option>${packageOptions}</select></label>${packageOverrideField}</div><small class="field-help">${packageRuleHelp}</small></fieldset>`;
   const historyNotice = isPastReservation
     ? `<div class="reservation-history-notice"><strong>${canCorrectPast ? 'Historical correction' : 'Past reservation · view only'}</strong><span>${canCorrectPast ? 'Only the guest name, contact details, occasion, seating preference, and special-request notes can be corrected. Date, time, party size, table, and status are locked. Your reason is recorded in the audit log.' : 'Past bookings are kept for reference. Eligible unresolved bookings are handled from the Unresolved list.'}</span></div>`
     : '';
@@ -8155,7 +8173,7 @@ function reservationWizardHiddenFields(excludedNames = []) {
   const fields = [
     'id', 'status', 'type', 'name', 'email', 'phone', 'date', 'time',
     'adults', 'seniorPwdCount', 'children', 'table', 'occasion',
-    'packageChargeItemId', 'packageTierId', 'packagePaxCount',
+    'packageChargeItemId',
     'packageOverrideReason', 'source', 'preference', 'request'
   ];
   return fields.filter(name => !excludedNames.includes(name))
@@ -8183,10 +8201,7 @@ function renderReservationWizard() {
   const sourceOptions = ['', 'Website', 'Phone', 'Facebook', 'Walk-in', 'Other']
     .map(source => `<option value="${esc(source)}" ${String(draft.source || '') === source ? 'selected' : ''}>${source || 'Not specified'}</option>`).join('');
   const packageOptions = wizard.packageItems.map(charge =>
-    `<option value="${esc(charge.id)}" ${draft.packageChargeItemId === charge.id ? 'selected' : ''}>${esc(charge.name)}</option>`
-  ).join('');
-  const tierOptions = all('packageTiers').filter(tier => tier.isActive !== false).map(tier =>
-    `<option value="${esc(tier.id)}" ${draft.packageTierId === tier.id ? 'selected' : ''}>${esc(tier.name)} · ${money(tier.basePrice)} / pax</option>`
+    `<option value="${esc(charge.id)}" ${draft.packageChargeItemId === charge.id ? 'selected' : ''}>${esc(charge.name)} · ${money(charge.unitPrice || 0)} / guest</option>`
   ).join('');
   const receptionistWalkIn = draft.type === 'Walk-in' && state.role === 'Receptionist';
   const packageDisabled = receptionistWalkIn ? 'disabled' : '';
@@ -8216,8 +8231,8 @@ function renderReservationWizard() {
           : '<span class="is-success">Table can accommodate this party.</span>';
     content += `<section class="reservation-wizard-panel"><div class="reservation-wizard-heading"><div><p class="eyebrow">Step 2 of 4</p><h3>Select a table</h3></div><p>${partySize} guests · ${esc(reservationDateLabel(draft.date))} at ${esc(draft.time || 'time not set')}</p></div><div class="reservation-capacity-feedback" aria-live="polite">${feedback}</div><div class="table-choice-grid">${reservationTableCardsMarkup({ date: draft.date, time: draft.time, partySize, reservationId: draft.id, selectedTableId: draft.table })}</div><button type="button" class="ghost-btn reservation-unassigned-button" data-action="reservation-wizard-table" data-table-id="" aria-pressed="${!draft.table}">Leave unassigned</button></section>${hidden(excluded)}`;
   } else if (step === 3) {
-    excluded = ['occasion', 'packageChargeItemId', 'packageTierId', 'packagePaxCount', 'packageOverrideReason', 'source', 'preference', 'request'];
-    content += `<section class="reservation-wizard-panel"><div class="reservation-wizard-heading"><div><p class="eyebrow">Step 3 of 4</p><h3>Reservation extras</h3></div><p>Optional information can be added now or left blank.</p></div><div class="form-grid"><label>Occasion<input name="occasion" value="${esc(draft.occasion)}"></label><label>Source<select name="source">${sourceOptions}</select></label><label>Seating preference<input name="preference" value="${esc(draft.preference)}"></label><label>Package<select name="packageChargeItemId" ${packageDisabled}><option value="">No package booked</option>${packageOptions}</select></label><label>Package tier<select name="packageTierId" ${packageDisabled}><option value="">Choose a tier</option>${tierOptions}</select></label><label>Booked pax<input name="packagePaxCount" type="number" min="1" max="1000" step="1" value="${esc(draft.packagePaxCount)}" ${packageDisabled}></label>${packageOverrideField}<label class="full">Special requests<textarea name="request">${esc(draft.request)}</textarea></label></div><small class="field-help">${receptionistWalkIn ? 'Event packages cannot be added to Walk-ins by Receptionists. A Manager or Administrator must enter an override reason.' : 'Package price is charged as food revenue. Additional guests are suggested on the bill.'}</small></section>${hidden(excluded)}`;
+    excluded = ['occasion', 'packageChargeItemId', 'packageOverrideReason', 'source', 'preference', 'request'];
+    content += `<section class="reservation-wizard-panel"><div class="reservation-wizard-heading"><div><p class="eyebrow">Step 3 of 4</p><h3>Reservation extras</h3></div><p>Optional information can be added now or left blank.</p></div><div class="form-grid"><label>Occasion<input name="occasion" value="${esc(draft.occasion)}"></label><label>Source<select name="source">${sourceOptions}</select></label><label>Seating preference<input name="preference" value="${esc(draft.preference)}"></label><label>Package<select name="packageChargeItemId" ${packageDisabled}><option value="">No package booked</option>${packageOptions}</select></label>${packageOverrideField}<label class="full">Special requests<textarea name="request">${esc(draft.request)}</textarea></label></div><small class="field-help">${receptionistWalkIn ? 'Event packages cannot be added to Walk-ins by Receptionists. A Manager or Administrator must enter an override reason.' : 'Package price comes from Pricing & Billing Setup. The guest counts on Step 1 determine the package quantity.'}</small></section>${hidden(excluded)}`;
   } else {
     excluded = [];
     const table = draft.table ? all('restaurantTables').find(entry => entry.id === draft.table) : null;
@@ -8231,7 +8246,6 @@ function renderReservationWizard() {
       ['Table', table ? `${table.id} · ${Number(table.seats)} seats` : 'Unassigned'],
       ['Occasion', draft.occasion || 'Not specified'],
       ['Package', draft.packageChargeItemId ? wizard.packageItems.find(entry => entry.id === draft.packageChargeItemId)?.name || 'Selected package' : 'No package booked'],
-      ['Package tier', draft.packageTierId ? all('packageTiers').find(entry => entry.id === draft.packageTierId)?.name || 'Selected tier' : 'Not specified'],
       ['Source', draft.source || 'Not specified'],
       ['Seating preference', draft.preference || 'Not specified'],
       ['Special requests', draft.request || 'None']
@@ -9151,15 +9165,11 @@ async function handleSubmit(form, submitter = null) {
         return toast('Choose a table that is available and can accommodate this party, or leave the reservation unassigned.', 'error');
       }
     } else if (currentStep === 3) {
-      const hasAnyPackageDetail = Boolean(
-        wizard.draft.packageChargeItemId || wizard.draft.packageTierId || wizard.draft.packagePaxCount
-      );
-      if (hasAnyPackageDetail
-        && (!wizard.draft.packageChargeItemId || !wizard.draft.packageTierId
-          || !Number.isInteger(Number(wizard.draft.packagePaxCount))
-          || Number(wizard.draft.packagePaxCount) < 1
-          || Number(wizard.draft.packagePaxCount) > 1000)) {
-        return toast('Choose a package and tier and enter a booked pax count between 1 and 1,000.', 'error');
+      const partySize = Number(wizard.draft.adults || 0)
+        + Number(wizard.draft.seniorPwdCount || 0)
+        + Number(wizard.draft.children || 0);
+      if (wizard.draft.packageChargeItemId && (!Number.isInteger(partySize) || partySize < 1 || partySize > 1000)) {
+        return toast('A package requires between 1 and 1,000 guests. Set the guest counts on Step 1.', 'error');
       }
     }
     if (currentStep < 4) {
@@ -9965,19 +9975,12 @@ async function handleSubmit(form, submitter = null) {
       const packageChargeItemId = data.packageChargeItemId === undefined
         ? String(existing?.packageChargeItemId || '')
         : String(data.packageChargeItemId || '');
-      const packageTierId = data.packageTierId === undefined
-        ? String(existing?.packageTierId || '')
-        : String(data.packageTierId || '');
-      const packagePaxValue = data.packagePaxCount === undefined
-        ? existing?.packagePaxCount
-        : data.packagePaxCount;
-      const packagePaxCount = packagePaxValue === '' || packagePaxValue == null
-        ? null
-        : Number(packagePaxValue);
-      if ((packageChargeItemId || packageTierId || packagePaxCount != null)
-        && (!packageChargeItemId || !packageTierId || !Number.isInteger(packagePaxCount) || packagePaxCount < 1 || packagePaxCount > 1000)) {
+      let packageBooking;
+      try {
+        packageBooking = window.CostTrackLogic.buildReservationPackageBooking(packageChargeItemId, counts);
+      } catch (error) {
         restoreReservationSubmit();
-        return toast('Choose a package and tier and enter a booked pax count between 1 and 1,000.', 'error');
+        return toast(error.message, 'error');
       }
       if (data.table) {
         const selectedTable = all('restaurantTables').find(table => table.id === data.table);
@@ -10008,9 +10011,7 @@ async function handleSubmit(form, submitter = null) {
         children: counts.children,
         guests: counts.total,
         source: data.source || '',
-        packageChargeItemId,
-        packageTierId,
-        packagePaxCount,
+        ...packageBooking,
         packageOverrideReason: data.packageOverrideReason === undefined
           ? String(existing?.packageOverrideReason || '')
           : String(data.packageOverrideReason || '').trim(),
@@ -10496,7 +10497,7 @@ async function openUnresolvedBookingBill(reservationId) {
 function chargeItemForm(item = {}) {
   if (!canManagePricing()) return toast('Only Administrators can create or edit additional charges.', 'error');
   const value = key => item?.[key] ?? '';
-  const content = `<div class="form-grid"><label>Charge code<input name="code" value="${esc(value('code'))}" required></label><label>Charge name<input name="name" value="${esc(value('name'))}" required></label><label>Type<select name="type"><option value="food" ${value('type') === 'food' ? 'selected' : ''}>Food</option><option value="non_food" ${value('type') === 'non_food' ? 'selected' : ''}>Non-food</option><option value="service_charge" ${value('type') === 'service_charge' ? 'selected' : ''}>Service charge</option><option value="package" ${value('type') === 'package' ? 'selected' : ''}>Package</option><option value="deposit" ${value('type') === 'deposit' ? 'selected' : ''}>Deposit</option><option value="discount" ${value('type') === 'discount' ? 'selected' : ''}>Discount</option><option value="other" ${value('type') === 'other' || !value('type') ? 'selected' : ''}>Other</option></select></label><label>Category<input name="category" value="${esc(value('category') || 'General')}" required></label><label>Unit price<input name="unitPrice" type="number" min="0" step="0.01" value="${Number(value('unitPrice') || 0).toFixed(2)}" required></label><label>Default qty<input name="defaultQuantity" type="number" min="0.01" step="0.01" value="${Number(value('defaultQuantity') || 1).toFixed(2)}" required></label><label>Active<input name="isActive" type="checkbox" ${value('isActive') === false ? '' : 'checked'}></label><label>Food revenue<input name="isFoodRevenue" type="checkbox" ${value('isFoodRevenue') === false ? '' : 'checked'}></label><label>Package<input name="isPackage" type="checkbox" ${value('isPackage') ? 'checked' : ''}></label><label>Approval needed<input name="requiresApproval" type="checkbox" ${value('requiresApproval') ? 'checked' : ''}></label><label class="full">Notes<textarea name="notes" rows="3">${esc(value('notes'))}</textarea></label></div>`;
+  const content = `<div class="form-grid"><label>Charge code<input name="code" value="${esc(value('code'))}" required></label><label>Charge name<input name="name" value="${esc(value('name'))}" required></label><label>Type<select name="type"><option value="food" ${value('type') === 'food' ? 'selected' : ''}>Food</option><option value="non_food" ${value('type') === 'non_food' ? 'selected' : ''}>Non-food</option><option value="service_charge" ${value('type') === 'service_charge' ? 'selected' : ''}>Service charge</option><option value="package" ${value('type') === 'package' ? 'selected' : ''}>Package</option><option value="deposit" ${value('type') === 'deposit' ? 'selected' : ''}>Deposit</option><option value="discount" ${value('type') === 'discount' ? 'selected' : ''}>Discount</option><option value="other" ${value('type') === 'other' || !value('type') ? 'selected' : ''}>Other</option></select></label><label>Category<input name="category" value="${esc(value('category') || 'General')}" required></label><label>Unit price<input name="unitPrice" type="number" min="0" step="0.01" value="${Number(value('unitPrice') || 0).toFixed(2)}" required></label><label>Default qty<input name="defaultQuantity" type="number" min="0.01" step="0.01" value="${Number(value('defaultQuantity') || 1).toFixed(2)}" required></label><label>Active<input name="isActive" type="checkbox" ${value('isActive') === false ? '' : 'checked'}></label><label>Food revenue<input name="isFoodRevenue" type="checkbox" ${value('isFoodRevenue') === false ? '' : 'checked'}></label><label>Package<input name="isPackage" type="checkbox" ${value('isPackage') ? 'checked' : ''}></label><small class="field-help full">For reservations, set Type to Package and enable this option. The selected buffet tier determines the per-person price.</small><label>Approval needed<input name="requiresApproval" type="checkbox" ${value('requiresApproval') ? 'checked' : ''}></label><label class="full">Notes<textarea name="notes" rows="3">${esc(value('notes'))}</textarea></label></div>`;
   modal(item.id ? 'Edit charge item' : 'Create charge item', content, item.id ? 'Save charge' : 'Create charge');
   const form = document.querySelector('#modalForm');
   form.dataset.type = 'charge-item';
@@ -10980,7 +10981,6 @@ function renderBillBuffetScreen() {
   const kids = Number(wizard.kidsCount || 0);
   const comped = Number(wizard.compedCount || 0);
   const packageItem = all('chargeItems').find(item => item.id === reservation.packageChargeItemId);
-  const packageTier = all('packageTiers').find(tier => tier.id === reservation.packageTierId);
   const seatedCovers = Number(reservation.actualCovers || reservation.guests || 0);
   const extraPax = packageItem ? Math.max(0, seatedCovers - Number(reservation.packagePaxCount || 0)) : 0;
   const seatedAdults = Number(reservation.adults || 0);
@@ -11017,8 +11017,8 @@ function renderBillBuffetScreen() {
     ${countEditor}
     <p class="pos-wizard-warning" data-wizard-count-warning role="status" ${mismatch ? '' : 'hidden'}>Headcount differs from seating. The difference will be noted on the bill.</p>
     ${wizard.billId ? '<button type="button" class="ghost-btn compact-btn pos-skip-review" data-action="wizard-skip-to-review">Skip to review</button>' : ''}
-    <section class="pos-buffet-rates"><div class="panel-title">Buffet and rates</div><div class="pos-rate-grid"><span>Adult<strong>${money(adultRate)} each</strong></span><span>Senior/PWD<strong>${money(seniorRate)} each</strong></span><span>Kids<strong>${money(kidsRate)} each</strong></span><span>Comped<strong>₱0.00 each</strong></span></div></section>
-    ${packageItem && packageTier ? `<section class="pos-package-card"><strong>${esc(packageItem.name)}</strong><span>${esc(packageTier.name)} · ${Number(reservation.packagePaxCount || 0)} pax</span>${extraPax > 0 ? `<p class="pos-wizard-warning">Actual guests exceed package pax by ${extraPax}. Extra-pax charging may be available on save.</p>` : ''}</section>` : '<section class="pos-package-card is-unbooked"><strong>No package booked</strong><span>Buffet rates apply.</span></section>'}
+    ${packageItem ? '' : `<section class="pos-buffet-rates"><div class="panel-title">Buffet rates</div><div class="pos-rate-grid"><span>Adult<strong>${money(adultRate)} each</strong></span><span>Senior/PWD<strong>${money(seniorRate)} each</strong></span><span>Kids<strong>${money(kidsRate)} each</strong></span><span>Comped<strong>₱0.00 each</strong></span></div></section>`}
+    ${packageItem ? `<section class="pos-package-card"><strong>${esc(packageItem.name)}</strong><span>${Number(reservation.packagePaxCount || 0)} guests × ${money(packageItem.unitPrice || 0)} each · ${money(Number(reservation.packagePaxCount || 0) * Number(packageItem.unitPrice || 0))}</span>${extraPax > 0 ? `<p class="pos-wizard-warning">Actual guests exceed the reserved guest count by ${extraPax}. Extra-pax charging may be available on save.</p>` : ''}</section>` : '<section class="pos-package-card is-unbooked"><strong>No package booked</strong><span>Buffet rates apply.</span></section>'}
   </div>`;
 }
 function legacyBillForm(item = {}) {
@@ -11083,12 +11083,9 @@ function legacyBillForm(item = {}) {
   const selectedPackageItem = selectedReservation?.packageChargeItemId
     ? all('chargeItems').find(charge => charge.id === selectedReservation.packageChargeItemId)
     : null;
-  const selectedPackageTier = selectedReservation?.packageTierId
-    ? all('packageTiers').find(tier => tier.id === selectedReservation.packageTierId)
-    : null;
   const reservationPrefill = !editing && selectedReservation
-    ? `<section class="panel pos-reservation-prefill"><strong>Reservation prefill</strong><div>${selectedPackageItem && selectedPackageTier
-      ? `Package line: ${esc(selectedPackageItem.name)} · ${esc(selectedPackageTier.name)} × ${Number(selectedReservation.packagePaxCount || 0)} pax · ${money(Number(selectedPackageTier.basePrice || 0) * Number(selectedReservation.packagePaxCount || 0))} (server adds this on save).`
+    ? `<section class="panel pos-reservation-prefill"><strong>Reservation prefill</strong><div>${selectedPackageItem
+      ? `Package line: ${esc(selectedPackageItem.name)} × ${Number(selectedReservation.packagePaxCount || 0)} guests · ${money(Number(selectedPackageItem.unitPrice || 0))} each · ${money(Number(selectedPackageItem.unitPrice || 0) * Number(selectedReservation.packagePaxCount || 0))} (server adds this on save).`
       : 'No package is booked.'}</div><div>Held deposit: ${money(heldReservationDepositTotal)}${heldReservationDepositTotal ? ' (a payment, applied at close; not a discount)' : ''}</div><div>Table: ${esc(selectedReservation.table || 'None assigned')}</div></section>`
     : '';
   const content = `<p class="field-help">${editing ? `Bill ${esc(item.billNumber)} · ${esc(item.status)}${item.createdAt ? ` · Created ${esc(formatOperationalDateTime(item.createdAt))}` : ''}` : 'Cash-only billing. Sales do not deduct inventory. Comped guests count as served at zero.'}</p>
@@ -14340,12 +14337,15 @@ document.addEventListener('submit', async event => {
   if (form.dataset.type === 'reservation' && form.dataset.reservationType === 'Walk-in'
     && form.elements.packageChargeItemId && !form.elements.packageChargeItemId.disabled) {
     const packageChargeItemId = form.elements.packageChargeItemId?.value || '';
-    const packageTierId = form.elements.packageTierId?.value || '';
-    const packagePaxCount = form.elements.packagePaxCount?.value || '';
+    const packagePaxCount = packageChargeItemId
+      ? ['adults', 'seniorPwdCount', 'children'].reduce(
+        (total, name) => total + Number(form.elements[name]?.value || 0), 0
+      )
+      : null;
     const existing = all('reservations').find(item => item.id === form.dataset.id);
     const packageChanged = packageChargeItemId !== String(existing?.packageChargeItemId || '')
-      || packageTierId !== String(existing?.packageTierId || '')
-      || packagePaxCount !== String(existing?.packagePaxCount || '');
+      || String(existing?.packageTierId || '') !== ''
+      || packagePaxCount !== (existing?.packagePaxCount == null ? null : Number(existing.packagePaxCount));
     if (packageChargeItemId && packageChanged) {
       if (!['Manager', 'Administrator'].includes(state.role)) {
         showFieldError(form.elements.packageChargeItemId, 'Only a Manager or Administrator can override the Walk-in package rule.');

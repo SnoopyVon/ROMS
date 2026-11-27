@@ -124,6 +124,7 @@ RPC functions used by the application:
 | `costtrack_product_lifecycle` | Administrator-only product usage inspection, hard delete, deactivation, and reactivation |
 | `save_recipe` | Create or update a recipe |
 | `public_create_reservation` | Create a public reservation |
+| `public_list_reservation_packages` | List active public reservation packages and catalog prices |
 | `public_get_reservation_status` | Retrieve public reservation status |
 | `pos_reservation_deposit_history` | Read a reservation’s deposit and action history |
 | `pos_list_unresolved_stale_bookings` | Read past unresolved bookings for Front of House roles |
@@ -150,6 +151,7 @@ Full RPC endpoint inventory:
 | `/rest/v1/rpc/costtrack_product_lifecycle` | Inspect or change product lifecycle with database authorization and audit |
 | `/rest/v1/rpc/save_recipe` | Validate and save a recipe and its ingredients |
 | `/rest/v1/rpc/public_create_reservation` | Create a reservation from the public booking page |
+| `/rest/v1/rpc/public_list_reservation_packages` | List active packages for the public booking page |
 | `/rest/v1/rpc/public_get_reservation_status` | Return public status for a reservation |
 | `/rest/v1/rpc/pos_reservation_deposit_history` | Read reservation deposits and audit actions |
 | `/rest/v1/rpc/pos_list_unresolved_stale_bookings` | Return unresolved past bookings with bill and held-deposit summaries |
@@ -204,7 +206,7 @@ The wizard UI calls only existing POS RPCs: `pos_save_bill_phase3` for party, co
 
 Screen 3 saves catalog extras, the selected bill discount and reason, optional extra-pax charging, and notes using the existing `pos_save_bill_phase3` adapter and unchanged RPC arguments. Screen 4 reads the saved bill/lines returned by that RPC and requests deposit and balance values from `pos_bill_close_preview`. The UI does not calculate authoritative bill totals. Final cash payment and closure use the existing `pos_close_bill_phase3` adapter with the payment idempotency key; approval, eligible deposit application, final change, and close status remain database-controlled. No new endpoint, RPC, query, migration, or database rule is introduced. After success, the browser updates returned records locally, refreshes related collections separately, and attempts the existing billing statement print.
 
-Migration 013 also adds database guards for event packages attached to Walk-ins. A Manager or Administrator must provide a 10–500 character reason when adding or changing the package booking; the actor, reason, package, tier, pax, and timestamp are written to `pos_walkin_package_overrides`. A package bill line for a Walk-in must match both its current authorized reservation package and an override audit row. Direct table/RPC attempts by Receptionists cannot bypass this rule. Non-package extras remain available.
+Migration 013 adds database guards for event packages attached to Walk-ins. A Manager or Administrator must provide a 10–500 character reason when adding or changing the package booking; the actor, reason, package, guest count, and timestamp are written to `pos_walkin_package_overrides`. Migration 056 keeps the legacy tier column nullable for historical audit rows, but new reservations and package bill lines do not require a guest-rate tier. A package bill line for a Walk-in must match its current authorized reservation package and an override audit row. Direct table/RPC attempts by Receptionists cannot bypass this rule. Non-package extras remain available.
 
 For a new bill, changing the selected party's adult, Senior/PWD, kid, or comped counts requires cashier confirmation before save. When editing an existing Open bill, its saved counts remain confirmed unless a value changes; changed counts require a fresh confirmation. The count editor shows the saved baseline and changed values. Closing without a linked table shows a confirmation warning. **Add Leftover charge** reads the active `LEFTOVER` item from `pos_charge_items`; the server remains the source of price and totals. Exact, ₱500, and ₱1,000 payment shortcuts set the tender input, and manual cash entry previews change or any shortfall; `pos_close_bill_phase3` remains responsible for authoritative payment and change calculation. Bill-close requests and the follow-up related-record refresh have 15-second limits so the UI exits its loading state and reports a timeout or refresh warning. Retrying from the same payment form reuses its idempotency key.
 
@@ -239,7 +241,7 @@ The `reservations` table stores:
 
 Reservation totals and table-capacity checks use `adults + senior_pwd_count + children`. The browser validates whole-number counts; the database enforces a positive total and table capacity. Walk-ins may have no email or phone. Other reservations still require at least one of them, and the application does not fabricate contact details.
 
-The public booking endpoint remains `POST /rest/v1/rpc/public_create_reservation` with the existing `payload` JSON argument. Website requests remain Pending, use the existing contact/rate-limit validation, default `senior_pwd_count` to `0`, and are tagged `Website` by the database. Staff create or update reservations through the existing `reservations` table endpoint subject to RLS, triggers, and constraints; the optional source is selected from the supported list. From the Reservations page, confirming a pending booking can also assign an eligible table in the same update, or leave it unassigned when no table is chosen.
+The public booking endpoint remains `POST /rest/v1/rpc/public_create_reservation` with the existing `payload` JSON argument. Website requests remain Pending, use the existing contact/rate-limit validation, default `senior_pwd_count` to `0`, and are tagged `Website` by the database. An optional `package_charge_item_id` and the displayed `package_unit_price` are checked against the active reservation package catalog, then the package is stored with a quantity derived server-side from validated guest categories. `public_list_reservation_packages` returns only active package IDs, names, and catalog prices; direct public reads of the charge-item table remain denied. Without a selected package, buffet rates still apply when the bill is prepared. Staff create or update reservations through the existing `reservations` table endpoint subject to RLS, triggers, and constraints; the optional source is selected from the supported list. From the Reservations page, confirming a pending booking can also assign an eligible table in the same update, or leave it unassigned when no table is chosen.
 
 Example:
 

@@ -590,7 +590,9 @@ test('public reservation RPC receives categorized counts and the calculated gues
     children: 2,
     guests: 5,
     occasion: 'Birthday',
-    request: 'Window seat near the garden'
+    request: 'Window seat near the garden',
+    packageChargeItemId: 'package-a-id',
+    packageUnitPrice: 0
   }), 'RSV-1');
   assert.equal(call.name, 'public_create_reservation');
   assert.equal(call.args.payload.name, 'Juan Dela Cruz');
@@ -598,12 +600,33 @@ test('public reservation RPC receives categorized counts and the calculated gues
   assert.equal(call.args.payload.phone, '09123456789');
   assert.equal(call.args.payload.occasion, 'Birthday');
   assert.equal(call.args.payload.request, 'Window seat near the garden');
+  assert.equal(call.args.payload.package_charge_item_id, 'package-a-id');
+  assert.equal(call.args.payload.package_unit_price, 0);
   assert.equal(call.args.payload.adults, 2);
   assert.equal(call.args.payload.senior_pwd_count, 1);
   assert.equal(call.args.payload.children, 2);
   assert.equal(call.args.payload.guests, 5);
   assert.equal(call.args.payload.reservation_date, '2026-11-25');
   assert.equal(call.args.payload.reservation_time, '11:00 AM');
+});
+
+test('public reservation package listing uses the restricted catalog RPC and maps prices', async () => {
+  let call;
+  const { record } = loadSupabaseRecord((name, args) => {
+    call = { name, args };
+    return Promise.resolve({
+      data: [{ id: 'package-a-id', name: 'Package A', unit_price: '0.00' }],
+      error: null
+    });
+  });
+
+  assert.deepEqual(JSON.parse(JSON.stringify(await record.listPublicReservationPackages())), [{
+    id: 'package-a-id',
+    name: 'Package A',
+    unitPrice: 0
+  }]);
+  assert.equal(call.name, 'public_list_reservation_packages');
+  assert.equal(call.args, undefined);
 });
 
 test('public reservation RPC preserves large categorized guest totals without capping them at six', async () => {
@@ -629,6 +652,8 @@ test('public reservation RPC preserves large categorized guest totals without ca
     assert.equal(calls[index].name, 'public_create_reservation');
     assert.equal(calls[index].payload.guests, counts.guests);
     assert.equal(calls[index].payload.senior_pwd_count, counts.seniorPwdCount);
+    assert.equal(calls[index].payload.package_charge_item_id, null);
+    assert.equal(calls[index].payload.package_unit_price, null);
   }
 });
 

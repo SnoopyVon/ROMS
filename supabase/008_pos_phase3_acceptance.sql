@@ -1,5 +1,5 @@
 -- POS Phase 3 acceptance checks.
--- Run as the database owner after migrations 007, 008, 009, and 010. The final ROLLBACK
+-- Run as the database owner after migrations 007, 008, 009, 010, and 056. The final ROLLBACK
 -- intentionally removes all test shifts, reservations, tables, bills, and ledger rows.
 
 begin;
@@ -23,6 +23,7 @@ declare
   v_failure_table_id text;
   v_package_table_id text;
   v_test_charge_id text;
+  v_package_charge_id text;
   v_deposit_id text;
   v_remainder_deposit_id text;
   v_failure_deposit_id text;
@@ -63,6 +64,7 @@ begin
   v_failure_table_id := 'POS3-' || gen_random_uuid()::text;
   v_package_table_id := 'POS3-' || gen_random_uuid()::text;
   v_test_charge_id := 'POS3-' || gen_random_uuid()::text;
+  v_package_charge_id := 'POS3-' || gen_random_uuid()::text;
   v_reservation_id := 'POS3-' || gen_random_uuid()::text;
   v_remainder_reservation_id := 'POS3-' || gen_random_uuid()::text;
   v_failure_reservation_id := 'POS3-' || gen_random_uuid()::text;
@@ -83,6 +85,13 @@ begin
   ) values (
     v_test_charge_id, v_test_charge_id, 'Acceptance leftover charge',
     'food', 'Acceptance', 200, 1, true, true, false, false, ''
+  );
+  insert into public.pos_charge_items (
+    id, code, name, type, category, unit_price, default_quantity, is_active,
+    is_food_revenue, is_package, requires_approval, notes
+  ) values (
+    v_package_charge_id, v_package_charge_id, 'Acceptance reservation package',
+    'package', 'Acceptance', 317.50, 1, true, true, true, false, ''
   );
 
   insert into public.reservations (
@@ -126,8 +135,8 @@ begin
   end if;
 
   update public.reservations
-  set package_charge_item_id = 'pos-charge-package',
-      package_tier_id = 'pos-package-tier-regular',
+  set package_charge_item_id = v_package_charge_id,
+      package_tier_id = null,
       package_pax_count = 2
   where id = v_package_reservation_id;
 
@@ -348,17 +357,21 @@ begin
     raise exception 'FAIL: midway close failure left partial payment/deposit data.';
   end if;
 
-  -- Package price is counted once as food, not alongside buffet head-count rates.
+  -- Catalog package price and reservation guest count determine the package line.
   v_result := public.pos_save_bill_phase3(
     null, 'Package booking', '', v_package_reservation_id, 3, 0, 0, 0,
     null, '', '[]'::jsonb, gen_random_uuid()::text, v_package_table_id, false
   );
   v_package_bill_id := v_result->'bill'->>'id';
-  if (v_result->'bill'->>'subtotal')::numeric <> 898
-    or (v_result->'bill'->>'food_revenue_total')::numeric <> 898
+  if (v_result->'bill'->>'subtotal')::numeric <> 635
+    or (v_result->'bill'->>'food_revenue_total')::numeric <> 635
     or (select count(*) from public.pos_bill_lines
-      where bill_id = v_package_bill_id and line_type = 'package') <> 1 then
-    raise exception 'FAIL: package price was not recorded once as food revenue.';
+      where bill_id = v_package_bill_id and line_type = 'package'
+        and charge_item_id = v_package_charge_id
+        and package_tier_id is null
+        and quantity = 2
+        and unit_price = 317.50) <> 1 then
+    raise exception 'FAIL: package catalog price was not recorded once using the reservation guest count.';
   end if;
 
   -- Exercise exact, short, and over counts through the server close RPC.

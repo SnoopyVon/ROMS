@@ -1420,6 +1420,33 @@ test('reservation estimates and validated counts include Senior/PWD guests', () 
   assert.throws(() => logic.normalizeReservationGuestCounts(1, 0.5, 1), /non-negative whole numbers/);
 });
 
+test('reservation package quantity follows reservation guest counts without a guest-rate tier', () => {
+  assert.deepEqual(
+    logic.buildReservationPackageBooking('package-a', {
+      adults: 2,
+      seniorPwdCount: 1,
+      children: 2
+    }),
+    {
+      packageChargeItemId: 'package-a',
+      packageTierId: '',
+      packagePaxCount: 5
+    }
+  );
+  assert.deepEqual(
+    logic.buildReservationPackageBooking('', {
+      adults: 2,
+      seniorPwdCount: 0,
+      children: 0
+    }),
+    {
+      packageChargeItemId: '',
+      packageTierId: '',
+      packagePaxCount: null
+    }
+  );
+});
+
 test('reservation guest totals preserve large party counts above six', () => {
   const examples = [
     { adults: 7, seniorPwdCount: 0, children: 0, total: 7 },

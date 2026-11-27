@@ -104,9 +104,10 @@ Enforce access in UI, routes, RLS, and RPC:
 
 ### Reservation package bookings
 
-- A reservation may store the package, tier (pax), and pax count, using Phase 1 package tiers.
+- A reservation may store an active package item and a package guest count derived from its adult, Senior/PWD, and kids counts. The reservation does not ask staff to choose a separate guest-rate tier.
+- Reservation package items come from active charge items marked as type `package` and `is_package`; the package item's catalog price supplies the per-guest rate, and the guest count supplies the quantity. The pricing setup exposes these bill items separately from ordinary food/add-on charges.
 - Package revenue counts as food revenue as a whole.
-- If actual guests exceed the booked tier pax, suggest extra-pax lines at the Administrator-set rate. If no rate exists, warn and let the cashier decide.
+- If actual guests exceed the reservation guest count, suggest extra-pax lines at the Administrator-set rate. If no rate exists, warn and let the cashier decide.
 
 ### Seated reservation billing and table links
 
@@ -153,7 +154,7 @@ Migration `013_walkin_atomic_billing_safeguards.sql` adds the atomic Walk-in RPC
 - The Create Bill modal is a four-step flow. Phase B1 implements party selection and buffet/package selection; the party step is the only screen that identifies or types guest names and counts.
 - Screen 1 lists Seated reservations and Walk-ins for the current business date, newest seated first. It supports name/table search and All, Seated reservations, and Walk-ins filters. Select a party card, then use the single footer Continue action; selected cards and tabs use an amber border/check treatment, open bills are indicated on the card, and closed bills are excluded. Past Seated parties remain flagged for the existing Unresolved view and are not billable from the wizard.
 - An open shift is required before the party list is shown. The New walk-in shortcut uses the existing seat-and-open-walkin RPC, which preserves the counts entered at seating and continues to Screen 2.
-- Screen 2 keeps a read-only guest summary visible and preloads reservation or walk-in counts, table, package, tier, and held deposit. Counts may be edited in an inline stepper. Saved bill counts are already confirmed; only values changed from the current reservation (for a new bill) or saved bill (for an edit) require a fresh confirmation. The editor stays open during count review, and the existing pos_save_bill_phase3 RPC remains the authority for totals and validation.
+- Screen 2 keeps a read-only guest summary visible and preloads reservation or walk-in counts, table, package, and held deposit. Counts may be edited in an inline stepper. Saved bill counts are already confirmed; only values changed from the current reservation (for a new bill) or saved bill (for an edit) require a fresh confirmation. The editor stays open during count review, and the existing pos_save_bill_phase3 RPC remains the authority for totals and validation.
 
 ### Create Bill guided wizard (Phase B2)
 
@@ -170,7 +171,7 @@ Migration `013_walkin_atomic_billing_safeguards.sql` adds the atomic Walk-in RPC
 - Closing a bill without a table requires a warning confirmation; the database rules are unchanged.
 - **Add Leftover charge** uses the active `LEFTOVER` charge catalog row and its server-side catalog price. If no active item exists, the shortcut is not offered. The ordinary extras picker remains available.
 - The payment form keeps Exact as the default and offers ₱500 and ₱1,000 shortcuts when those tender amounts cover the balance. The server still calculates applied payment and change.
-- A Walk-in cannot be assigned an event package unless a Manager or Administrator changes its package booking with a 10–500 character reason. The database guard applies to direct writes as well as the UI. Each override is recorded with reservation, package/tier/pax, actor, reason, and timestamp. Receptionists cannot override. A package bill line must match the currently authorized Walk-in package and an audit record. À la carte extras and party trays remain permitted; party-tray client policy is still open.
+- A Walk-in cannot be assigned an event package unless a Manager or Administrator changes its package booking with a 10–500 character reason. The database guard applies to direct writes as well as the UI. Each override is recorded with reservation, package, guest count, actor, reason, and timestamp. Receptionists cannot override. A package bill line must match the currently authorized Walk-in package and an audit record. À la carte extras and party trays remain permitted; party-tray client policy is still open.
 - Migration 013 does not load or change Package A/B or party-tray data and does not change Phase 2/3 pricing, deposits, cash, inventory, or revenue rules.
 
 Run `supabase/013_walkin_atomic_billing_safeguards_acceptance.sql` and `supabase/015_past_reservation_bill_close_acceptance.sql` as the database owner after migrations 013–015. Both run in transactions and end in `ROLLBACK`. Browser checks remain necessary for button/loading/print presentation and must include a 4-adult, 1-Senior/PWD, 2-kid Walk-in (expected subtotal ₱2,606), one leftover item from the catalog, the existing Phase 3 deposit/payment flow, and closing a bill linked to a past reservation.
@@ -270,7 +271,7 @@ After migrations 007 through 010 succeed, run `010_pos_single_source_acceptance.
 - Voiding any bill with applied cash requires manager approval and refund handling; the refunded amount is a cash outflow. Unpaid bills may be voided through the existing approval workflow.
 - Deposit excess remains a separately tracked Held remainder until a Manager refunds, forfeits, or applies it; it cannot be discarded during bill close.
 - POS notification records remain in-app alerts for Managers and Administrators, deduplicated by type and source record; they are displayed in the shared header panel rather than a separate Shifts-page panel.
-- A reservation package is a catalog item of type `package`; its selected Phase 1 pax tier supplies the per-pax price. The package line is the sale amount, while bill head counts remain service/customer counts and are not charged a second time.
+- A reservation package is a catalog item of type `package`; its catalog unit price is charged per guest, with reservation guest counts determining quantity. A package line replaces standard buffet head-count pricing on that bill, so guest counts are not charged a second time. Phase 1 buffet rates remain available for bills without a reservation package.
 - The current checked-in table UI derives Available/Reserved/Occupied from reservations and contains no explicit cleaning-status constant. Use the user-specified stored status label `Needs cleaning` after bill close without adding other status names.
 - Extra pax use the Administrator setting `pos_extra_pax_rate`; zero means no configured rate. The cashier can continue without an extra-pax line when no rate is configured.
 - The worked example’s unexplained PHP 200 “leftover” is represented in acceptance SQL as a food charge item so its stated subtotal of PHP 23,560 is preserved; no tax or gratuity is inferred.

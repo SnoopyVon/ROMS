@@ -17,10 +17,10 @@ There is no separate `Cashier` application role; cashier operations use `Recepti
 - Package tiers and package items cannot be changed while attached to Pending, Confirmed, or Seated reservations. Package tiers, additional charges, and promotions cannot be added or changed while any POS bill is open. Make catalog changes after open bills are closed so existing transactions cannot use updated rules.
 - Changes to extra-guest and service-charge settings are blocked while any POS bill is open, because the current billing workflow reads those settings during bill calculations.
 - POS bills already store guest-rate and discount snapshots; bill lines store their unit prices. Closed bills are the source for POS revenue reports, so later catalog changes do not recalculate closed-bill totals.
-- Reservations do not store an explicit booked-price snapshot. The active-reservation guard protects their linked package from repricing, but this is not the same as a stored immutable reservation price. The package price is copied to a bill line when the reservation bill is created.
+- Reservations do not store an explicit booked-price snapshot. The active-reservation guard protects their linked package from repricing, but this is not the same as a stored immutable reservation price. Migration 056 uses the package item's catalog price and reservation guest count when creating the bill line; the tier column remains only for legacy records and audit compatibility.
 - Service-charge settings are not snapshotted on open bills; the open-bill guard is the mitigation. The protected billing workflow would need changes to support true service-charge snapshots.
 
-These safeguards preserve existing billing and reservation calculations rather than changing them.
+Migration 053 safeguards preserve the existing billing and reservation calculations. Migration 056 separately changes reservation package pricing to use the package catalog item's unit price; bills without a reservation package continue to use the existing buffet rates.
 
 ## Audit and approvals
 

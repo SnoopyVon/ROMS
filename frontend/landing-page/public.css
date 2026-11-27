@@ -957,6 +957,23 @@ body:has(#publicApp > .hero) .intro {
   line-height: 1.5;
 }
 
+.reservation-package-selection {
+  margin: 18px 0;
+  border-top: 1px solid var(--line);
+  padding-top: 16px;
+}
+
+.reservation-package-selection select {
+  min-height: 46px;
+}
+
+.reservation-package-status {
+  margin: 8px 0;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.5;
+}
+
 .reservation-step-actions {
   display: flex;
   justify-content: space-between;

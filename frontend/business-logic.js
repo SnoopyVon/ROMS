@@ -608,6 +608,20 @@
     };
   }
 
+  function buildReservationPackageBooking(packageChargeItemId, guestCounts) {
+    const packageId = String(packageChargeItemId || '').trim();
+    const counts = normalizeReservationGuestCounts(
+      guestCounts?.adults,
+      guestCounts?.seniorPwdCount,
+      guestCounts?.children
+    );
+    return {
+      packageChargeItemId: packageId,
+      packageTierId: '',
+      packagePaxCount: packageId ? counts.total : null
+    };
+  }
+
   function isRecentWebsiteReservation(reservation, now = Date.now()) {
     if (!reservation || reservation.source !== 'Website' || reservation.status !== 'Pending') return false;
     const createdAt = Date.parse(reservation.createdAt || '');
@@ -955,6 +969,7 @@
     productionProgress,
     reservationRevenue,
     normalizeReservationGuestCounts,
+    buildReservationPackageBooking,
     isRecentWebsiteReservation,
     reservationEndTime,
     reservationStayLimitReached,
